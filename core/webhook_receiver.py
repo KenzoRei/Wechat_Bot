@@ -32,10 +32,17 @@ def handle_get_webhook(msg_signature: str, timestamp: str, nonce: str, echostr: 
     check_signature() validates the signature AND decrypts echostr in one call.
     Returns the decrypted plain echostr — WeChat expects this exact string back.
     """
+    # TEMP DEBUG — remove after verification is confirmed working
+    print(f"[DEBUG] WECHAT_TOKEN (first 8 chars): {config.WECHAT_TOKEN[:8]}")
+    print(f"[DEBUG] msg_signature received: {msg_signature}")
+    print(f"[DEBUG] timestamp: {timestamp}, nonce: {nonce}")
+    print(f"[DEBUG] echostr: {echostr[:20]}...")
+
     try:
         plain_echostr = _get_crypto().check_signature(msg_signature, timestamp, nonce, echostr)
         return plain_echostr
     except Exception as e:
+        print(f"[DEBUG] check_signature failed: {e}")
         raise ValueError(f"Signature check or decryption failed: {e}")
 
 
