@@ -126,6 +126,7 @@ def build_context(
         "role":             access.role,
         "display_name":     access.display_name,
         "allowed_services": access.allowed_services,
+        "group_context":    access.group_context,   # location presets, aliases
 
         # from session (None if not yet created)
         "session_id":           str(session.session_id) if session else None,

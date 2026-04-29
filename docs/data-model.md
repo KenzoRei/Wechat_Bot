@@ -152,7 +152,7 @@ erDiagram
 |---|---|---|
 | `db/migrations/V1__initial_schema.sql` | Creates all tables, indexes, constraints | 1st |
 | `db/migrations/V2__seed_data.sql` | Inserts service types, workflows, workflow steps | 2nd |
-| `db/migrations/V3__update_input_schema.sql` | Updates input_schema for fedex_label and ups_label — adds shipper fields, makes service_level optional | 3rd |
+| `db/migrations/V4__update_schema_and_group_context.sql` | Updates input_schema (shipper fields, optional service_level, country); adds context column to group_config; sets LAX/DE presets for test group | 3rd |
 
 **Adding new service types or workflows in future versions:**
 Create a new numbered file — `V3__add_rate_quote.sql`, `V4__add_warehouse_in.sql`, etc.

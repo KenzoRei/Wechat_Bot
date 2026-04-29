@@ -22,8 +22,14 @@ def build_system_prompt(context: dict) -> str:
     else:
         session_status = "进行中（正在收集字段）"
 
-    return f"""你是一个中文物流助手机器人，运行在企业微信群里，帮助用户提交物流服务申请。
+    group_context = context.get("group_context")
+    group_context_block = (
+        f"\n## 群组知识库\n{json.dumps(group_context, ensure_ascii=False, indent=2)}\n"
+        if group_context else ""
+    )
 
+    return f"""你是一个中文物流助手机器人，运行在企业微信群里，帮助用户提交物流服务申请。
+{group_context_block}
 ## 当前用户信息
 - 姓名：{context["display_name"]}
 - 角色：{context["role"]}

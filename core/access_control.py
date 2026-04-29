@@ -12,6 +12,7 @@ class AccessResult:
     role:             str
     display_name:     str | None
     allowed_services: list[dict]
+    group_context:    dict | None   # location presets, aliases — passed to AI
 
 
 @dataclass
@@ -89,4 +90,5 @@ def check_access(
         role=member.role,
         display_name=member.display_name,
         allowed_services=allowed_services,
+        group_context=group.context,
     )

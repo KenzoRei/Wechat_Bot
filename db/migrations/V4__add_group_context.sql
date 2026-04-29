@@ -1,0 +1,34 @@
+-- ============================================================
+-- V4: Add context column to group_config
+-- Logistics WeChat Bot Platform
+-- Date: 2026-04-29
+--
+-- context stores group-specific knowledge the AI should know:
+-- location presets, aliases, company info, etc.
+-- NULL = no context configured for this group.
+--
+-- Example value:
+-- {
+--   "location_presets": {
+--     "LAX": {
+--       "shipper_name":   "LAX Warehouse Staff",
+--       "shipper_phone":  "310-555-0100",
+--       "shipper_street": "123 Airport Blvd",
+--       "shipper_city":   "Los Angeles",
+--       "shipper_state":  "CA",
+--       "shipper_zip":    "90045"
+--     },
+--     "DE": {
+--       "recipient_name":   "DE Warehouse",
+--       "recipient_phone":  "302-555-0200",
+--       "recipient_street": "456 Commerce Dr",
+--       "recipient_city":   "Dover",
+--       "recipient_state":  "DE",
+--       "recipient_zip":    "19901"
+--     }
+--   }
+-- }
+-- ============================================================
+
+ALTER TABLE group_config
+    ADD COLUMN context JSONB;

@@ -40,7 +40,9 @@ INSERT INTO service_type (service_type_id, name, description, input_schema, grou
         "optional": [
             "service_level",
             "shipper_corp_name",
+            "shipper_country",
             "recipient_corp_name",
+            "recipient_country",
             "length_in",
             "width_in",
             "height_in",
@@ -48,6 +50,8 @@ INSERT INTO service_type (service_type_id, name, description, input_schema, grou
         ],
         "field_hints": {
             "service_level": "e.g. PRIORITY_OVERNIGHT, STANDARD_OVERNIGHT, FEDEX_GROUND, default is FEDEX_GROUND",
+            "shipper_country": "default is US",
+            "recipient_country": "default is US",
             "weight_lbs":    "numeric value in pounds",
             "reference_number": "Optional field that appears on the label for your reference (e.g. order number, customer name)"
         }
@@ -96,7 +100,9 @@ INSERT INTO service_type (service_type_id, name, description, input_schema, grou
         "optional": [
             "service_level",
             "shipper_corp_name",
+            "shipper_country",
             "recipient_corp_name",
+            "recipient_country",
             "length_in",
             "width_in",
             "height_in",
@@ -105,7 +111,9 @@ INSERT INTO service_type (service_type_id, name, description, input_schema, grou
         "field_hints": {
             "service_level": "e.g. UPS_GROUND, UPS_2ND_DAY_AIR, UPS_NEXT_DAY_AIR, default is UPS_GROUND",
             "weight_lbs":    "numeric value in pounds",
-            "reference_number": "Optional field that appears on the label for your reference (e.g. order number, customer name)"
+            "reference_number": "Optional field that appears on the label for your reference (e.g. order number, customer name)",
+            "shipper_country": "default is US",
+            "recipient_country": "default is US"
         }
     }',
     '{

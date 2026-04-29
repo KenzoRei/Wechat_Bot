@@ -14,12 +14,14 @@ class GroupCreate(BaseModel):
     wechat_group_id:     str
     description:         str | None = None
     daily_request_limit: int | None = None
+    context:             dict | None = None   # location presets, aliases, etc.
 
 
 class GroupUpdate(BaseModel):
     description:         str | None = None
     is_active:           bool | None = None
     daily_request_limit: int | None = None
+    context:             dict | None = None   # pass null to clear, omit to leave unchanged
 
 
 class GroupResponse(BaseModel):
@@ -30,6 +32,7 @@ class GroupResponse(BaseModel):
     description:         str | None
     is_active:           bool
     daily_request_limit: int | None
+    context:             dict | None
     created_at:          datetime
 
 

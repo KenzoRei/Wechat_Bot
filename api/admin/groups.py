@@ -19,6 +19,7 @@ def create_group(body: GroupCreate, db: Session = Depends(get_db)):
         wechat_group_id=body.wechat_group_id,
         description=body.description,
         daily_request_limit=body.daily_request_limit,
+        context=body.context,
     )
     db.add(group)
     db.commit()
@@ -44,6 +45,8 @@ def update_group(group_id: str, body: GroupUpdate, db: Session = Depends(get_db)
         group.is_active = body.is_active
     if body.daily_request_limit is not None:
         group.daily_request_limit = body.daily_request_limit
+    if "context" in body.model_fields_set:   # explicit null clears it; omitting leaves unchanged
+        group.context = body.context
 
     db.commit()
     db.refresh(group)

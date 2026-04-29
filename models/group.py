@@ -13,7 +13,8 @@ class GroupConfig(Base):
     wechat_group_id:     Mapped[str]          = mapped_column(String(128), nullable=False, unique=True)
     description:         Mapped[str | None]   = mapped_column(String(500))
     is_active:           Mapped[bool]         = mapped_column(Boolean, nullable=False, default=True)
-    daily_request_limit: Mapped[int | None]   = mapped_column(Integer)
+    daily_request_limit: Mapped[int | None]    = mapped_column(Integer)
+    context:             Mapped[dict | None]  = mapped_column(JSONB)
     created_at:          Mapped[datetime]     = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     updated_at:          Mapped[datetime]     = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
