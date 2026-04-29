@@ -23,26 +23,33 @@ INSERT INTO service_type (service_type_id, name, description, input_schema, grou
     'FedEx shipping label creation via YiDiDa',
     '{
         "required": [
+            "shipper_name",
+            "shipper_phone",
+            "shipper_street",
+            "shipper_city",
+            "shipper_state",
+            "shipper_zip",
             "recipient_name",
-            "street",
-            "city",
-            "state",
-            "zip",
-            "weight_lbs",
-            "service_level",
-            "package_type"
+            "recipient_phone",
+            "recipient_street",
+            "recipient_city",
+            "recipient_state",
+            "recipient_zip",
+            "weight_lbs"
         ],
         "optional": [
-            "recipient_phone",
+            "service_level",
+            "shipper_corp_name",
+            "recipient_corp_name",
             "length_in",
             "width_in",
             "height_in",
-            "special_instructions"
+            "reference_number"
         ],
         "field_hints": {
-            "service_level": "e.g. PRIORITY_OVERNIGHT, STANDARD_OVERNIGHT, FEDEX_GROUND",
-            "package_type":  "e.g. box, envelope, soft_pack",
-            "weight_lbs":    "numeric value in pounds"
+            "service_level": "e.g. PRIORITY_OVERNIGHT, STANDARD_OVERNIGHT, FEDEX_GROUND, default is FEDEX_GROUND",
+            "weight_lbs":    "numeric value in pounds",
+            "reference_number": "Optional field that appears on the label for your reference (e.g. order number, customer name)"
         }
     }',
     '{
@@ -72,26 +79,33 @@ INSERT INTO service_type (service_type_id, name, description, input_schema, grou
     'UPS shipping label creation via YiDiDa',
     '{
         "required": [
+            "shipper_name",
+            "shipper_phone",
+            "shipper_street",
+            "shipper_city",
+            "shipper_state",
+            "shipper_zip",
             "recipient_name",
-            "street",
-            "city",
-            "state",
-            "zip",
-            "weight_lbs",
-            "service_level",
-            "package_type"
+            "recipient_phone",
+            "recipient_street",
+            "recipient_city",
+            "recipient_state",
+            "recipient_zip",
+            "weight_lbs"
         ],
         "optional": [
-            "recipient_phone",
+            "service_level",
+            "shipper_corp_name",
+            "recipient_corp_name",
             "length_in",
             "width_in",
             "height_in",
-            "special_instructions"
+            "reference_number"
         ],
         "field_hints": {
-            "service_level": "e.g. UPS_GROUND, UPS_2ND_DAY_AIR, UPS_NEXT_DAY_AIR",
-            "package_type":  "e.g. box, envelope, soft_pack",
-            "weight_lbs":    "numeric value in pounds"
+            "service_level": "e.g. UPS_GROUND, UPS_2ND_DAY_AIR, UPS_NEXT_DAY_AIR, default is UPS_GROUND",
+            "weight_lbs":    "numeric value in pounds",
+            "reference_number": "Optional field that appears on the label for your reference (e.g. order number, customer name)"
         }
     }',
     '{

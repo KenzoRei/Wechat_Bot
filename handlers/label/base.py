@@ -18,15 +18,19 @@ class YDDLabelBaseHandler(BaseHandler):
     def handle(self, context: dict, config: dict) -> dict:
         fields = context.get("collected_fields", {})
 
-        # merge group credentials into fields so yidida_client can use them
+        carrier = config.get("carrier")
+
+        # apply defaults for optional fields not provided by customer
+        default_service_level = "FEDEX_GROUND" if carrier == "fedex" else "UPS_GROUND"
+
+        # merge group credentials + defaults into fields
         api_fields = {
+            "service_level": default_service_level,   # overridden if customer provided it
             **fields,
             "ydd_cust_id":      config.get("ydd_cust_id"),
             "ydd_channel_id":   config.get("ydd_channel_id"),
             "ydd_account_code": config.get("ydd_account_code"),
         }
-
-        carrier = config.get("carrier")
         api_key = config.get("ydd_api_key")
         if not api_key:
             raise RuntimeError("ydd_api_key missing from group_service.config")

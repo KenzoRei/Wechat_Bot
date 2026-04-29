@@ -77,7 +77,8 @@ def check_access(
             "service_type_id": str(gs.service_type_id),
             "name":            st.name,
             "workflow_id":     str(gs.workflow_id),
-            "group_config":    gs.config,
+            "input_schema":    st.input_schema,   # tells AI which fields to collect
+            "group_config":    gs.config,          # API credentials — stripped before sending to AI
         }
         for gs, st in rows
     ]
