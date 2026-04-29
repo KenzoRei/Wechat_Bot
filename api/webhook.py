@@ -63,7 +63,7 @@ async def receive_webhook(
     background_tasks.add_task(_process_message, message, nonce, timestamp)
 
     # Smart Robot expects encrypted JSON response, not plain "success"
-    ack = webhook_receiver.make_encrypted_reply("SYS_ACK_TEST_001", nonce, timestamp)
+    ack = webhook_receiver.make_encrypted_reply("收到，处理中...", nonce, timestamp)
     if ack:
         return Response(content=ack, media_type="text/plain")
     return PlainTextResponse(content="success")
