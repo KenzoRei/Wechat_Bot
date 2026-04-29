@@ -5,39 +5,46 @@ def build_confirmation_message(
     confirmation_note: str | None = None
 ) -> str:
     """
-    Generates a fixed Chinese confirmation template.
+    Generates a fixed Chinese confirmation template (rendered as markdown in WeChat).
     Called when all required fields are collected (all_fields_collected=True).
-
-    The serial number is shown here for the first time — the request_log row
-    must be created before calling this function so the serial exists.
-
-    confirmation_note: optional disclaimer from service_type.confirmation_note.
-    If None, no note section is appended.
-
-    The user confirms by replying "确认" and cancels by replying "取消".
-    No AI is involved — the template is deterministic and auditable.
     """
+    shipper_fields = {k: v for k, v in collected_fields.items() if k.startswith("shipper_")}
+    recipient_fields = {k: v for k, v in collected_fields.items() if k.startswith("recipient_")}
+    other_fields = {
+        k: v for k, v in collected_fields.items()
+        if not k.startswith("shipper_") and not k.startswith("recipient_")
+    }
+
     lines = [
-        "请确认以下寄件信息：",
+        f"**请确认以下寄件信息**",
         f"申请编号：{serial_number}",
         f"服务类型：{_service_display_name(service_type_name)}",
-        "─────────────────",
+        "",
+        "**发件人**",
     ]
 
-    for field_key, field_value in collected_fields.items():
-        label = _field_label(field_key)
-        lines.append(f"{label}：{field_value}")
+    for key, val in shipper_fields.items():
+        label = _field_label(key)
+        lines.append(f"- {label}：{val}")
+
+    lines += ["", "**收件人**"]
+    for key, val in recipient_fields.items():
+        label = _field_label(key)
+        lines.append(f"- {label}：{val}")
+
+    if other_fields:
+        lines += ["", "**包裹信息**"]
+        for key, val in other_fields.items():
+            label = _field_label(key)
+            lines.append(f"- {label}：{val}")
 
     lines += [
-        "─────────────────",
-        '回复“确认”提交申请，或“取消”放弃。',
+        "",
+        '回复 **确认** 提交申请，或 **取消** 放弃。',
     ]
 
     if confirmation_note:
-        lines += [
-            "",
-            f"📌 注意：{confirmation_note}",
-        ]
+        lines += ["", f"> 注意：{confirmation_note}"]
 
     return "\n".join(lines)
 
@@ -45,7 +52,6 @@ def build_confirmation_message(
 # ── private helpers ───────────────────────────────────────────────────────────
 
 def _service_display_name(service_type_name: str) -> str:
-    """Maps internal service type name to a human-readable Chinese label."""
     _map = {
         "fedex_label": "FedEx 快递标签",
         "ups_label":   "UPS 快递标签",
@@ -54,16 +60,31 @@ def _service_display_name(service_type_name: str) -> str:
 
 
 def _field_label(field_key: str) -> str:
-    """Maps collected_fields keys to Chinese display labels."""
     _map = {
-        "recipient_name": "收件人姓名",
-        "street":         "街道地址",
-        "city":           "城市",
-        "state":          "州/省",
-        "zip":            "邮编",
-        "weight_lbs":     "重量（磅）",
-        "service_level":  "服务等级",
-        "package_type":   "包裹类型",
-        "reference":      "参考编号",
+        # shipper fields
+        "shipper_name":      "姓名",
+        "shipper_corp_name": "公司",
+        "shipper_phone":     "电话",
+        "shipper_street":    "地址",
+        "shipper_city":      "城市",
+        "shipper_state":     "州/省",
+        "shipper_zip":       "邮编",
+        "shipper_country":   "国家",
+        # recipient fields
+        "recipient_name":      "姓名",
+        "recipient_corp_name": "公司",
+        "recipient_phone":     "电话",
+        "recipient_street":    "地址",
+        "recipient_city":      "城市",
+        "recipient_state":     "州/省",
+        "recipient_zip":       "邮编",
+        "recipient_country":   "国家",
+        # package fields
+        "weight_lbs":      "重量（磅）",
+        "service_level":   "服务等级",
+        "length_in":       "长度（英寸）",
+        "width_in":        "宽度（英寸）",
+        "height_in":       "高度（英寸）",
+        "reference_number": "参考编号",
     }
     return _map.get(field_key, field_key)
