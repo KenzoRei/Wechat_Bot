@@ -121,7 +121,7 @@ def _build_shipment_body(fields: dict, shou_huo_qu_dao: str) -> dict:
         # ── Package info ────────────────────────────────────────────────────
         "shouHuoShiZhong":       float(fields.get("weight_lbs", 0)),
         "jianShu":               1,
-        "keHuDanHao":            fields.get("reference_number", ""),
+        "keHuDanHao":            fields.get("ke_hu_dan_hao") or fields.get("reference_number", ""),
 
         # ── Flags (standard defaults) ───────────────────────────────────────
         "requiredTrackNo":       True,
