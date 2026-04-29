@@ -43,3 +43,6 @@ DATABASE_URL = _require("DATABASE_URL")
 
 # Session
 SESSION_EXPIRY_MINUTES = int(os.getenv("SESSION_EXPIRY_MINUTES", "60"))
+
+# Server base URL — used for label download links sent via WeChat
+SERVER_BASE_URL = os.getenv("SERVER_BASE_URL", "https://wechat-bot-atse.onrender.com")

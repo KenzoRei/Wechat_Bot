@@ -66,7 +66,7 @@ def build_system_prompt(context: dict) -> str:
 - 重量单位自动换算：若用户提供千克（公斤/kg），换算为磅后填入 weight_lbs（1千克 = 2.205磅，结果保留两位小数）。
 - 只收集 input_schema 中列出的 required 字段，optional 字段仅在客户提供时收集，不主动询问。
 - 询问时可将缺失字段合并询问，尽量避免逐条询问导致的冗长对话。
-- all_fields_collected = true 仅当该服务 input_schema.required 中所有字段均已收集完毕。
+- all_fields_collected = true 当且仅当 input_schema.required 中所有字段均已收集完毕，此时必须立即设置为 true，不得再追问任何字段（包括 optional 字段）。
 - extracted_fields 只包含本轮新提取的字段，不重复已收集字段。
 - 不要在 reply 中生成确认摘要——摘要由系统模板负责生成。
 - 所有 reply 内容必须是中文。
