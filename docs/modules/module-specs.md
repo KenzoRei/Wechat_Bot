@@ -1,9 +1,9 @@
 # Module Specifications
 # Logistics WeChat Bot Platform — v1
 
-**Version:** 1.0
-**Date:** 2026-04-28
-**Status:** Finalized — All 13 modules complete
+**Version:** 1.1
+**Date:** 2026-04-29
+**Status:** Finalized — All 13 modules complete + Phase 6 corrections applied
 
 ---
 
@@ -168,7 +168,12 @@ async def list_groups(db: Session = Depends(get_db)):
 - `GET /webhook`: signature validation for initial bot setup (URL verification)
 - `POST /webhook`: signature validation + AES decryption + message extraction
 
-All cryptographic operations are delegated to the `wechatpy` library.
+**Phase 6 correction:** Uses 智能机器人 (Smart Robot) instead of 自建应用.
+Critical differences from original design:
+- `receiveid = ''` (empty string) — NOT Corp ID or Bot ID
+- Uses official `WXBizJsonMsgCrypt` from WeChat demo, NOT wechatpy
+- Messages are JSON format, not XML
+- Replies are encrypted JSON stream format
 
 ### Design
 
