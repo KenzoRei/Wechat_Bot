@@ -1,3 +1,4 @@
+import threading
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import PlainTextResponse, Response
 from sqlalchemy.orm import Session as DBSession
@@ -11,16 +12,18 @@ from ai.openai_provider import OpenAIProvider
 
 router = APIRouter()
 
+ai_chain = AIProviderChain(providers=[
+    OpenAIProvider(),
+    ClaudeProvider(),
+])
+
 # ── Deduplication ─────────────────────────────────────────────────────────────
-# WeChat retries the same message if our response is slow.
-# Track recently processed msg_ids to drop duplicates within a 60-second window.
 import time as _time
 _seen_msg_ids: dict[str, float] = {}
-_DEDUP_TTL = 60  # seconds
+_DEDUP_TTL = 60
 
 def _is_duplicate(msg_id: str) -> bool:
     now = _time.time()
-    # clean expired entries
     expired = [k for k, v in list(_seen_msg_ids.items()) if now - v > _DEDUP_TTL]
     for k in expired:
         del _seen_msg_ids[k]
@@ -28,12 +31,6 @@ def _is_duplicate(msg_id: str) -> bool:
         return True
     _seen_msg_ids[msg_id] = now
     return False
-
-
-ai_chain = AIProviderChain(providers=[
-    OpenAIProvider(),
-    ClaudeProvider(),
-])
 
 
 # ── GET /webhook — WeChat URL verification ────────────────────────────────────
@@ -77,30 +74,40 @@ async def receive_webhook(
 
     print(f"[webhook] from={message.get('from_user')} group={message.get('group_id')} type={message.get('msg_type')}", flush=True)
 
-    # Process synchronously — Render free tier kills background tasks
-    # GPT-4o conversation steps complete in ~1-3s, within WeChat's 5s limit
-    reply_content = _process_message(message)
+    if _is_duplicate(message.get("msg_id", "")):
+        print(f"[pipeline] duplicate msg_id dropped: {message.get('msg_id')}", flush=True)
+        # return empty ack — WeChat still gets 200, but no content shown
+        return PlainTextResponse(content="success")
 
-    ack = webhook_receiver.make_encrypted_reply(reply_content, nonce, timestamp)
+    # Start background thread for AI processing — returns immediately to WeChat
+    # Thread sends actual reply via message["response_url"]
+    thread = threading.Thread(
+        target=_process_message,
+        args=(message,),
+        daemon=True
+    )
+    thread.start()
+
+    # Return immediate ack so WeChat doesn't time out waiting
+    ack = webhook_receiver.make_encrypted_reply("收到，处理中...", nonce, timestamp)
     if ack:
         return Response(content=ack, media_type="text/plain")
     return PlainTextResponse(content="success")
 
 
-# ── Pipeline ──────────────────────────────────────────────────────────────────
+# ── Background pipeline ───────────────────────────────────────────────────────
 
-def _process_message(message: dict) -> str:
+def _process_message(message: dict) -> None:
     """
-    Processes one incoming message synchronously.
-    Returns the reply content string to send back to WeChat.
+    Processes message in a background thread.
+    Sends actual AI reply via message["response_url"].
     """
     if message.get("msg_type") != "text":
-        return ""
+        return
     if message.get("chat_type") != "group" or not message.get("group_id"):
-        return ""
-    if _is_duplicate(message.get("msg_id", "")):
-        print(f"[pipeline] duplicate msg_id dropped: {message.get('msg_id')}", flush=True)
-        return ""
+        return
+
+    response_url = message.get("response_url", "")
 
     db: DBSession = SessionLocal()
     try:
@@ -113,26 +120,31 @@ def _process_message(message: dict) -> str:
         print(f"[pipeline] access: {type(result).__name__}", flush=True)
 
         if isinstance(result, access_control.AccessDenied):
-            return result.message if result.notify_user else ""
+            if result.notify_user:
+                send_message(message["from_user"], result.message, response_url=response_url)
+            return
 
         session = session_manager.resolve_session(db, result, message["content"])
         context = session_manager.build_context(result, session, message)
 
         print("[pipeline] calling AI...", flush=True)
         ai_response = ai_chain.process(context)
-        print(f"[pipeline] intent={ai_response.intent} service_type_name={ai_response.service_type_name} reply={ai_response.reply[:40]}", flush=True)
+        print(f"[pipeline] intent={ai_response.intent} service={ai_response.service_type_name} reply={ai_response.reply[:40]}", flush=True)
 
-        # run workflow engine — it returns the reply via context
-        # for conversation steps, reply is in ai_response
-        # for workflow execution, reply_wechat handler sends via response_url
         reply = workflow_engine.run_and_get_reply(context, ai_response, db)
         print(f"[pipeline] reply={str(reply)[:40]}", flush=True)
-        return reply or ""
+
+        # Send actual reply via response_url
+        if reply:
+            send_message(message["from_user"], reply, response_url=response_url)
 
     except Exception as e:
         print(f"[pipeline] ERROR: {e}", flush=True)
         import traceback
         traceback.print_exc()
-        return "系统出现错误，请稍后重试或联系管理员。"
+        try:
+            send_message(message["from_user"], "系统出现错误，请稍后重试或联系管理员。", response_url=response_url)
+        except Exception:
+            pass
     finally:
         db.close()
