@@ -2,8 +2,9 @@
 Pydantic request and response schemas for all API endpoints.
 FastAPI uses these for automatic request validation and response serialization.
 """
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from uuid import UUID
+from datetime import datetime
 from typing import Any
 
 
@@ -22,22 +23,21 @@ class GroupUpdate(BaseModel):
 
 
 class GroupResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     group_id:            UUID
     wechat_group_id:     str
     description:         str | None
     is_active:           bool
     daily_request_limit: int | None
-    created_at:          str
-
-    class Config:
-        from_attributes = True
+    created_at:          datetime
 
 
 # ── Members ───────────────────────────────────────────────────────────────────
 
 class MemberCreate(BaseModel):
     wechat_openid: str
-    role:          str      # "admin" or "customer"
+    role:          str
     display_name:  str | None = None
 
 
@@ -47,15 +47,14 @@ class MemberUpdate(BaseModel):
 
 
 class MemberResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     wechat_openid: str
     group_id:      UUID
     role:          str
     display_name:  str | None
     is_active:     bool
-    joined_at:     str
-
-    class Config:
-        from_attributes = True
+    joined_at:     datetime
 
 
 # ── Group Services ────────────────────────────────────────────────────────────
@@ -67,6 +66,8 @@ class GroupServiceCreate(BaseModel):
 
 
 class GroupServiceResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     group_id:        UUID
     service_type_id: UUID
     service_name:    str
@@ -74,21 +75,17 @@ class GroupServiceResponse(BaseModel):
     workflow_name:   str
     config:          dict
 
-    class Config:
-        from_attributes = True
-
 
 # ── Reference data ────────────────────────────────────────────────────────────
 
 class ServiceTypeResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     service_type_id:     UUID
     name:                str
     description:         str | None
     group_config_schema: dict
     is_active:           bool
-
-    class Config:
-        from_attributes = True
 
 
 class WorkflowStepResponse(BaseModel):
@@ -97,13 +94,12 @@ class WorkflowStepResponse(BaseModel):
 
 
 class WorkflowResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     workflow_id: UUID
     name:        str
     description: str | None
     steps:       list[WorkflowStepResponse]
-
-    class Config:
-        from_attributes = True
 
 
 # ── Request Logs ──────────────────────────────────────────────────────────────
@@ -112,16 +108,16 @@ class RequestLogSummary(BaseModel):
     log_id:        UUID
     serial_number: str
     wechat_openid: str
-    display_name:  str | None   # joined from group_member
+    display_name:  str | None
     group_id:      UUID | None
-    service_name:  str | None   # joined from service_type
+    service_name:  str | None
     status:        str
-    created_at:    str
-    completed_at:  str | None
+    created_at:    datetime
+    completed_at:  datetime | None
 
 
 class RequestLogDetail(RequestLogSummary):
-    workflow_name:  str | None  # joined from workflow via group_service
+    workflow_name:  str | None
     raw_message:    str
     parsed_input:   dict
     result:         Any
@@ -131,15 +127,14 @@ class RequestLogDetail(RequestLogSummary):
 # ── Sessions ──────────────────────────────────────────────────────────────────
 
 class SessionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     session_id:       UUID
     wechat_openid:    str
-    display_name:     str | None   # joined from group_member
+    display_name:     str | None
     group_id:         UUID
-    service_name:     str | None   # joined from service_type
+    service_name:     str | None
     status:           str
     collected_fields: dict
-    expires_at:       str
-    created_at:       str
-
-    class Config:
-        from_attributes = True
+    expires_at:       datetime
+    created_at:       datetime

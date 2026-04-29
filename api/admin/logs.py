@@ -63,8 +63,8 @@ def list_logs(
             group_id=log.group_id,
             service_name=service_name,
             status=log.status,
-            created_at=str(log.created_at),
-            completed_at=str(log.completed_at) if log.completed_at else None,
+            created_at=log.created_at,
+            completed_at=log.completed_at,
         )
         for log, display_name, service_name in rows
     ]}

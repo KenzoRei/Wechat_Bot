@@ -35,8 +35,8 @@ def list_active_sessions(db: Session = Depends(get_db)):
             service_name=service_name,
             status=session.status,
             collected_fields=session.collected_fields,
-            expires_at=str(session.expires_at),
-            created_at=str(session.created_at),
+            expires_at=session.expires_at,
+            created_at=session.created_at,
         )
         for session, display_name, service_name in rows
     ]}
