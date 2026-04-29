@@ -58,11 +58,21 @@ def handle_post_webhook(
 
 
 def _extract_message(decrypted_xml: str) -> dict:
-    """Parses decrypted XML and returns a structured message dict."""
+    """
+    Parses decrypted XML and returns a structured message dict.
+
+    For group messages (ChatType=group): group_id comes from ChatId.
+    For direct messages (ChatType=single): no group_id — not supported in v1.
+    """
     root = ET.fromstring(decrypted_xml)
+
+    chat_type = root.findtext("ChatType", "single")
+    group_id  = root.findtext("ChatId") if chat_type == "group" else None
+
     return {
         "from_user":   root.findtext("FromUserName"),
-        "group_id":    root.findtext("ToUserName"),
+        "group_id":    group_id,
+        "chat_type":   chat_type,
         "msg_type":    root.findtext("MsgType"),
         "content":     root.findtext("Content", ""),
         "msg_id":      root.findtext("MsgId"),

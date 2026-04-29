@@ -69,9 +69,11 @@ def _process_message(message: dict) -> None:
     Full pipeline for one incoming message.
     Runs asynchronously after the 200 response is sent to WeChat.
     """
-    # only handle text messages in v1
+    # only handle text messages from group chats in v1
     if message.get("msg_type") != "text":
         return
+    if message.get("chat_type") != "group" or not message.get("group_id"):
+        return  # direct messages not supported — group @mention required
 
     db: DBSession = SessionLocal()
     try:
