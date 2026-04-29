@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request, BackgroundTasks, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 from sqlalchemy.orm import Session as DBSession
 
 from database import SessionLocal
@@ -29,10 +29,11 @@ async def verify_webhook(
     echostr: str
 ):
     try:
-        response = webhook_receiver.handle_get_webhook(msg_signature, timestamp, nonce, echostr)
-        return PlainTextResponse(content=response)
-    except ValueError:
-        raise HTTPException(status_code=403, detail="Invalid signature")
+        plain = webhook_receiver.handle_get_webhook(msg_signature, timestamp, nonce, echostr)
+        return PlainTextResponse(content=plain)
+    except ValueError as e:
+        print(f"[webhook] GET verification failed: {e}")
+        raise HTTPException(status_code=403, detail="Verification failed")
 
 
 # ── POST /webhook — incoming WeChat message ───────────────────────────────────
@@ -49,31 +50,37 @@ async def receive_webhook(
 
     try:
         message = webhook_receiver.handle_post_webhook(
-            xml_body=body.decode("utf-8"),
+            body=body,
             msg_signature=msg_signature,
             timestamp=timestamp,
             nonce=nonce,
         )
-    except ValueError:
-        raise HTTPException(status_code=403, detail="Invalid signature")
+    except ValueError as e:
+        print(f"[webhook] POST decryption failed: {e}")
+        raise HTTPException(status_code=403, detail="Decryption failed")
 
-    # return 200 immediately — WeChat requires response within 5 seconds
-    background_tasks.add_task(_process_message, message)
+    # process message asynchronously — WeChat requires response within 5 seconds
+    background_tasks.add_task(_process_message, message, nonce, timestamp)
+
+    # Smart Robot expects encrypted JSON response, not plain "success"
+    ack = webhook_receiver.make_encrypted_reply("收到", nonce, timestamp)
+    if ack:
+        return Response(content=ack, media_type="text/plain")
     return PlainTextResponse(content="success")
 
 
 # ── Background pipeline ───────────────────────────────────────────────────────
 
-def _process_message(message: dict) -> None:
+def _process_message(message: dict, nonce: str, timestamp: str) -> None:
     """
     Full pipeline for one incoming message.
-    Runs asynchronously after the 200 response is sent to WeChat.
+    Runs asynchronously after the initial response is sent to WeChat.
     """
     # only handle text messages from group chats in v1
     if message.get("msg_type") != "text":
         return
     if message.get("chat_type") != "group" or not message.get("group_id"):
-        return  # direct messages not supported — group @mention required
+        return  # direct messages not supported — group chat required
 
     db: DBSession = SessionLocal()
     try:
@@ -102,7 +109,6 @@ def _process_message(message: dict) -> None:
         workflow_engine.run(context, ai_response, db)
 
     except Exception as e:
-        # last-resort catch — log and try to notify user
         print(f"[webhook] pipeline error: {e}")
         try:
             send_message(message["from_user"], "系统出现错误，请稍后重试或联系管理员。")

@@ -12,12 +12,16 @@ def _require(name: str) -> str:
     return value
 
 
-# WeChat Work
+# WeChat Work — Company credentials (自建应用, kept for reference)
 WECHAT_CORP_ID          = _require("WECHAT_CORP_ID")
 WECHAT_SECRET           = _require("WECHAT_SECRET")
 WECHAT_AGENT_ID         = _require("WECHAT_AGENT_ID")
+
+# WeChat Work — Smart Robot credentials (智能机器人, used for webhook + message sending)
 WECHAT_TOKEN            = _require("WECHAT_TOKEN")
 WECHAT_ENCODING_AES_KEY = _require("WECHAT_ENCODING_AES_KEY")
+WECHAT_BOT_ID           = _require("WECHAT_BOT_ID")     # Bot ID from Smart Robot page
+WECHAT_BOT_SECRET       = _require("WECHAT_BOT_SECRET") # Secret from Smart Robot page
 
 # External APIs — base URLs are global; API keys are per-group in group_service.config
 YIDIDA_BASE_URL = _require("YIDIDA_BASE_URL")

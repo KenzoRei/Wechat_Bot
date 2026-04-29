@@ -1,88 +1,118 @@
-from wechatpy.enterprise.crypto import WeChatCrypto
-import xml.etree.ElementTree as ET
-import hashlib
+"""
+WeChat Work Smart Robot (智能机器人) webhook handler.
+
+Key differences from 自建应用:
+- receiveid is EMPTY STRING '' (not Corp ID or Bot ID)
+- Messages are JSON format (not XML)
+- Uses WXBizJsonMsgCrypt (not wechatpy WeChatCrypto)
+- Replies must be encrypted JSON (stream format)
+"""
+import json
+import time
+import random
+import string
 import config
+from core.WXBizJsonMsgCrypt import WXBizJsonMsgCrypt
 
-# Lazy initialization — crypto object is created on first use, not at import time.
-# This allows the server to start even when WECHAT_ENCODING_AES_KEY is a placeholder.
-_crypto = None
+# receiveid is always empty string for Smart Robot
+_RECEIVE_ID = ''
 
-def _get_crypto() -> WeChatCrypto:
-    global _crypto
-    if _crypto is None:
-        _crypto = WeChatCrypto(
-            token=config.WECHAT_TOKEN,
-            encoding_aes_key=config.WECHAT_ENCODING_AES_KEY,
-            corp_id=config.WECHAT_CORP_ID
-        )
-    return _crypto
-
-
-def validate_signature(msg_signature: str, timestamp: str, nonce: str, echo_str: str = "") -> bool:
-    """Validates WeChat's SHA1 signature."""
-    params = sorted([config.WECHAT_TOKEN, timestamp, nonce, echo_str])
-    expected = hashlib.sha1("".join(params).encode("utf-8")).hexdigest()
-    return expected == msg_signature
+def _get_crypt() -> WXBizJsonMsgCrypt:
+    return WXBizJsonMsgCrypt(
+        config.WECHAT_TOKEN,
+        config.WECHAT_ENCODING_AES_KEY,
+        _RECEIVE_ID
+    )
 
 
 def handle_get_webhook(msg_signature: str, timestamp: str, nonce: str, echostr: str) -> str:
     """
-    Handles GET /webhook (WeChat URL verification).
-    In safe mode (AES encryption), echostr is encrypted.
-    check_signature() validates the signature AND decrypts echostr in one call.
-    Returns the decrypted plain echostr — WeChat expects this exact string back.
+    Handles GET /webhook — WeChat URL verification for Smart Robot.
+    receiveid must be empty string for Smart Robot.
+    Returns the decrypted echostr as plain text.
     """
-    # TEMP DEBUG — remove after verification is confirmed working
-    print(f"[DEBUG] WECHAT_TOKEN (first 8 chars): {config.WECHAT_TOKEN[:8]}")
-    print(f"[DEBUG] msg_signature received: {msg_signature}")
-    print(f"[DEBUG] timestamp: {timestamp}, nonce: {nonce}")
-    print(f"[DEBUG] echostr: {echostr[:20]}...")
-
-    try:
-        plain_echostr = _get_crypto().check_signature(msg_signature, timestamp, nonce, echostr)
-        return plain_echostr
-    except Exception as e:
-        print(f"[DEBUG] check_signature failed: {e}")
-        raise ValueError(f"Signature check or decryption failed: {e}")
+    crypt = _get_crypt()
+    ret, plain = crypt.VerifyURL(msg_signature, timestamp, nonce, echostr)
+    if ret != 0:
+        raise ValueError(f"VerifyURL failed, error code: {ret}")
+    return plain
 
 
 def handle_post_webhook(
-    xml_body: str,
+    body: bytes,
     msg_signature: str,
     timestamp: str,
     nonce: str
 ) -> dict:
     """
-    Handles POST /webhook (incoming message).
-    Validates signature, decrypts body, extracts message fields.
-    Raises ValueError if signature is invalid.
+    Handles POST /webhook — decrypts and parses incoming Smart Robot message.
+    Returns a structured message dict for the pipeline.
+    Raises ValueError if decryption fails.
     """
-    if not validate_signature(msg_signature, timestamp, nonce):
-        raise ValueError("Invalid signature")
+    crypt = _get_crypt()
+    ret, json_content = crypt.DecryptMsg(body, msg_signature, timestamp, nonce)
+    if ret != 0:
+        raise ValueError(f"DecryptMsg failed, error code: {ret}")
 
-    decrypted = _get_crypto().decrypt_message(xml_body, msg_signature, timestamp, nonce)
-    return _extract_message(decrypted)
+    data = json.loads(json_content)
+    return _extract_message(data)
 
 
-def _extract_message(decrypted_xml: str) -> dict:
+def _extract_message(data: dict) -> dict:
     """
-    Parses decrypted XML and returns a structured message dict.
+    Parses the decrypted JSON payload into a structured message dict.
 
-    For group messages (ChatType=group): group_id comes from ChatId.
-    For direct messages (ChatType=single): no group_id — not supported in v1.
+    Smart Robot JSON format:
+    {
+        "msgtype": "text",
+        "text": {"content": "..."},
+        "from": {"userid": "..."},
+        "chat_info": {"chat_id": "..."},
+        "msgid": "...",
+        ...
+    }
     """
-    root = ET.fromstring(decrypted_xml)
+    msg_type  = data.get("msgtype", "")
+    from_info = data.get("from", {})
+    chat_info = data.get("chat_info", {})
 
-    chat_type = root.findtext("ChatType", "single")
-    group_id  = root.findtext("ChatId") if chat_type == "group" else None
+    # group_id comes from chat_info for group messages
+    chat_type = "group" if chat_info.get("chat_id") else "single"
+    group_id  = chat_info.get("chat_id") if chat_type == "group" else None
+
+    # extract text content
+    content = ""
+    if msg_type == "text":
+        content = data.get("text", {}).get("content", "")
 
     return {
-        "from_user":   root.findtext("FromUserName"),
+        "from_user":   from_info.get("userid", ""),
         "group_id":    group_id,
         "chat_type":   chat_type,
-        "msg_type":    root.findtext("MsgType"),
-        "content":     root.findtext("Content", ""),
-        "msg_id":      root.findtext("MsgId"),
-        "agent_id":    root.findtext("AgentID"),
-        "create_time": root.findtext("CreateTime"),
+        "msg_type":    msg_type,
+        "content":     content,
+        "msg_id":      data.get("msgid", ""),
+        "raw":         data,    # keep raw for future message types
     }
+
+
+def make_encrypted_reply(content: str, nonce: str, timestamp: str) -> str:
+    """
+    Encrypts a text reply in Smart Robot stream format.
+    Used to send an immediate acknowledgement back in the POST response.
+    """
+    stream_id = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
+    payload = json.dumps({
+        "msgtype": "stream",
+        "stream": {
+            "id":      stream_id,
+            "finish":  True,
+            "content": content
+        }
+    }, ensure_ascii=False)
+
+    crypt = _get_crypt()
+    ret, encrypted = crypt.EncryptMsg(payload, nonce, timestamp)
+    if ret != 0:
+        return ""
+    return encrypted
