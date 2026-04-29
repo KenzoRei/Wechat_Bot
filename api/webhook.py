@@ -98,7 +98,7 @@ def _process_message(message: dict) -> str:
 
         print("[pipeline] calling AI...", flush=True)
         ai_response = ai_chain.process(context)
-        print(f"[pipeline] intent={ai_response.intent} reply={ai_response.reply[:40]}", flush=True)
+        print(f"[pipeline] intent={ai_response.intent} service_type_name={ai_response.service_type_name} reply={ai_response.reply[:40]}", flush=True)
 
         # run workflow engine — it returns the reply via context
         # for conversation steps, reply is in ai_response

@@ -7,7 +7,12 @@ from ai.base import AIResponse
 
 
 def build_system_prompt(context: dict) -> str:
-    services_block  = json.dumps(context["allowed_services"], ensure_ascii=False, indent=2)
+    # strip group_config (API credentials) — AI only needs name and input_schema
+    ai_services = [
+        {k: v for k, v in svc.items() if k != "group_config"}
+        for svc in context.get("allowed_services", [])
+    ]
+    services_block  = json.dumps(ai_services, ensure_ascii=False, indent=2)
     collected_block = json.dumps(context["collected_fields"],  ensure_ascii=False, indent=2)
 
     if not context.get("session_id"):
@@ -44,7 +49,7 @@ def build_system_prompt(context: dict) -> str:
 }}
 
 ## 意图说明
-- new_request：用户发起新申请。识别服务类型，开始收集必填字段。
+- new_request：用户发起新申请。识别服务类型，开始收集必填字段。service_type_name 必须设置为服务的 name 字段（如 "fedex_label"），不得为 null。
 - continuation：用户在补充信息。提取新字段，询问下一个缺失字段。
 - confirm：用户确认了摘要（"确认"或类似表达）。
 - cancel：用户取消了申请（"取消"或类似表达）。
