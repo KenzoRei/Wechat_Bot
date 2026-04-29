@@ -87,66 +87,73 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
         service_type_id=UUID(service["service_type_id"])
     )
 
-    # add AI reply to history and send to user
-    session_manager.add_message(db, session, "assistant", ai_response.reply)
-    send_message(context, ai_response.reply)
+    # update context with new session id so downstream can use it
+    context["session_id"] = str(session.session_id)
+
+    # save any extracted fields from the first message
+    if ai_response.extracted_fields:
+        session_manager.update_collected_fields(db, session, ai_response.extracted_fields)
+
+    # Q3 fix: if AI already has all fields from the first message, go straight to confirmation
+    if ai_response.all_fields_collected:
+        _trigger_confirmation(context, ai_response, session, db)
+    else:
+        session_manager.add_message(db, session, "assistant", ai_response.reply)
+        send_message(context, ai_response.reply)
+
+
+def _trigger_confirmation(context: dict, ai_response: AIResponse, session, db: DBSession) -> None:
+    """
+    Shared helper — called when all_fields_collected=True.
+    Creates request_log, builds confirmation template, moves session to pending_confirmation.
+    Used by both _handle_new_request and _handle_continuation.
+    """
+    log = request_logger.create_log(
+        db,
+        wechat_openid=context["wechat_openid"],
+        group_id=UUID(context["group_id"]),
+        service_type_id=session.service_type_id,
+        raw_message=context["content"],
+        wechat_msg_id=context["msg_id"]
+    )
+
+    service_type = db.query(ServiceType).filter_by(
+        service_type_id=session.service_type_id
+    ).first()
+    note = service_type.confirmation_note if service_type else None
+
+    confirmation_text = build_confirmation_message(
+        service_type_name=service_type.name if service_type else "",
+        collected_fields=session.collected_fields,
+        serial_number=log.serial_number,
+        confirmation_note=note
+    )
+
+    session_manager.add_message(db, session, "assistant", confirmation_text)
+    context["serial_number"] = log.serial_number
+    session.request_log_id = log.log_id
+    session.status = "pending_confirmation"
+    db.commit()
+
+    send_message(context, confirmation_text)
 
 
 def _handle_continuation(context: dict, ai_response: AIResponse, db: DBSession) -> None:
     """
     User is providing more information for an existing session.
-    Updates collected fields. If all fields are now collected, sends
-    the confirmation template instead of the AI reply.
+    Updates collected fields. Triggers confirmation when all required fields collected.
     """
     session = _get_session(context, db)
     if session is None:
         send_message(context, "抱歉，未找到您的申请，请重新发起。")
         return
 
-    # record this user turn
     session_manager.add_message(db, session, "user", context["content"])
     session_manager.update_collected_fields(db, session, ai_response.extracted_fields)
 
     if ai_response.all_fields_collected:
-        # create request_log to get the serial number
-        log = request_logger.create_log(
-            db,
-            wechat_openid=context["wechat_openid"],
-            group_id=UUID(context["group_id"]),
-            service_type_id=session.service_type_id,
-            raw_message=context["content"],
-            wechat_msg_id=context["msg_id"]
-        )
-
-        # fetch confirmation_note for this service
-        service_type = db.query(ServiceType).filter_by(
-            service_type_id=session.service_type_id
-        ).first()
-        note = service_type.confirmation_note if service_type else None
-
-        # build and send confirmation template
-        confirmation_text = build_confirmation_message(
-            service_type_name=service_type.name if service_type else "",
-            collected_fields=session.collected_fields,
-            serial_number=log.serial_number,
-            confirmation_note=note
-        )
-
-        # record the confirmation message in history
-        session_manager.add_message(db, session, "assistant", confirmation_text)
-
-        # make serial_number available to downstream handlers
-        context["serial_number"] = log.serial_number
-
-        # link session to its request_log and move to pending_confirmation
-        session.request_log_id = log.log_id
-        session.status = "pending_confirmation"
-        db.commit()
-
-        send_message(context, confirmation_text)
-
+        _trigger_confirmation(context, ai_response, session, db)
     else:
-        # still collecting — send AI's field-prompting reply
         session_manager.add_message(db, session, "assistant", ai_response.reply)
         send_message(context, ai_response.reply)
 
@@ -161,6 +168,15 @@ def _handle_confirm(context: dict, db: DBSession) -> None:
     if session is None or session.status != "pending_confirmation":
         send_message(context, "抱歉，未找到待确认的申请，请重新发起。")
         return
+
+    # Q1 fix: serial_number is None in context when confirm message arrives
+    # because it was set in the previous request's context but not persisted.
+    # Load it from the linked request_log.
+    if not context.get("serial_number") and session.request_log_id:
+        from models.request_log import RequestLog
+        log = db.query(RequestLog).filter_by(log_id=session.request_log_id).first()
+        if log:
+            context["serial_number"] = log.serial_number
 
     try:
         _run_workflow_steps(context, session, db)
