@@ -8,23 +8,36 @@ from clients.wechat_client import send_message as _send_raw
 
 
 def send_message(context: dict, content: str) -> None:
-    """Convenience wrapper — pulls response_url from context automatically."""
-    _send_raw(
-        wechat_openid=context["wechat_openid"],
-        content=content,
-        response_url=context.get("response_url", "")
-    )
+    """
+    Stores reply in context["_reply"] for synchronous return,
+    AND calls the external API if response_url is available (for async use).
+    """
+    context["_reply"] = content
+    # also try response_url if available (for workflow steps that run after label creation)
+    response_url = context.get("response_url", "")
+    if response_url:
+        try:
+            _send_raw(
+                wechat_openid=context["wechat_openid"],
+                content=content,
+                response_url=response_url
+            )
+        except Exception as e:
+            print(f"[workflow] response_url send failed: {e}", flush=True)
 from handlers.registry import HANDLER_REGISTRY
 from models.workflow import WorkflowStep
 from models.service import ServiceType
 
 
-def run(context: dict, ai_response: AIResponse, db: DBSession) -> None:
+def run_and_get_reply(context: dict, ai_response: AIResponse, db: DBSession) -> str:
     """
-    Main orchestrator. Called after the AI Provider Chain processes each message.
-    Dispatches to the correct handler based on ai_response.intent.
+    Main orchestrator — synchronous version.
+    Processes the message and returns the reply string directly
+    instead of calling send_message(). The caller sends the reply
+    as the encrypted webhook response.
     """
     intent = ai_response.intent
+    context["_reply"] = ""  # handlers write reply here
 
     if intent == "new_request":
         _handle_new_request(context, ai_response, db)
@@ -38,6 +51,13 @@ def run(context: dict, ai_response: AIResponse, db: DBSession) -> None:
         _handle_check_services(context, ai_response)
     else:
         _handle_unrecognized(context, ai_response)
+
+    return context.get("_reply", "")
+
+
+def run(context: dict, ai_response: AIResponse, db: DBSession) -> None:
+    """Legacy sync wrapper — kept for compatibility."""
+    run_and_get_reply(context, ai_response, db)
 
 
 # ── Intent handlers ───────────────────────────────────────────────────────────

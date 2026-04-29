@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, BackgroundTasks, HTTPException
+from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import PlainTextResponse, Response
 from sqlalchemy.orm import Session as DBSession
 
@@ -11,8 +11,6 @@ from ai.openai_provider import OpenAIProvider
 
 router = APIRouter()
 
-# single shared AI chain — created once at startup
-# OpenAI is primary for now; Claude is fallback when tokens are available again
 ai_chain = AIProviderChain(providers=[
     OpenAIProvider(),
     ClaudeProvider(),
@@ -32,7 +30,7 @@ async def verify_webhook(
         plain = webhook_receiver.handle_get_webhook(msg_signature, timestamp, nonce, echostr)
         return PlainTextResponse(content=plain)
     except ValueError as e:
-        print(f"[webhook] GET verification failed: {e}")
+        print(f"[webhook] GET verification failed: {e}", flush=True)
         raise HTTPException(status_code=403, detail="Verification failed")
 
 
@@ -41,7 +39,6 @@ async def verify_webhook(
 @router.post("/webhook")
 async def receive_webhook(
     request: Request,
-    background_tasks: BackgroundTasks,
     msg_signature: str,
     timestamp: str,
     nonce: str,
@@ -56,81 +53,64 @@ async def receive_webhook(
             nonce=nonce,
         )
     except ValueError as e:
-        print(f"[webhook] POST decryption failed: {e}")
+        print(f"[webhook] POST decryption failed: {e}", flush=True)
         raise HTTPException(status_code=403, detail="Decryption failed")
 
-    # TEMP DEBUG — log synchronously before response so Render captures it
-    print(f"[DEBUG] from_user={message.get('from_user')} group_id={message.get('group_id')} msg_type={message.get('msg_type')} content={message.get('content','')[:30]}")
+    print(f"[webhook] from={message.get('from_user')} group={message.get('group_id')} type={message.get('msg_type')}", flush=True)
 
-    # process message asynchronously — WeChat requires response within 5 seconds
-    background_tasks.add_task(_process_message, message, nonce, timestamp)
+    # Process synchronously — Render free tier kills background tasks
+    # GPT-4o conversation steps complete in ~1-3s, within WeChat's 5s limit
+    reply_content = _process_message(message)
 
-    # Smart Robot expects encrypted JSON response, not plain "success"
-    ack = webhook_receiver.make_encrypted_reply("收到，处理中...", nonce, timestamp)
+    ack = webhook_receiver.make_encrypted_reply(reply_content, nonce, timestamp)
     if ack:
         return Response(content=ack, media_type="text/plain")
     return PlainTextResponse(content="success")
 
 
-# ── Background pipeline ───────────────────────────────────────────────────────
+# ── Pipeline ──────────────────────────────────────────────────────────────────
 
-def _process_message(message: dict, nonce: str, timestamp: str) -> None:
+def _process_message(message: dict) -> str:
     """
-    Full pipeline for one incoming message.
-    Runs asynchronously after the initial response is sent to WeChat.
+    Processes one incoming message synchronously.
+    Returns the reply content string to send back to WeChat.
     """
-    # TEMP DEBUG — log incoming message identifiers for admin setup
-    print(f"[DEBUG] msg_type={message.get('msg_type')} chat_type={message.get('chat_type')}")
-    print(f"[DEBUG] from_user={message.get('from_user')} group_id={message.get('group_id')}")
-
-    # only handle text messages from group chats in v1
     if message.get("msg_type") != "text":
-        return
+        return ""
     if message.get("chat_type") != "group" or not message.get("group_id"):
-        return  # direct messages not supported — group chat required
+        return ""
 
     db: DBSession = SessionLocal()
     try:
-        print(f"[pipeline] response_url present: {bool(message.get('response_url'))}")
-
-        # 1. access control
-        print("[pipeline] running access control...")
+        print("[pipeline] access control...", flush=True)
         result = access_control.check_access(
             db,
             wechat_openid=message["from_user"],
             wechat_group_id=message["group_id"]
         )
-        print(f"[pipeline] access result: {type(result).__name__}")
+        print(f"[pipeline] access: {type(result).__name__}", flush=True)
 
         if isinstance(result, access_control.AccessDenied):
-            if result.notify_user:
-                send_message(message["from_user"], result.message, response_url=message.get("response_url", ""))
-            return
+            return result.message if result.notify_user else ""
 
-        # 2. session routing
-        print("[pipeline] resolving session...")
         session = session_manager.resolve_session(db, result, message["content"])
-
-        # 3. build context
         context = session_manager.build_context(result, session, message)
 
-        # 4. AI processing
-        print("[pipeline] calling AI...")
+        print("[pipeline] calling AI...", flush=True)
         ai_response = ai_chain.process(context)
-        print(f"[pipeline] AI intent: {ai_response.intent}, reply: {ai_response.reply[:40]}")
+        print(f"[pipeline] intent={ai_response.intent} reply={ai_response.reply[:40]}", flush=True)
 
-        # 5. workflow engine
-        print("[pipeline] running workflow engine...")
-        workflow_engine.run(context, ai_response, db)
-        print("[pipeline] done.")
+        # run workflow engine — it returns the reply via context
+        # for conversation steps, reply is in ai_response
+        # for workflow execution, reply_wechat handler sends via response_url
+        reply = workflow_engine.run_and_get_reply(context, ai_response, db)
+        print(f"[pipeline] reply={str(reply)[:40]}", flush=True)
+        return reply or ""
 
     except Exception as e:
-        print(f"[pipeline] ERROR: {e}")
+        print(f"[pipeline] ERROR: {e}", flush=True)
         import traceback
         traceback.print_exc()
-        try:
-            send_message(message["from_user"], "系统出现错误，请稍后重试或联系管理员。", response_url=message.get("response_url", ""))
-        except Exception:
-            pass
+        return "系统出现错误，请稍后重试或联系管理员。"
     finally:
         db.close()
