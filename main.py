@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from database import SessionLocal
 from jobs.session_expiry import run_expiry_check
-from api import health, webhook
+from api import health, webhook, labels
 from api.admin import groups, members, services, reference, logs, sessions
 
 
@@ -42,6 +42,7 @@ app = FastAPI(
 # public routes
 app.include_router(health.router)
 app.include_router(webhook.router)
+app.include_router(labels.router)
 
 # admin routes
 app.include_router(groups.router)
