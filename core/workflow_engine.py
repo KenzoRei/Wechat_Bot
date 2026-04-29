@@ -4,7 +4,16 @@ from sqlalchemy.orm import Session as DBSession
 from ai.base import AIResponse
 from core import session_manager, request_logger
 from core.confirmation import build_confirmation_message
-from clients.wechat_client import send_message
+from clients.wechat_client import send_message as _send_raw
+
+
+def send_message(context: dict, content: str) -> None:
+    """Convenience wrapper — pulls response_url from context automatically."""
+    _send_raw(
+        wechat_openid=context["wechat_openid"],
+        content=content,
+        response_url=context.get("response_url", "")
+    )
 from handlers.registry import HANDLER_REGISTRY
 from models.workflow import WorkflowStep
 from models.service import ServiceType
@@ -40,19 +49,13 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
     """
     if context.get("session_id"):
         # session already open — reject and notify
-        send_message(
-            context["wechat_openid"],
-            "你有一个未完成的申请，请先完成或取消后再提交新请求。"
-        )
+        send_message(context, "你有一个未完成的申请，请先完成或取消后再提交新请求。")
         return
 
     # find the matching service in the group's allowed list
     service = _find_service(context, ai_response.service_type_name)
     if service is None:
-        send_message(
-            context["wechat_openid"],
-            f"抱歉，您的群组暂不支持该服务。如有疑问请联系管理员。"
-        )
+        send_message(context, "抱歉，您的群组暂不支持该服务。如有疑问请联系管理员。")
         return
 
     # create session
@@ -66,7 +69,7 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
 
     # add AI reply to history and send to user
     session_manager.add_message(db, session, "assistant", ai_response.reply)
-    send_message(context["wechat_openid"], ai_response.reply)
+    send_message(context, ai_response.reply)
 
 
 def _handle_continuation(context: dict, ai_response: AIResponse, db: DBSession) -> None:
@@ -77,7 +80,7 @@ def _handle_continuation(context: dict, ai_response: AIResponse, db: DBSession) 
     """
     session = _get_session(context, db)
     if session is None:
-        send_message(context["wechat_openid"], "抱歉，未找到您的申请，请重新发起。")
+        send_message(context, "抱歉，未找到您的申请，请重新发起。")
         return
 
     # record this user turn
@@ -120,12 +123,12 @@ def _handle_continuation(context: dict, ai_response: AIResponse, db: DBSession) 
         session.status = "pending_confirmation"
         db.commit()
 
-        send_message(context["wechat_openid"], confirmation_text)
+        send_message(context, confirmation_text)
 
     else:
         # still collecting — send AI's field-prompting reply
         session_manager.add_message(db, session, "assistant", ai_response.reply)
-        send_message(context["wechat_openid"], ai_response.reply)
+        send_message(context, ai_response.reply)
 
 
 def _handle_confirm(context: dict, db: DBSession) -> None:
@@ -136,7 +139,7 @@ def _handle_confirm(context: dict, db: DBSession) -> None:
     """
     session = _get_session(context, db)
     if session is None or session.status != "pending_confirmation":
-        send_message(context["wechat_openid"], "抱歉，未找到待确认的申请，请重新发起。")
+        send_message(context, "抱歉，未找到待确认的申请，请重新发起。")
         return
 
     try:
@@ -148,10 +151,7 @@ def _handle_confirm(context: dict, db: DBSession) -> None:
     except Exception as e:
         request_logger.mark_failed(db, session.request_log_id, error_detail=str(e))
         session_manager.close_session(db, session, status="failed")
-        send_message(
-            context["wechat_openid"],
-            "申请处理失败，请稍后重试或联系管理员。"
-        )
+        send_message(context, "申请处理失败，请稍后重试或联系管理员。")
 
 
 def _handle_cancel(context: dict, db: DBSession) -> None:
@@ -159,12 +159,12 @@ def _handle_cancel(context: dict, db: DBSession) -> None:
     session = _get_session(context, db)
     if session:
         session_manager.close_session(db, session, status="cancelled")
-    send_message(context["wechat_openid"], "已取消，您可以随时发起新申请。")
+    send_message(context, "已取消，您可以随时发起新申请。")
 
 
 def _handle_check_services(context: dict, ai_response: AIResponse) -> None:
     """AI already listed available services in its reply. Just send it."""
-    send_message(context["wechat_openid"], ai_response.reply)
+    send_message(context, ai_response.reply)
 
 
 def _handle_unrecognized(context: dict, ai_response: AIResponse) -> None:

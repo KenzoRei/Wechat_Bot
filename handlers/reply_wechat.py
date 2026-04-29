@@ -21,7 +21,11 @@ class ReplyWeChatHandler(BaseHandler):
             f"如有问题请联系管理员。"
         )
 
-        send_message(context["wechat_openid"], message)
+        send_message(
+            wechat_openid=context["wechat_openid"],
+            content=message,
+            response_url=context.get("response_url", "")
+        )
 
         # reply_wechat produces no result for downstream steps
         return {}

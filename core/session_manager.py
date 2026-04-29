@@ -135,8 +135,9 @@ def build_context(
         "collected_fields":     session.collected_fields if session else {},
 
         # from webhook_receiver
-        "content": message["content"],
-        "msg_id":  message["msg_id"],
+        "content":      message["content"],
+        "msg_id":       message["msg_id"],
+        "response_url": message.get("response_url", ""),
 
         # filled downstream
         "parsed_input":   None,

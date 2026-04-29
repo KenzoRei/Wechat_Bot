@@ -62,37 +62,40 @@ def _extract_message(data: dict) -> dict:
     """
     Parses the decrypted JSON payload into a structured message dict.
 
-    Smart Robot JSON format:
+    Smart Robot JSON format (from WeChat Work docs):
     {
-        "msgtype": "text",
+        "msgid":        "...",
+        "create_time":  1234567890,
+        "aibotid":      "aiblPqz...",
+        "chatid":       "wrXXX...",          ← group chat ID (top-level)
+        "chattype":     "group" | "single",
+        "msgtype":      "text",
+        "from": {
+            "userid":   "user_openid",
+            "corpid":   "ww..."
+        },
         "text": {"content": "..."},
-        "from": {"userid": "..."},
-        "chat_info": {"chat_id": "..."},
-        "msgid": "...",
-        ...
+        "response_url": "https://..."         ← use this to send replies
     }
     """
     msg_type  = data.get("msgtype", "")
     from_info = data.get("from", {})
-    chat_info = data.get("chat_info", {})
+    chat_type = data.get("chattype", "single")
+    group_id  = data.get("chatid") if chat_type == "group" else None
 
-    # group_id comes from chat_info for group messages
-    chat_type = "group" if chat_info.get("chat_id") else "single"
-    group_id  = chat_info.get("chat_id") if chat_type == "group" else None
-
-    # extract text content
     content = ""
     if msg_type == "text":
         content = data.get("text", {}).get("content", "")
 
     return {
-        "from_user":   from_info.get("userid", ""),
-        "group_id":    group_id,
-        "chat_type":   chat_type,
-        "msg_type":    msg_type,
-        "content":     content,
-        "msg_id":      data.get("msgid", ""),
-        "raw":         data,    # keep raw for future message types
+        "from_user":    from_info.get("userid", ""),
+        "group_id":     group_id,
+        "chat_type":    chat_type,
+        "msg_type":     msg_type,
+        "content":      content,
+        "msg_id":       data.get("msgid", ""),
+        "response_url": data.get("response_url", ""),  # for sending replies
+        "raw":          data,
     }
 
 

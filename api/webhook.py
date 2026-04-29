@@ -59,6 +59,9 @@ async def receive_webhook(
         print(f"[webhook] POST decryption failed: {e}")
         raise HTTPException(status_code=403, detail="Decryption failed")
 
+    # TEMP DEBUG — log synchronously before response so Render captures it
+    print(f"[DEBUG] from_user={message.get('from_user')} group_id={message.get('group_id')} msg_type={message.get('msg_type')} content={message.get('content','')[:30]}")
+
     # process message asynchronously — WeChat requires response within 5 seconds
     background_tasks.add_task(_process_message, message, nonce, timestamp)
 
@@ -97,7 +100,7 @@ def _process_message(message: dict, nonce: str, timestamp: str) -> None:
 
         if isinstance(result, access_control.AccessDenied):
             if result.notify_user:
-                send_message(message["from_user"], result.message)
+                send_message(message["from_user"], result.message, response_url=message.get("response_url", ""))
             return
 
         # 2. session routing
@@ -115,7 +118,7 @@ def _process_message(message: dict, nonce: str, timestamp: str) -> None:
     except Exception as e:
         print(f"[webhook] pipeline error: {e}")
         try:
-            send_message(message["from_user"], "系统出现错误，请稍后重试或联系管理员。")
+            send_message(message["from_user"], "系统出现错误，请稍后重试或联系管理员。", response_url=message.get("response_url", ""))
         except Exception:
             pass
     finally:
