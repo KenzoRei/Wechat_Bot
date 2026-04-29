@@ -28,10 +28,16 @@ def _get_token(username: str, password: str) -> str:
         data={"username": username, "password": password},  # form-encoded, NOT json=
         timeout=15
     )
-    resp.raise_for_status()
-    data = resp.json()
+    # Do NOT call raise_for_status() — YiDiDa uses non-2xx codes for business errors.
+    # Read the JSON and check the success field instead.
+    try:
+        data = resp.json()
+    except Exception:
+        raise RuntimeError(f"YiDiDa login returned non-JSON (status {resp.status_code}): {resp.text[:200]}")
+
     if not data.get("success"):
-        raise RuntimeError(f"YiDiDa login failed: {data.get('data')}")
+        raise RuntimeError(f"YiDiDa login failed (status {resp.status_code}): {data.get('data')}")
+
     token = data.get("data")
     if not token:
         raise RuntimeError(f"YiDiDa login returned no token: {data}")

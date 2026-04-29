@@ -169,6 +169,9 @@ def _handle_confirm(context: dict, db: DBSession) -> None:
         session_manager.close_session(db, session, status="completed")
 
     except Exception as e:
+        import traceback
+        print(f"[workflow] STEP FAILED: {e}", flush=True)
+        traceback.print_exc()
         request_logger.mark_failed(db, session.request_log_id, error_detail=str(e))
         session_manager.close_session(db, session, status="failed")
         send_message(context, "申请处理失败，请稍后重试或联系管理员。")
