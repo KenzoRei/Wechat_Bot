@@ -11,6 +11,25 @@ from ai.openai_provider import OpenAIProvider
 
 router = APIRouter()
 
+# ── Deduplication ─────────────────────────────────────────────────────────────
+# WeChat retries the same message if our response is slow.
+# Track recently processed msg_ids to drop duplicates within a 60-second window.
+import time as _time
+_seen_msg_ids: dict[str, float] = {}
+_DEDUP_TTL = 60  # seconds
+
+def _is_duplicate(msg_id: str) -> bool:
+    now = _time.time()
+    # clean expired entries
+    expired = [k for k, v in list(_seen_msg_ids.items()) if now - v > _DEDUP_TTL]
+    for k in expired:
+        del _seen_msg_ids[k]
+    if msg_id in _seen_msg_ids:
+        return True
+    _seen_msg_ids[msg_id] = now
+    return False
+
+
 ai_chain = AIProviderChain(providers=[
     OpenAIProvider(),
     ClaudeProvider(),
@@ -78,6 +97,9 @@ def _process_message(message: dict) -> str:
     if message.get("msg_type") != "text":
         return ""
     if message.get("chat_type") != "group" or not message.get("group_id"):
+        return ""
+    if _is_duplicate(message.get("msg_id", "")):
+        print(f"[pipeline] duplicate msg_id dropped: {message.get('msg_id')}", flush=True)
         return ""
 
     db: DBSession = SessionLocal()

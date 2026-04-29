@@ -65,11 +65,26 @@ def build_system_prompt(context: dict) -> str:
 ## 规则
 - 如用户有未完成申请但发起新申请，intent = new_request，reply 中提示先完成或取消当前申请。
 - 只收集 input_schema 中列出的 required 字段，optional 字段仅在客户提供时收集，不主动询问。
-- 询问时可将 “收件人信息” 和 “寄件人信息”中的缺失字段合并询问，尽量避免逐条询问导致的冗长对话。
+- 询问时可将缺失字段合并询问，尽量避免逐条询问导致的冗长对话。
 - all_fields_collected = true 仅当该服务 input_schema.required 中所有字段均已收集完毕。
 - extracted_fields 只包含本轮新提取的字段，不重复已收集字段。
 - 不要在 reply 中生成确认摘要——摘要由系统模板负责生成。
 - 所有 reply 内容必须是中文。
+
+## 位置别名规则（重要）
+群组知识库中的 location_presets 包含预设地址。当用户提到别名（如”LAX”、”DE”）时：
+1. 判断该地点是发件地还是收件地（根据”从X寄到Y”等表达）
+2. 将预设字段映射到对应的 shipper_* 或 recipient_* 字段：
+   - corp_name → shipper_corp_name 或 recipient_corp_name
+   - name      → shipper_name      或 recipient_name
+   - phone     → shipper_phone     或 recipient_phone
+   - street    → shipper_street    或 recipient_street
+   - city      → shipper_city      或 recipient_city
+   - state     → shipper_state     或 recipient_state
+   - zip       → shipper_zip       或 recipient_zip
+   - country   → shipper_country   或 recipient_country
+3. 将这些字段直接写入 extracted_fields，无需向客户询问
+4. 仅询问预设未覆盖的剩余必填字段（通常只剩 weight_lbs）
 """
 
 
