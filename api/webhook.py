@@ -111,6 +111,7 @@ def _process_message(message: dict) -> None:
 
     db: DBSession = SessionLocal()
     try:
+        print(f"[pipeline] response_url present: {bool(response_url)}", flush=True)
         print("[pipeline] access control...", flush=True)
         result = access_control.check_access(
             db,
