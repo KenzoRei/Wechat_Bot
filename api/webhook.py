@@ -63,7 +63,7 @@ async def receive_webhook(
     background_tasks.add_task(_process_message, message, nonce, timestamp)
 
     # Smart Robot expects encrypted JSON response, not plain "success"
-    ack = webhook_receiver.make_encrypted_reply("收到", nonce, timestamp)
+    ack = webhook_receiver.make_encrypted_reply("SYS_ACK_TEST_001", nonce, timestamp)
     if ack:
         return Response(content=ack, media_type="text/plain")
     return PlainTextResponse(content="success")
@@ -76,6 +76,10 @@ def _process_message(message: dict, nonce: str, timestamp: str) -> None:
     Full pipeline for one incoming message.
     Runs asynchronously after the initial response is sent to WeChat.
     """
+    # TEMP DEBUG — log incoming message identifiers for admin setup
+    print(f"[DEBUG] msg_type={message.get('msg_type')} chat_type={message.get('chat_type')}")
+    print(f"[DEBUG] from_user={message.get('from_user')} group_id={message.get('group_id')}")
+
     # only handle text messages from group chats in v1
     if message.get("msg_type") != "text":
         return
