@@ -91,12 +91,16 @@ def _process_message(message: dict, nonce: str, timestamp: str) -> None:
 
     db: DBSession = SessionLocal()
     try:
+        print(f"[pipeline] response_url present: {bool(message.get('response_url'))}")
+
         # 1. access control
+        print("[pipeline] running access control...")
         result = access_control.check_access(
             db,
             wechat_openid=message["from_user"],
             wechat_group_id=message["group_id"]
         )
+        print(f"[pipeline] access result: {type(result).__name__}")
 
         if isinstance(result, access_control.AccessDenied):
             if result.notify_user:
@@ -104,19 +108,26 @@ def _process_message(message: dict, nonce: str, timestamp: str) -> None:
             return
 
         # 2. session routing
+        print("[pipeline] resolving session...")
         session = session_manager.resolve_session(db, result, message["content"])
 
         # 3. build context
         context = session_manager.build_context(result, session, message)
 
         # 4. AI processing
+        print("[pipeline] calling AI...")
         ai_response = ai_chain.process(context)
+        print(f"[pipeline] AI intent: {ai_response.intent}, reply: {ai_response.reply[:40]}")
 
         # 5. workflow engine
+        print("[pipeline] running workflow engine...")
         workflow_engine.run(context, ai_response, db)
+        print("[pipeline] done.")
 
     except Exception as e:
-        print(f"[webhook] pipeline error: {e}")
+        print(f"[pipeline] ERROR: {e}")
+        import traceback
+        traceback.print_exc()
         try:
             send_message(message["from_user"], "系统出现错误，请稍后重试或联系管理员。", response_url=message.get("response_url", ""))
         except Exception:
