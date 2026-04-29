@@ -134,10 +134,7 @@ def _process_message(message: dict) -> None:
 
         reply = workflow_engine.run_and_get_reply(context, ai_response, db)
         print(f"[pipeline] reply={str(reply)[:40]}", flush=True)
-
-        # Send actual reply via response_url
-        if reply:
-            send_message(message["from_user"], reply, response_url=response_url)
+        # Note: workflow_engine.send_message already sent via response_url internally
 
     except Exception as e:
         print(f"[pipeline] ERROR: {e}", flush=True)

@@ -63,13 +63,14 @@ def build_system_prompt(context: dict) -> str:
 - unrecognized：无法理解或与服务无关。礼貌提示用户重新描述。
 
 ## 规则
-- 如用户有未完成申请但发起新申请，intent = new_request，reply 中提示先完成或取消当前申请。
+- 重量单位自动换算：若用户提供千克（公斤/kg），换算为磅后填入 weight_lbs（1千克 = 2.205磅，结果保留两位小数）。
 - 只收集 input_schema 中列出的 required 字段，optional 字段仅在客户提供时收集，不主动询问。
 - 询问时可将缺失字段合并询问，尽量避免逐条询问导致的冗长对话。
 - all_fields_collected = true 仅当该服务 input_schema.required 中所有字段均已收集完毕。
 - extracted_fields 只包含本轮新提取的字段，不重复已收集字段。
 - 不要在 reply 中生成确认摘要——摘要由系统模板负责生成。
 - 所有 reply 内容必须是中文。
+- 【关键】当前会话状态为"进行中"或"已收集字段"不为空时，用户消息几乎必然是对上一条AI问题的回答，intent 必须为 continuation，绝对不得返回 new_request。只有当会话状态为"无活跃会话"时才可返回 new_request。
 
 ## 位置别名规则（重要）
 群组知识库中的 location_presets 包含预设地址。当用户提到别名（如”LAX”、”DE”）时：

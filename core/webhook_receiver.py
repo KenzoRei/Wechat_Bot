@@ -86,6 +86,10 @@ def _extract_message(data: dict) -> dict:
     content = ""
     if msg_type == "text":
         content = data.get("text", {}).get("content", "")
+        # Strip @mention prefix — WeChat includes it in content for group messages
+        # e.g. "@机器人-测试 5公斤" → "5公斤"
+        import re
+        content = re.sub(r'^@\S+\s*', '', content).strip()
 
     return {
         "from_user":    from_info.get("userid", ""),
