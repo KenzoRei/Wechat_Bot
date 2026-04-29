@@ -121,12 +121,13 @@ def build_context(
     """Assembles the full context dict passed through the entire pipeline."""
     return {
         # from access_control
-        "wechat_openid":    access.wechat_openid,
-        "group_id":         str(access.group_id),
-        "role":             access.role,
-        "display_name":     access.display_name,
-        "allowed_services": access.allowed_services,
-        "group_context":    access.group_context,   # location presets, aliases
+        "wechat_openid":     access.wechat_openid,
+        "group_id":          str(access.group_id),
+        "role":              access.role,
+        "display_name":      access.display_name,
+        "allowed_services":  access.allowed_services,
+        "group_context":     access.group_context,
+        "group_description": access.group_description,
 
         # from session (None if not yet created)
         "session_id":           str(session.session_id) if session else None,

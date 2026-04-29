@@ -7,12 +7,13 @@ from models.service import ServiceType
 
 @dataclass
 class AccessResult:
-    wechat_openid:    str
-    group_id:         UUID
-    role:             str
-    display_name:     str | None
-    allowed_services: list[dict]
-    group_context:    dict | None   # location presets, aliases — passed to AI
+    wechat_openid:     str
+    group_id:          UUID
+    role:              str
+    display_name:      str | None
+    allowed_services:  list[dict]
+    group_context:     dict | None   # location presets, aliases — passed to AI
+    group_description: str | None    # human label for the group — used in keHuDanHao
 
 
 @dataclass
@@ -91,4 +92,5 @@ def check_access(
         display_name=member.display_name,
         allowed_services=allowed_services,
         group_context=group.context,
+        group_description=group.description,
     )
