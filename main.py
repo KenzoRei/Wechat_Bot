@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from database import SessionLocal
 from jobs.session_expiry import run_expiry_check
 from api import health, webhook, labels
-from api.admin import groups, members, services, reference, logs, sessions
+from api.admin import groups, members, services, reference, logs, sessions, seed_v6
 
 
 # ── Scheduler setup ───────────────────────────────────────────────────────────
@@ -51,3 +51,4 @@ app.include_router(services.router)
 app.include_router(reference.router)
 app.include_router(logs.router)
 app.include_router(sessions.router)
+app.include_router(seed_v6.router)
