@@ -91,88 +91,90 @@ def seed_v6(db: Session = Depends(get_db)):
       - Test group: fedex_label updated to fedex_workorder + OMS creds
       - Test group: fedex_oms_label service added
     """
+    import traceback
     ops = []
-
-    # ── 1. fedex_oms_label service type ──────────────────────────────────────
-    stmt = pg_insert(ServiceType).values(
-        service_type_id=_SERVICE_OMS_ID,
-        name="fedex_oms_label",
-        description="FedEx label creation via YiDiDa, linked to an OMS outbound order",
-        input_schema=_INPUT_SCHEMA_OMS,
-        group_config_schema=_GROUP_CONFIG_SCHEMA_OMS,
-        confirmation_note=(
-            "Label will be generated and linked to your OMS outbound order. "
-            "Contact admin immediately if changes are needed."
-        ),
-        is_active=True,
-    ).on_conflict_do_update(
-        index_elements=["service_type_id"],
-        set_=dict(
+    try:
+        # ── 1. fedex_oms_label service type ──────────────────────────────────
+        stmt = pg_insert(ServiceType).values(
+            service_type_id=_SERVICE_OMS_ID,
+            name="fedex_oms_label",
+            description="FedEx label creation via YiDiDa, linked to an OMS outbound order",
             input_schema=_INPUT_SCHEMA_OMS,
             group_config_schema=_GROUP_CONFIG_SCHEMA_OMS,
-        )
-    )
-    db.execute(stmt)
-    ops.append("upserted service_type: fedex_oms_label")
-
-    # ── 2. fedex_workorder workflow ───────────────────────────────────────────
-    stmt = pg_insert(Workflow).values(
-        workflow_id=_WORKFLOW_ID,
-        name="fedex_workorder",
-        description=(
-            "Create FedEx label via YiDiDa, create OMS work order "
-            "(linked if OMS order no. provided), reply to WeChat"
-        ),
-    ).on_conflict_do_update(
-        index_elements=["workflow_id"],
-        set_=dict(name="fedex_workorder"),
-    )
-    db.execute(stmt)
-    ops.append("upserted workflow: fedex_workorder")
-
-    # ── 3. Workflow steps ─────────────────────────────────────────────────────
-    for step in _WORKFLOW_STEPS:
-        stmt = pg_insert(WorkflowStep).values(
-            workflow_id=_WORKFLOW_ID,
-            step_order=step["step_order"],
-            step_type=step["step_type"],
-            config=step["config"],
+            confirmation_note=(
+                "Label will be generated and linked to your OMS outbound order. "
+                "Contact admin immediately if changes are needed."
+            ),
+            is_active=True,
         ).on_conflict_do_update(
-            index_elements=["workflow_id", "step_order"],
-            set_=dict(step_type=step["step_type"], config=step["config"]),
+            index_elements=["service_type_id"],
+            set_=dict(input_schema=_INPUT_SCHEMA_OMS, group_config_schema=_GROUP_CONFIG_SCHEMA_OMS),
         )
         db.execute(stmt)
-        ops.append(f"upserted step {step['step_order']}: {step['step_type']}")
+        ops.append("upserted service_type: fedex_oms_label")
 
-    # ── 4. Test group: update fedex_label → fedex_workorder + OMS creds ──────
-    result = db.execute(text("""
-        UPDATE group_service
-        SET workflow_id = :wf_id,
-            config      = config || :oms_creds::jsonb
-        WHERE group_id        = :group_id
-          AND service_type_id = :svc_id
-    """), {
-        "wf_id":     str(_WORKFLOW_ID),
-        "oms_creds": '{"oms_app_key":"7067eec5f4ce4b3fa4321aabbe2623ab",'
-                     '"oms_app_secret":"0b6069240b1d49438761c3155a36ddfc",'
-                     '"oms_wh_code":"DE19713"}',
-        "group_id":  str(_GROUP_ID),
-        "svc_id":    str(_SERVICE_BASE_ID),
-    })
-    ops.append(f"updated fedex_label group_service: {result.rowcount} row(s)")
+        # ── 2. fedex_workorder workflow ───────────────────────────────────────
+        stmt = pg_insert(Workflow).values(
+            workflow_id=_WORKFLOW_ID,
+            name="fedex_workorder",
+            description=(
+                "Create FedEx label via YiDiDa, create OMS work order "
+                "(linked if OMS order no. provided), reply to WeChat"
+            ),
+        ).on_conflict_do_update(
+            index_elements=["workflow_id"],
+            set_=dict(name="fedex_workorder"),
+        )
+        db.execute(stmt)
+        ops.append("upserted workflow: fedex_workorder")
 
-    # ── 5. Test group: add fedex_oms_label service ────────────────────────────
-    stmt = pg_insert(GroupService).values(
-        group_id=_GROUP_ID,
-        service_type_id=_SERVICE_OMS_ID,
-        workflow_id=_WORKFLOW_ID,
-        config=_CONFIG_OMS_LABEL,
-    ).on_conflict_do_update(
-        index_elements=["group_id", "service_type_id"],
-        set_=dict(workflow_id=_WORKFLOW_ID, config=_CONFIG_OMS_LABEL),
-    )
-    db.execute(stmt)
-    ops.append("upserted group_service: fedex_oms_label")
+        # ── 3. Workflow steps ─────────────────────────────────────────────────
+        for step in _WORKFLOW_STEPS:
+            stmt = pg_insert(WorkflowStep).values(
+                workflow_id=_WORKFLOW_ID,
+                step_order=step["step_order"],
+                step_type=step["step_type"],
+                config=step["config"],
+            ).on_conflict_do_update(
+                index_elements=["workflow_id", "step_order"],
+                set_=dict(step_type=step["step_type"], config=step["config"]),
+            )
+            db.execute(stmt)
+            ops.append(f"upserted step {step['step_order']}: {step['step_type']}")
 
-    db.commit()
-    return {"status": "ok", "ops": ops}
+        # ── 4. Test group: update fedex_label → fedex_workorder + OMS creds ──
+        result = db.execute(text("""
+            UPDATE group_service
+            SET workflow_id = :wf_id,
+                config      = config || :oms_creds::jsonb
+            WHERE group_id        = :group_id
+              AND service_type_id = :svc_id
+        """), {
+            "wf_id":     str(_WORKFLOW_ID),
+            "oms_creds": '{"oms_app_key":"7067eec5f4ce4b3fa4321aabbe2623ab",'
+                         '"oms_app_secret":"0b6069240b1d49438761c3155a36ddfc",'
+                         '"oms_wh_code":"DE19713"}',
+            "group_id":  str(_GROUP_ID),
+            "svc_id":    str(_SERVICE_BASE_ID),
+        })
+        ops.append(f"updated fedex_label group_service: {result.rowcount} row(s)")
+
+        # ── 5. Test group: add fedex_oms_label service ────────────────────────
+        stmt = pg_insert(GroupService).values(
+            group_id=_GROUP_ID,
+            service_type_id=_SERVICE_OMS_ID,
+            workflow_id=_WORKFLOW_ID,
+            config=_CONFIG_OMS_LABEL,
+        ).on_conflict_do_update(
+            index_elements=["group_id", "service_type_id"],
+            set_=dict(workflow_id=_WORKFLOW_ID, config=_CONFIG_OMS_LABEL),
+        )
+        db.execute(stmt)
+        ops.append("upserted group_service: fedex_oms_label")
+
+        db.commit()
+        return {"status": "ok", "ops": ops}
+
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "ops": ops, "error": str(e), "trace": traceback.format_exc()}
