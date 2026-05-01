@@ -98,7 +98,7 @@ def seed_v6(db: Session = Depends(get_db)):
                 INSERT INTO workflow_step (workflow_id, step_order, step_type, config)
                 VALUES (
                     'af000001-0000-0000-0000-000000000005',
-                    :order, :step_type, :config::jsonb
+                    :order, :step_type, CAST(:config AS jsonb)
                 )
                 ON CONFLICT (workflow_id, step_order) DO UPDATE SET
                     step_type = EXCLUDED.step_type,
@@ -107,12 +107,12 @@ def seed_v6(db: Session = Depends(get_db)):
             ops.append(f"upserted step {order}: {step_type}")
 
         # ── 4. Test group: update fedex_label service ─────────────────────────
+        # Note: avoid :: cast syntax in text() — use CAST() instead so SQLAlchemy
+        # doesn't misparse it as a parameter escape sequence.
         result = db.execute(text("""
             UPDATE group_service
             SET workflow_id = 'af000001-0000-0000-0000-000000000005',
-                config      = config || '{"oms_app_key":"7067eec5f4ce4b3fa4321aabbe2623ab",
-                                          "oms_app_secret":"0b6069240b1d49438761c3155a36ddfc",
-                                          "oms_wh_code":"DE19713"}'::jsonb
+                config      = config || CAST('{"oms_app_key":"7067eec5f4ce4b3fa4321aabbe2623ab","oms_app_secret":"0b6069240b1d49438761c3155a36ddfc","oms_wh_code":"DE19713"}' AS jsonb)
             WHERE group_id        = 'a81d11df-b487-410b-abdf-5126f13e4992'
               AND service_type_id = 'a1b2c3d4-0001-0000-0000-000000000001'
         """))
@@ -125,11 +125,7 @@ def seed_v6(db: Session = Depends(get_db)):
                 'a81d11df-b487-410b-abdf-5126f13e4992',
                 'a1b2c3d4-0003-0000-0000-000000000003',
                 'af000001-0000-0000-0000-000000000005',
-                '{"ydd_api_key":"abc12345","ydd_cust_id":"F000179",
-                  "ydd_channel_id":"Fedex home delivery 洛杉矶渠道",
-                  "oms_app_key":"7067eec5f4ce4b3fa4321aabbe2623ab",
-                  "oms_app_secret":"0b6069240b1d49438761c3155a36ddfc",
-                  "oms_wh_code":"DE19713"}'::jsonb
+                CAST('{"ydd_api_key":"abc12345","ydd_cust_id":"F000179","ydd_channel_id":"Fedex home delivery 洛杉矶渠道","oms_app_key":"7067eec5f4ce4b3fa4321aabbe2623ab","oms_app_secret":"0b6069240b1d49438761c3155a36ddfc","oms_wh_code":"DE19713"}' AS jsonb)
             )
             ON CONFLICT (group_id, service_type_id) DO UPDATE SET
                 workflow_id = EXCLUDED.workflow_id,
