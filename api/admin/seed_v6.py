@@ -87,24 +87,20 @@ def seed_v6(db: Session = Depends(get_db)):
         """))
         ops.append("upserted workflow: fedex_workorder")
 
-        # ── 3. Workflow steps ─────────────────────────────────────────────────
-        steps = [
-            (1, 'create_fedex_label',   '{"carrier": "fedex"}'),
-            (2, 'oms_create_workorder', '{}'),
-            (3, 'reply_wechat',         '{}'),
-        ]
-        for order, step_type, config in steps:
-            db.execute(text("""
-                INSERT INTO workflow_step (workflow_id, step_order, step_type, config)
-                VALUES (
-                    'af000001-0000-0000-0000-000000000005',
-                    :order, :step_type, CAST(:config AS jsonb)
-                )
-                ON CONFLICT (workflow_id, step_order) DO UPDATE SET
-                    step_type = EXCLUDED.step_type,
-                    config    = EXCLUDED.config
-            """), {"order": order, "step_type": step_type, "config": config})
-            ops.append(f"upserted step {order}: {step_type}")
+        # ── 3. Workflow steps (no params — hardcoded to avoid :: parsing issues) ─
+        for sql in [
+            """INSERT INTO workflow_step (workflow_id, step_order, step_type, config)
+               VALUES ('af000001-0000-0000-0000-000000000005', 1, 'create_fedex_label', '{"carrier":"fedex"}')
+               ON CONFLICT (workflow_id, step_order) DO UPDATE SET step_type=EXCLUDED.step_type, config=EXCLUDED.config""",
+            """INSERT INTO workflow_step (workflow_id, step_order, step_type, config)
+               VALUES ('af000001-0000-0000-0000-000000000005', 2, 'oms_create_workorder', '{}')
+               ON CONFLICT (workflow_id, step_order) DO UPDATE SET step_type=EXCLUDED.step_type, config=EXCLUDED.config""",
+            """INSERT INTO workflow_step (workflow_id, step_order, step_type, config)
+               VALUES ('af000001-0000-0000-0000-000000000005', 3, 'reply_wechat', '{}')
+               ON CONFLICT (workflow_id, step_order) DO UPDATE SET step_type=EXCLUDED.step_type, config=EXCLUDED.config""",
+        ]:
+            db.execute(text(sql))
+        ops.append("upserted steps 1-3")
 
         # ── 4. Test group: update fedex_label service ─────────────────────────
         # Note: avoid :: cast syntax in text() — use CAST() instead so SQLAlchemy
