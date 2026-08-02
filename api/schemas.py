@@ -60,6 +60,35 @@ class MemberResponse(BaseModel):
     joined_at:     datetime
 
 
+# ── Roles ─────────────────────────────────────────────────────────────────────
+
+class RoleCreate(BaseModel):
+    name:        str
+    description: str | None = None
+
+
+class RoleResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    role_id:     UUID
+    name:        str
+    description: str | None
+    created_at:  datetime
+
+
+class GroupServiceRoleGrant(BaseModel):
+    role:       str    # role name, e.g. "admin"
+    created_by: str    # who granted this — manual until per-admin auth exists
+
+
+class GroupServiceRoleResponse(BaseModel):
+    group_id:        UUID
+    service_type_id: UUID
+    role:            str
+    created_by:      str
+    created_at:      datetime
+
+
 # ── Group Services ────────────────────────────────────────────────────────────
 
 class GroupServiceCreate(BaseModel):
