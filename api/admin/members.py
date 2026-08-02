@@ -4,11 +4,28 @@ from sqlalchemy.orm import Session
 from database import get_db
 from middleware.admin_auth import verify_admin_key
 from models.group import GroupConfig, GroupMember
+from models.role import Role
 from api.schemas import MemberCreate, MemberUpdate, MemberResponse
 
 router = APIRouter(prefix="/admin/groups", dependencies=[Depends(verify_admin_key)])
 
-VALID_ROLES = {"admin", "customer"}
+
+def _resolve_role(db: Session, role_name: str) -> Role:
+    role = db.query(Role).filter_by(name=role_name).first()
+    if not role:
+        raise HTTPException(status_code=400, detail=f"Unknown role: '{role_name}'. See GET /admin/roles")
+    return role
+
+
+def _to_response(member: GroupMember, role_name: str) -> MemberResponse:
+    return MemberResponse(
+        wechat_openid=member.wechat_openid,
+        group_id=member.group_id,
+        role=role_name,
+        display_name=member.display_name,
+        is_active=member.is_active,
+        joined_at=member.joined_at,
+    )
 
 
 @router.post("/{group_id}/members", status_code=201)
@@ -17,8 +34,7 @@ def add_member(group_id: str, body: MemberCreate, db: Session = Depends(get_db))
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
 
-    if body.role not in VALID_ROLES:
-        raise HTTPException(status_code=400, detail="role must be 'admin' or 'customer'")
+    role = _resolve_role(db, body.role)
 
     existing = db.query(GroupMember).filter_by(
         wechat_openid=body.wechat_openid, group_id=group_id
@@ -29,13 +45,13 @@ def add_member(group_id: str, body: MemberCreate, db: Session = Depends(get_db))
     member = GroupMember(
         wechat_openid=body.wechat_openid,
         group_id=group_id,
-        role=body.role,
+        role_id=role.role_id,
         display_name=body.display_name,
     )
     db.add(member)
     db.commit()
     db.refresh(member)
-    return {"data": MemberResponse.model_validate(member)}
+    return {"data": _to_response(member, role.name)}
 
 
 @router.get("/{group_id}/members")
@@ -44,8 +60,13 @@ def list_members(group_id: str, db: Session = Depends(get_db)):
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
 
-    members = db.query(GroupMember).filter_by(group_id=group_id).all()
-    return {"data": [MemberResponse.model_validate(m) for m in members]}
+    rows = (
+        db.query(GroupMember, Role)
+        .join(Role, GroupMember.role_id == Role.role_id)
+        .filter(GroupMember.group_id == group_id)
+        .all()
+    )
+    return {"data": [_to_response(m, r.name) for m, r in rows]}
 
 
 @router.patch("/{group_id}/members/{wechat_openid}")
@@ -58,16 +79,21 @@ def update_member(
     if not member:
         raise HTTPException(status_code=404, detail="Member not found in this group")
 
+    role_name = None
     if body.role is not None:
-        if body.role not in VALID_ROLES:
-            raise HTTPException(status_code=400, detail="role must be 'admin' or 'customer'")
-        member.role = body.role
+        role = _resolve_role(db, body.role)
+        member.role_id = role.role_id
+        role_name = role.name
     if body.is_active is not None:
         member.is_active = body.is_active
 
     db.commit()
     db.refresh(member)
-    return {"data": MemberResponse.model_validate(member)}
+
+    if role_name is None:
+        role_name = db.query(Role).filter_by(role_id=member.role_id).first().name
+
+    return {"data": _to_response(member, role_name)}
 
 
 @router.delete("/{group_id}/members/{wechat_openid}")

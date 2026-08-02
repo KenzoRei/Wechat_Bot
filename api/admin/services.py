@@ -3,10 +3,14 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from middleware.admin_auth import verify_admin_key
-from models.group import GroupConfig, GroupService
+from models.group import GroupConfig, GroupService, GroupServiceRole
 from models.service import ServiceType
 from models.workflow import Workflow
-from api.schemas import GroupServiceCreate, GroupServiceResponse
+from models.role import Role
+from api.schemas import (
+    GroupServiceCreate, GroupServiceResponse,
+    GroupServiceRoleGrant, GroupServiceRoleResponse,
+)
 
 router = APIRouter(prefix="/admin/groups", dependencies=[Depends(verify_admin_key)])
 
@@ -103,3 +107,86 @@ def remove_service(group_id: str, service_type_id: str, db: Session = Depends(ge
     db.delete(gs)
     db.commit()
     return {"data": {"message": "service removed from group"}}
+
+
+# ── Service permission grants (deny-by-default) ────────────────────────────────
+# A (group_id, service_type_id) is invisible to a role unless a matching row
+# exists here. See docs/data-model.md "Role-Based Service Permissions".
+
+@router.post("/{group_id}/services/{service_type_id}/roles", status_code=201)
+def grant_role(
+    group_id: str, service_type_id: str, body: GroupServiceRoleGrant,
+    db: Session = Depends(get_db)
+):
+    gs = db.query(GroupService).filter_by(
+        group_id=group_id, service_type_id=service_type_id
+    ).first()
+    if not gs:
+        raise HTTPException(status_code=404, detail="Service not assigned to this group")
+
+    role = db.query(Role).filter_by(name=body.role).first()
+    if not role:
+        raise HTTPException(status_code=400, detail=f"Unknown role: '{body.role}'. See GET /admin/roles")
+
+    existing = db.query(GroupServiceRole).filter_by(
+        group_id=group_id, service_type_id=service_type_id, role_id=role.role_id
+    ).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Role already granted access to this service")
+
+    grant = GroupServiceRole(
+        group_id=group_id,
+        service_type_id=service_type_id,
+        role_id=role.role_id,
+        created_by=body.created_by,
+    )
+    db.add(grant)
+    db.commit()
+
+    return {"data": GroupServiceRoleResponse(
+        group_id=grant.group_id,
+        service_type_id=grant.service_type_id,
+        role=role.name,
+        created_by=grant.created_by,
+        created_at=grant.created_at,
+    )}
+
+
+@router.get("/{group_id}/services/{service_type_id}/roles")
+def list_role_grants(group_id: str, service_type_id: str, db: Session = Depends(get_db)):
+    rows = (
+        db.query(GroupServiceRole, Role)
+        .join(Role, GroupServiceRole.role_id == Role.role_id)
+        .filter(
+            GroupServiceRole.group_id == group_id,
+            GroupServiceRole.service_type_id == service_type_id,
+        )
+        .all()
+    )
+    return {"data": [
+        GroupServiceRoleResponse(
+            group_id=g.group_id,
+            service_type_id=g.service_type_id,
+            role=r.name,
+            created_by=g.created_by,
+            created_at=g.created_at,
+        )
+        for g, r in rows
+    ]}
+
+
+@router.delete("/{group_id}/services/{service_type_id}/roles/{role_name}")
+def revoke_role(group_id: str, service_type_id: str, role_name: str, db: Session = Depends(get_db)):
+    role = db.query(Role).filter_by(name=role_name).first()
+    if not role:
+        raise HTTPException(status_code=400, detail=f"Unknown role: '{role_name}'")
+
+    grant = db.query(GroupServiceRole).filter_by(
+        group_id=group_id, service_type_id=service_type_id, role_id=role.role_id
+    ).first()
+    if not grant:
+        raise HTTPException(status_code=404, detail="Role does not have access to this service")
+
+    db.delete(grant)
+    db.commit()
+    return {"data": {"message": "role access revoked"}}
