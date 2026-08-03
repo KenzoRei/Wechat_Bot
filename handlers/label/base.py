@@ -57,5 +57,5 @@ class YDDLabelBaseHandler(BaseHandler):
         result = create_label(carrier=carrier, fields=api_fields, api_key=api_key)
 
         # result contains tracking_number and label_url
-        # stored in context["result"] for downstream steps (oms_record, reply_wechat)
+        # stored in context["result"] for downstream steps (oms_create_workorder, reply_wechat)
         return result

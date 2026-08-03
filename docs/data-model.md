@@ -1,8 +1,8 @@
 # Data Model
 # Logistics WeChat Bot Platform — v1
 
-**Version:** 1.0
-**Date:** 2026-04-26
+**Version:** 2.0 — consolidated on rebuild
+**Date:** 2026-08-03
 **Status:** Finalized
 
 ---
@@ -152,7 +152,7 @@ erDiagram
 | Decision | Detail |
 |---|---|
 | `workflow_id` lives in `group_service` | Same service type can run different workflows per group — e.g. Group A: FedEx + OMS, Group B: FedEx only |
-| `daily_request_limit` in `group_config` | Per-group daily request cap. NULL = unlimited. Checked in Access Control before passing to Claude. V2 will enforce it; column added now to avoid a migration later. |
+| `daily_request_limit` in `group_config` | Per-group daily request cap. NULL = unlimited. **Column exists but is not yet enforced anywhere in code** — reserved for future use, added now to avoid a migration later. |
 | No separate `user` table | `wechat_openid` used directly as user identifier — stable, permanent, no sync issues |
 | `display_name` in `group_member` | User names stored per-group membership, not globally |
 | Bot ignores non-members silently | Only users in `group_member` get any response |
@@ -201,7 +201,7 @@ Who can talk to the bot in a given group, and what role they hold there. Composi
 `ON DELETE RESTRICT` on `role_id` is deliberate: a role can't be deleted from the `role` table while any `group_member` still holds it — forces an explicit reassignment first, rather than silently orphaning members.
 
 ### `role`
-Catalog of role names. Introduced in V7 to replace the hardcoded `VALID_ROLES = {"admin", "customer"}` set that previously lived in `api/admin/members.py` — new roles (e.g. `"warehouseman"`, `"accountant"` for U-Choice) are now added via `POST /admin/roles`, no redeploy required.
+Catalog of role names. Roles are added via `POST /admin/roles` — no redeploy required, unlike the hardcoded Python set this replaced during design.
 
 | Column | Type | Null? | Default | Purpose |
 |---|---|---|---|---|
@@ -221,7 +221,7 @@ Which services a group can use, which workflow runs for each, and the credential
 | `config` | JSONB | NOT NULL | `'{}'` | **Per-group API credentials, in plaintext** — `ydd_api_key`, `oms_app_secret`, warehouse codes, etc. Validated against `service_type.group_config_schema.required` on write (`POST /admin/groups/{id}/services`). Merged with `workflow_step.config` at runtime and passed into each handler. See Security Notes below — this column is not encrypted |
 
 ### `group_service_role`
-**Deny-by-default permission grant**, introduced in V7. A `(group_id, service_type_id)` pair assigned via `group_service` is invisible to a role unless a matching row exists here — no exceptions, no implicit admin bypass at the query level (admin access works because every existing `group_service` row is explicitly granted to the `admin` role at migration time, not because of any special-casing in code).
+**Deny-by-default permission grant.** A `(group_id, service_type_id)` pair assigned via `group_service` is invisible to a role unless a matching row exists here — no exceptions, no implicit admin bypass at the query level. When onboarding a new group, remember to grant `admin` (and any other needed role) access to each service right after assigning it via `group_service`, or that service will be invisible to everyone.
 
 | Column | Type | Null? | Default | Purpose |
 |---|---|---|---|---|
@@ -325,17 +325,13 @@ The permanent audit trail. **Only created once a request reaches `all_fields_col
 
 | File | Purpose | Run order |
 |---|---|---|
-| `db/migrations/V1__initial_schema.sql` | Creates all tables, indexes, constraints | 1st |
-| `db/migrations/V2__seed_data.sql` | Inserts service types, workflows, workflow steps | 2nd |
-| `db/migrations/V4__update_schema_and_group_context.sql` | Updates input_schema (shipper fields, optional service_level, country); adds `context` column to `group_config`; sets LAX/DE presets for test group | 3rd |
-| `db/migrations/V5__update_ydd_credentials_hint.sql` | Updates YiDiDa field hints; sets real test-group YiDiDa credentials | 4th |
-| `db/migrations/V6__oms_service_type.sql` | Adds `fedex_oms_label` service type, `fedex_workorder` workflow + steps, updates test group service assignments with OMS credentials | 5th |
-| `db/migrations/V7__role_permission_model.sql` | Adds `role` table (replaces hardcoded `VALID_ROLES`), migrates `group_member.role` → `role_id` FK, adds `group_service_role` (deny-by-default service permission grants), backfills admin-role access to every existing `group_service` row | 6th |
+| `db/migrations/V1__initial_schema.sql` | Creates all 10 tables, indexes, constraints — the schema exactly as it exists today | 1st |
+| `db/migrations/V2__seed_catalog.sql` | Seeds `role` (`admin`, `customer`), `service_type` (`fedex_label`, `ups_label`), `workflow`/`workflow_step` (`fedex_workorder`, `ups_only`) — the global catalog only, no group-specific data | 2nd |
 
-Note: V3 was deleted during development (superseded by V4) — there is no `V3__*.sql` file, this is expected.
+**Consolidated 2026-08-03.** The original history (V1 → V7, built incrementally through Phase 6 testing) accumulated real churn worth knowing about if you ever need to reconstruct it from git: a duplicate `V4__*.sql` filename from a dead-end column-add attempt, an `input_schema` that was seeded wrong in V2 and rewritten in V4, a two-service `fedex_label`/`fedex_oms_label` split later merged into one service with `oms_outbound_order_no` as an optional field, and a `group_member.role` string column migrated to a `role_id` FK via an add-column/backfill/drop-column dance (only necessary because it ran against live data). None of that history carries forward — this file represents the current design, seeded fresh.
 
-On Render, V6 and V7 were applied via idempotent admin endpoints (`api/admin/seed_v6.py`, `api/admin/migrate_v7.py`) rather than a raw `psql` run, since the Render DB isn't directly reachable from a local shell without the external connection string. Both use conflict-safe / existence-checked logic so they're safe to re-run.
+Group-specific setup (registering a group, adding members with roles, assigning services with credentials, granting service-role permissions) is **not** in any migration file — it's done live via the Admin API onboarding flow. See `docs/ops/admin-api-reference.md` → "Typical Onboarding Flow".
 
 **Adding new service types or workflows in future versions:**
-Create a new numbered file — `V8__add_rate_quote.sql`, `V9__add_warehouse_in.sql`, etc.
+Create a new numbered file — `V3__add_rate_quote.sql`, `V4__add_warehouse_in.sql`, etc.
 Never edit existing migration files after deployment.

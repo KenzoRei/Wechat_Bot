@@ -1,26 +1,35 @@
 \encoding UTF8
 -- ============================================================
--- V2: Seed Data — Service Types, Workflows, Workflow Steps
+-- V2: Seed Catalog — Roles, Service Types, Workflows, Workflow Steps
 -- Logistics WeChat Bot Platform
--- Date: 2026-04-26
+-- Date: 2026-08-03
 --
--- Rules:
---   1. Never edit this file after deployment — add V3, V4... for changes
---   2. Every step_type here must have a matching handler in the handler registry
---   3. workflow_id values are hardcoded UUIDs so workflow_step can reference them
+-- Global, group-agnostic catalog only. Group-specific setup (groups,
+-- members, credentials, service-role grants) is done live via the Admin
+-- API onboarding flow — see docs/ops/admin-api-reference.md.
+--
+-- fedex_label and fedex_oms_label from the old design are merged here:
+-- oms_outbound_order_no is now an OPTIONAL field on a single fedex_label
+-- service. OMSCreateWorkorderHandler already branches on its presence —
+-- creates a plain work order if absent, a linked one if present.
 -- ============================================================
 
 
+-- ── Roles ─────────────────────────────────────────────────────────────────────
+
+INSERT INTO role (name, description) VALUES
+    ('admin',    'Full access to group services and admin-level actions'),
+    ('customer', 'Standard requester — access limited to explicitly granted services');
+
+
 -- ── Service Types ─────────────────────────────────────────────────────────────
--- input_schema tells Claude exactly which fields to collect for each service.
--- "required" fields must all be present before Claude triggers confirmation.
 
 INSERT INTO service_type (service_type_id, name, description, input_schema, group_config_schema, confirmation_note) VALUES
 
 (
     'a1b2c3d4-0001-0000-0000-000000000001',
     'fedex_label',
-    'FedEx shipping label creation via YiDiDa',
+    'FedEx shipping label creation via YiDiDa, with optional OMS outbound order linkage',
     '{
         "required": [
             "shipper_name",
@@ -38,6 +47,7 @@ INSERT INTO service_type (service_type_id, name, description, input_schema, grou
             "weight_lbs"
         ],
         "optional": [
+            "oms_outbound_order_no",
             "service_level",
             "shipper_corp_name",
             "shipper_country",
@@ -49,10 +59,11 @@ INSERT INTO service_type (service_type_id, name, description, input_schema, grou
             "reference_number"
         ],
         "field_hints": {
-            "service_level": "e.g. PRIORITY_OVERNIGHT, STANDARD_OVERNIGHT, FEDEX_GROUND, default is FEDEX_GROUND",
-            "shipper_country": "default is US",
-            "recipient_country": "default is US",
-            "weight_lbs":    "numeric value in pounds",
+            "oms_outbound_order_no": "OMS outbound order number (e.g. OBS0162604110RV) — only collect if the customer volunteers it, never ask proactively. Links the created label to their existing OMS order.",
+            "service_level":    "e.g. PRIORITY_OVERNIGHT, STANDARD_OVERNIGHT, FEDEX_GROUND, default is FEDEX_GROUND",
+            "shipper_country":  "default is US",
+            "recipient_country":"default is US",
+            "weight_lbs":       "numeric value in pounds",
             "reference_number": "Optional field that appears on the label for your reference (e.g. order number, customer name)"
         }
     }',
@@ -60,21 +71,25 @@ INSERT INTO service_type (service_type_id, name, description, input_schema, grou
         "required": [
             "ydd_api_key",
             "ydd_cust_id",
-            "ydd_channel_id"
+            "ydd_channel_id",
+            "oms_app_key",
+            "oms_app_secret",
+            "oms_wh_code"
         ],
         "optional": [
-            "ydd_account_code",
-            "oms_api_key"
+            "ydd_account_code"
         ],
         "field_hints": {
             "ydd_api_key":      "YiDiDa API key for this customer group",
             "ydd_cust_id":      "YiDiDa customer ID, provided during YiDiDa onboarding",
             "ydd_channel_id":   "YiDiDa channel ID for this shipper account",
             "ydd_account_code": "Optional billing account code",
-            "oms_api_key":      "OMS API key for this customer group (required if workflow includes oms_record step)"
+            "oms_app_key":      "OMS App_Key from xlwms admin portal",
+            "oms_app_secret":   "OMS App_Secret from xlwms admin portal",
+            "oms_wh_code":      "OMS warehouse code fallback (e.g. DE19713), used if the outbound order query returns none"
         }
     }',
-    'Label will be generated automatically. Shipping cost will be charged to the company account. Contact admin immediately if changes are needed.'
+    'Label will be generated automatically and an OMS work order created. Shipping cost will be charged to the company account. Contact admin immediately if changes are needed.'
 ),
 
 (
@@ -123,15 +138,13 @@ INSERT INTO service_type (service_type_id, name, description, input_schema, grou
             "ydd_channel_id"
         ],
         "optional": [
-            "ydd_account_code",
-            "oms_api_key"
+            "ydd_account_code"
         ],
         "field_hints": {
             "ydd_api_key":      "YiDiDa API key for this customer group",
             "ydd_cust_id":      "YiDiDa customer ID, provided during YiDiDa onboarding",
             "ydd_channel_id":   "YiDiDa channel ID for this shipper account",
-            "ydd_account_code": "Optional billing account code",
-            "oms_api_key":      "OMS API key for this customer group (required if workflow includes oms_record step)"
+            "ydd_account_code": "Optional billing account code"
         }
     }',
     'Label will be generated automatically. Shipping cost will be charged to the company account. Contact admin immediately if changes are needed.'
@@ -139,71 +152,35 @@ INSERT INTO service_type (service_type_id, name, description, input_schema, grou
 
 
 -- ── Workflows ─────────────────────────────────────────────────────────────────
--- Each workflow is a named sequence of steps.
--- Groups pick which workflow applies to them in group_service.workflow_id.
--- Note: UUIDs must use only hex characters (0-9, a-f).
 
 INSERT INTO workflow (workflow_id, name, description) VALUES
 
--- FedEx workflows
-('af000001-0000-0000-0000-000000000001', 'fedex_with_oms',
-    'Create FedEx label via YiDiDa, record in OMS, reply to WeChat'),
-
-('af000001-0000-0000-0000-000000000002', 'fedex_only',
-    'Create FedEx label via YiDiDa, reply to WeChat — no OMS record'),
-
--- UPS workflows
-('af000001-0000-0000-0000-000000000003', 'ups_with_oms',
-    'Create UPS label via YiDiDa, record in OMS, reply to WeChat'),
+('af000001-0000-0000-0000-000000000005', 'fedex_workorder',
+    'Create FedEx label via YiDiDa, create OMS work order (linked if OMS order no. provided), reply to WeChat'),
 
 ('af000001-0000-0000-0000-000000000004', 'ups_only',
-    'Create UPS label via YiDiDa, reply to WeChat — no OMS record');
+    'Create UPS label via YiDiDa, reply to WeChat — no OMS work order');
 
 
 -- ── Workflow Steps ────────────────────────────────────────────────────────────
--- step_type must exactly match a key in the handler registry.
--- config is passed directly to the handler's handle(context, config) method.
--- reply_wechat is always the last step in every workflow.
 
 INSERT INTO workflow_step (workflow_id, step_order, step_type, config) VALUES
 
--- fedex_with_oms (3 steps)
-('af000001-0000-0000-0000-000000000001', 1, 'create_fedex_label',
-    '{"carrier": "fedex"}'),
-('af000001-0000-0000-0000-000000000001', 2, 'oms_record',
-    '{"record_type": "outbound"}'),
-('af000001-0000-0000-0000-000000000001', 3, 'reply_wechat',
-    '{}'),
-
--- fedex_only (2 steps)
-('af000001-0000-0000-0000-000000000002', 1, 'create_fedex_label',
-    '{"carrier": "fedex"}'),
-('af000001-0000-0000-0000-000000000002', 2, 'reply_wechat',
-    '{}'),
-
--- ups_with_oms (3 steps)
-('af000001-0000-0000-0000-000000000003', 1, 'create_ups_label',
-    '{"carrier": "ups"}'),
-('af000001-0000-0000-0000-000000000003', 2, 'oms_record',
-    '{"record_type": "outbound"}'),
-('af000001-0000-0000-0000-000000000003', 3, 'reply_wechat',
-    '{}'),
+-- fedex_workorder (3 steps)
+('af000001-0000-0000-0000-000000000005', 1, 'create_fedex_label',   '{"carrier": "fedex"}'),
+('af000001-0000-0000-0000-000000000005', 2, 'oms_create_workorder', '{}'),
+('af000001-0000-0000-0000-000000000005', 3, 'reply_wechat',         '{}'),
 
 -- ups_only (2 steps)
-('af000001-0000-0000-0000-000000000004', 1, 'create_ups_label',
-    '{"carrier": "ups"}'),
-('af000001-0000-0000-0000-000000000004', 2, 'reply_wechat',
-    '{}');
+('af000001-0000-0000-0000-000000000004', 1, 'create_ups_label', '{"carrier": "ups"}'),
+('af000001-0000-0000-0000-000000000004', 2, 'reply_wechat',     '{}');
 
 
 -- ── Handler Registry Reference ────────────────────────────────────────────────
--- Every step_type used above must be registered here in code.
--- If a step_type is added here without a matching handler, the workflow engine crashes.
---
 -- step_type             → handler class
 -- ─────────────────────────────────────
 -- create_fedex_label    → FedExLabelHandler
 -- create_ups_label      → UPSLabelHandler
--- oms_record            → OMSRecordHandler
+-- oms_create_workorder  → OMSCreateWorkorderHandler
 -- reply_wechat          → ReplyWeChatHandler
 -- ============================================================

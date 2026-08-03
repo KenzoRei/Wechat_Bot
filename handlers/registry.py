@@ -1,6 +1,5 @@
 from handlers.label.fedex import FedExLabelHandler
 from handlers.label.ups import UPSLabelHandler
-from handlers.oms_record import OMSRecordHandler
 from handlers.oms_create_workorder import OMSCreateWorkorderHandler
 from handlers.reply_wechat import ReplyWeChatHandler
 
@@ -9,9 +8,8 @@ from handlers.reply_wechat import ReplyWeChatHandler
 # If a step_type is missing, workflow_engine raises RuntimeError at runtime.
 
 HANDLER_REGISTRY: dict[str, type] = {
-    "create_fedex_label":  FedExLabelHandler,
-    "create_ups_label":    UPSLabelHandler,
-    "oms_record":          OMSRecordHandler,          # legacy no-op
-    "oms_create_workorder": OMSCreateWorkorderHandler, # V6+
-    "reply_wechat":        ReplyWeChatHandler,
+    "create_fedex_label":   FedExLabelHandler,
+    "create_ups_label":     UPSLabelHandler,
+    "oms_create_workorder": OMSCreateWorkorderHandler,
+    "reply_wechat":         ReplyWeChatHandler,
 }
