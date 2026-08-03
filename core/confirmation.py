@@ -18,10 +18,14 @@ def build_confirmation_message(
         and k != "oms_outbound_order_no"
     }
 
+    service_display = _service_display_name(service_type_name)
+    if oms_order_no:
+        service_display += "（关联OMS出库单）"
+
     lines = [
         "**请确认以下寄件信息**",
         f"申请编号：{serial_number}",
-        f"服务类型：{_service_display_name(service_type_name)}",
+        f"服务类型：{service_display}",
     ]
 
     if oms_order_no:
@@ -52,9 +56,8 @@ def build_confirmation_message(
 
 def _service_display_name(service_type_name: str) -> str:
     _map = {
-        "fedex_label":     "FedEx 快递标签",
-        "fedex_oms_label": "FedEx 快递标签（关联OMS出库单）",
-        "ups_label":       "UPS 快递标签",
+        "fedex_label": "FedEx 快递标签",
+        "ups_label":   "UPS 快递标签",
     }
     return _map.get(service_type_name, service_type_name)
 

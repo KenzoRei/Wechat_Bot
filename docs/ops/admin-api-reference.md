@@ -33,6 +33,25 @@ Returns all workflows with their ordered steps (`step_order`, `step_type`). Use 
 
 ---
 
+## Roles
+
+### List all roles
+```powershell
+Invoke-RestMethod "$base/admin/roles" -Headers $h | ConvertTo-Json -Depth 3
+```
+
+### Create a new role
+```powershell
+Invoke-RestMethod "$base/admin/roles" -Method POST -Headers $h `
+  -ContentType "application/json" `
+  -Body '{"name": "warehouseman", "description": "Confirms inbound/outbound completion"}'
+```
+No redeploy needed — new role names become usable immediately in `POST /admin/groups/{id}/members` and the service-permission grant endpoints below.
+
+Seeded by default: `admin`, `customer`.
+
+---
+
 ## Groups
 
 ### Create group
@@ -110,7 +129,7 @@ Invoke-RestMethod "$base/admin/groups/{group_id}/members" -Method POST -Headers 
 | Field | Required | Notes |
 |---|---|---|
 | `wechat_openid` | ✅ | WeChat user ID (the `from` field in webhook messages) |
-| `role` | ✅ | `"admin"` or `"customer"` |
+| `role` | ✅ | Role name — must exist in the `role` table. See "Roles" section below to list/add roles |
 | `display_name` | — | Name shown in bot replies and request logs |
 
 ### List members
@@ -158,12 +177,13 @@ Invoke-RestMethod "$base/admin/groups/{group_id}/services" -Method POST -Headers
 | Service | service_type_id | Workflow | workflow_id |
 |---|---|---|---|
 | `fedex_label` | `a1b2c3d4-0001-0000-0000-000000000001` | `fedex_workorder` | `af000001-0000-0000-0000-000000000005` |
-| `ups_label` | `a1b2c3d4-0002-0000-0000-000000000002` | *(no OMS workflow yet)* | — |
-| `fedex_oms_label` | `a1b2c3d4-0003-0000-0000-000000000003` | `fedex_workorder` | `af000001-0000-0000-0000-000000000005` |
+| `ups_label` | `a1b2c3d4-0002-0000-0000-000000000002` | `ups_only` | `af000001-0000-0000-0000-000000000004` |
+
+`fedex_label` handles both plain labels and OMS-linked labels — `oms_outbound_order_no` is an **optional** input field. If the customer provides it, the created label's OMS work order is linked to that outbound order; if not, a plain (unlinked) work order is still created. There is no separate "OMS" service to choose between.
 
 ### Config keys by service type
 
-**fedex_label** and **fedex_oms_label** (both use `fedex_workorder`):
+**fedex_label** (`fedex_workorder` workflow):
 | Key | Required | Description |
 |---|---|---|
 | `ydd_cust_id` | ✅ | YiDiDa login username |
@@ -171,7 +191,15 @@ Invoke-RestMethod "$base/admin/groups/{group_id}/services" -Method POST -Headers
 | `ydd_channel_id` | ✅ | YiDiDa channel name (e.g. `Fedex home delivery 洛杉矶渠道`) |
 | `oms_app_key` | ✅ | OMS App_Key from xlwms portal |
 | `oms_app_secret` | ✅ | OMS App_Secret from xlwms portal |
-| `oms_wh_code` | ✅ | OMS warehouse code fallback (e.g. `DE19713`) |
+| `oms_wh_code` | ✅ | OMS warehouse code fallback (e.g. `DE19713`) — used if the outbound order query returns none |
+| `ydd_account_code` | — | Optional YiDiDa billing account code |
+
+**ups_label** (`ups_only` workflow — no OMS step):
+| Key | Required | Description |
+|---|---|---|
+| `ydd_cust_id` | ✅ | YiDiDa login username |
+| `ydd_api_key` | ✅ | YiDiDa login password |
+| `ydd_channel_id` | ✅ | YiDiDa channel name |
 | `ydd_account_code` | — | Optional YiDiDa billing account code |
 
 ### List services for group
@@ -183,6 +211,30 @@ Returns service name, workflow name, and full config for each assigned service.
 ### Remove service from group
 ```powershell
 Invoke-RestMethod "$base/admin/groups/{group_id}/services/{service_type_id}" -Method DELETE -Headers $h
+```
+
+---
+
+## Service Permission Grants (role gating)
+
+**Deny by default:** a service assigned to a group via `POST /admin/groups/{id}/services` is invisible to every role until explicitly granted. Do this right after assigning the service, or nobody — including admins — will see it.
+
+### Grant a role access to a service
+```powershell
+Invoke-RestMethod "$base/admin/groups/{group_id}/services/{service_type_id}/roles" -Method POST -Headers $h `
+  -ContentType "application/json" `
+  -Body '{"role": "admin", "created_by": "kenzo"}'
+```
+`created_by` is manually supplied for now — there's no per-admin identity yet, just the one shared `X-Admin-Key`.
+
+### List grants for a service
+```powershell
+Invoke-RestMethod "$base/admin/groups/{group_id}/services/{service_type_id}/roles" -Headers $h | ConvertTo-Json -Depth 3
+```
+
+### Revoke a role's access
+```powershell
+Invoke-RestMethod "$base/admin/groups/{group_id}/services/{service_type_id}/roles/{role_name}" -Method DELETE -Headers $h
 ```
 
 ---
@@ -241,26 +293,18 @@ Returns the FedEx/UPS label as a PDF download.
 
 ---
 
-## One-time Migration
-
-### Seed V6 OMS data
-Idempotent — safe to call multiple times.
-```powershell
-Invoke-RestMethod "$base/admin/seed-v6" -Method POST -Headers $h | ConvertTo-Json -Depth 3
-```
-Inserts/updates: `fedex_oms_label` service type, `fedex_workorder` workflow + steps, test group service assignments with OMS credentials.
-
----
-
 ## Typical Onboarding Flow (New Customer Group)
 
 ```
-1. GET  /admin/service-types          → note service_type_id values
-2. GET  /admin/workflows              → note workflow_id values
-3. POST /admin/groups                 → register the WeChat group → save group_id
-4. POST /admin/groups/{id}/members    → add each customer (role: customer)
-5. POST /admin/groups/{id}/members    → add yourself (role: admin)
-6. POST /admin/groups/{id}/services   → assign service with credentials
+1. GET   /admin/service-types                              → note service_type_id values
+2. GET   /admin/workflows                                  → note workflow_id values
+3. GET   /admin/roles                                      → note role names (add one if needed)
+4. POST  /admin/groups                                     → register the WeChat group → save group_id
+5. POST  /admin/groups/{id}/members                        → add each customer (role: customer)
+6. POST  /admin/groups/{id}/members                        → add yourself (role: admin)
+7. POST  /admin/groups/{id}/services                       → assign service with credentials
    (repeat for each service the group needs)
-7. PATCH /admin/groups/{id}           → set context (location presets)
+8. POST  /admin/groups/{id}/services/{service_type_id}/roles → grant roles access to each service
+   (deny-by-default — a service is invisible to everyone until granted; repeat per role per service)
+9. PATCH /admin/groups/{id}                                 → set context (location presets)
 ```

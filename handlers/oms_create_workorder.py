@@ -8,15 +8,14 @@ logger = logging.getLogger(__name__)
 class OMSCreateWorkorderHandler(BaseHandler):
     """
     Creates an OMS work order after a FedEx label has been generated.
-    Used by BOTH fedex_label and fedex_oms_label services.
+    oms_outbound_order_no is an optional field on fedex_label — this handler
+    branches on whether the customer provided it.
 
-    Behaviour depends on whether oms_outbound_order_no was collected:
-
-    Case A — no OMS order number (fedex_label service):
+    Case A — no OMS order number:
         Creates a plain work order with no association.
         thirdNo = serial_number (bot's own reference)
 
-    Case B — OMS order number provided (fedex_oms_label service):
+    Case B — OMS order number provided:
         Queries the OMS outbound order to get its whCode.
         Creates a work order with associatedTrackingNoType=2 and
         associatedTrackingNo=oms_outbound_order_no, linking the two records.
