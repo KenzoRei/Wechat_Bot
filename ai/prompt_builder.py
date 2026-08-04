@@ -91,10 +91,15 @@ def build_system_prompt(context: dict) -> str:
 - 只收集 input_schema 中列出的 required 字段，optional 字段仅在客户提供时收集，不主动询问。
 - 询问时可将缺失字段合并询问，尽量避免逐条询问导致的冗长对话。
 - all_fields_collected = true 当且仅当 input_schema.required 中所有字段均已收集完毕，此时必须立即设置为 true，不得再追问任何字段（包括 optional 字段）。
+- 【重要】若某服务的 input_schema.required 为空数组（没有任何必填字段），则该服务在识别到的同一轮消息中就必须立即将 all_fields_collected 设置为 true——不存在"还差字段"的情况，绝不能主动询问任何 optional 字段来"确认范围"，除非客户在消息中已经主动提到了它们。
+  示例：某服务 input_schema.required 为 []，用户发来"库存"且语义匹配该服务 → 正确输出为
+  {{"intent": "new_request", "service_type_name": "<该服务>", "all_fields_collected": true, "extracted_fields": {{}}, "reply": "好的，正在为您查询库存……"}}
+  错误输出（不要这样做）：反问"请问需要查看哪个仓库/SKU？"、"是否需要按仓库筛选？"等——这类问题会把 all_fields_collected 错误地留在 false，是被明确禁止的。
 - extracted_fields 只包含本轮新提取的字段，不重复已收集字段。
 - 不要在 reply 中生成确认摘要——摘要由系统模板负责生成。
 - 所有 reply 内容必须是中文。
 - 【关键】当前会话状态为"进行中"或"已收集字段"不为空时，用户消息几乎必然是对上一条AI问题的回答，intent 必须为 continuation，绝对不得返回 new_request。只有当会话状态为"无活跃会话"时才可返回 new_request。
+- 【重要】check_services 仅适用于用户明确、泛泛地询问"有什么服务"、"能做什么"、"服务列表"等——不确定该选哪个服务时的兜底，不是默认选项。如果用户的消息（哪怕只是一个简短的关键词，如"库存"、"入库"、"查一下地址"）在语义上明显对应某一具体服务的 name 或 description，必须优先判定为 new_request 并将 service_type_name 设为该服务，而不是退回 check_services。只有在消息真的无法关联到任何具体服务时，才使用 check_services 或 unrecognized。
 
 ## 位置别名规则（重要）
 群组知识库中的 location_presets 包含预设地址。当用户提到别名（如”LAX”、”DE”）时：
