@@ -28,7 +28,7 @@ class OMSCreateWorkorderHandler(BaseHandler):
                           used as fallback in Case B if query returns none)
     """
 
-    def handle(self, context: dict, config: dict) -> dict:
+    def handle(self, context: dict, config: dict, db=None) -> dict:
         fields          = context.get("collected_fields", {})
         result          = context.get("result", {})
 

@@ -16,4 +16,6 @@ class ServiceType(Base):
     group_config_schema: Mapped[dict]       = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     confirmation_note:   Mapped[str | None] = mapped_column(Text)
     is_active:           Mapped[bool]       = mapped_column(Boolean, nullable=False, default=True)
+    requires_confirmation:    Mapped[bool]  = mapped_column(Boolean, nullable=False, default=True)
+    targets_existing_request: Mapped[bool]  = mapped_column(Boolean, nullable=False, default=False)
     created_at:          Mapped[datetime]   = mapped_column(DateTime(timezone=True), server_default=text("now()"))

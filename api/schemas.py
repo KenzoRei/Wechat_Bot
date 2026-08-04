@@ -18,46 +18,51 @@ class GroupCreate(BaseModel):
 
 
 class GroupUpdate(BaseModel):
-    description:         str | None = None
-    is_active:           bool | None = None
-    daily_request_limit: int | None = None
-    context:             dict | None = None   # pass null to clear, omit to leave unchanged
+    description:             str | None = None
+    is_active:               bool | None = None
+    daily_request_limit:     int | None = None
+    context:                 dict | None = None   # pass null to clear, omit to leave unchanged
+    group_robot_webhook_url: str | None = None     # pass null to clear, omit to leave unchanged
 
 
 class GroupResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    group_id:            UUID
-    wechat_group_id:     str
-    description:         str | None
-    is_active:           bool
-    daily_request_limit: int | None
-    context:             dict | None
-    created_at:          datetime
+    group_id:                UUID
+    wechat_group_id:         str
+    description:              str | None
+    is_active:                bool
+    daily_request_limit:      int | None
+    context:                  dict | None
+    group_robot_webhook_url:  str | None
+    created_at:                datetime
 
 
 # ── Members ───────────────────────────────────────────────────────────────────
 
 class MemberCreate(BaseModel):
-    wechat_openid: str
-    role:          str
-    display_name:  str | None = None
+    wechat_openid:  str
+    role:           str
+    display_name:   str | None = None
+    warehouse_code: str | None = None   # required if role == "warehouseman", enforced in the route
 
 
 class MemberUpdate(BaseModel):
-    role:      str | None  = None
-    is_active: bool | None = None
+    role:           str | None = None
+    is_active:      bool | None = None
+    warehouse_code: str | None = None   # required if role becomes "warehouseman", enforced in the route
 
 
 class MemberResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    wechat_openid: str
-    group_id:      UUID
-    role:          str
-    display_name:  str | None
-    is_active:     bool
-    joined_at:     datetime
+    wechat_openid:  str
+    group_id:       UUID
+    role:           str
+    display_name:   str | None
+    warehouse_code: str | None
+    is_active:      bool
+    joined_at:      datetime
 
 
 # ── Roles ─────────────────────────────────────────────────────────────────────

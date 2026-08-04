@@ -23,6 +23,7 @@ def _to_response(member: GroupMember, role_name: str) -> MemberResponse:
         group_id=member.group_id,
         role=role_name,
         display_name=member.display_name,
+        warehouse_code=member.warehouse_code,
         is_active=member.is_active,
         joined_at=member.joined_at,
     )
@@ -36,6 +37,9 @@ def add_member(group_id: str, body: MemberCreate, db: Session = Depends(get_db))
 
     role = _resolve_role(db, body.role)
 
+    if role.name == "warehouseman" and not body.warehouse_code:
+        raise HTTPException(status_code=400, detail="warehouse_code is required for role=warehouseman")
+
     existing = db.query(GroupMember).filter_by(
         wechat_openid=body.wechat_openid, group_id=group_id
     ).first()
@@ -47,6 +51,7 @@ def add_member(group_id: str, body: MemberCreate, db: Session = Depends(get_db))
         group_id=group_id,
         role_id=role.role_id,
         display_name=body.display_name,
+        warehouse_code=body.warehouse_code if role.name == "warehouseman" else None,
     )
     db.add(member)
     db.commit()
@@ -84,6 +89,21 @@ def update_member(
         role = _resolve_role(db, body.role)
         member.role_id = role.role_id
         role_name = role.name
+        if role.name == "warehouseman":
+            new_warehouse_code = body.warehouse_code if body.warehouse_code is not None else member.warehouse_code
+            if not new_warehouse_code:
+                raise HTTPException(status_code=400, detail="warehouse_code is required for role=warehouseman")
+            member.warehouse_code = new_warehouse_code
+        else:
+            # cleared automatically whenever a member's role changes away from warehouseman
+            member.warehouse_code = None
+    elif body.warehouse_code is not None:
+        # role unchanged this call — only meaningful if the member is already a warehouseman
+        current_role = db.query(Role).filter_by(role_id=member.role_id).first()
+        if not current_role or current_role.name != "warehouseman":
+            raise HTTPException(status_code=400, detail="warehouse_code only applies to role=warehouseman")
+        member.warehouse_code = body.warehouse_code
+
     if body.is_active is not None:
         member.is_active = body.is_active
 
