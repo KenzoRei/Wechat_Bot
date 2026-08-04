@@ -17,7 +17,7 @@ def build_system_prompt(context: dict) -> str:
 
     if not context.get("session_id"):
         session_status = "无活跃会话（等待新申请）"
-    elif context.get("awaiting_confirm"):
+    elif context.get("session_status") == "pending_confirmation":
         session_status = "待确认（已收集全部字段，等待用户确认）"
     else:
         session_status = "进行中（正在收集字段）"
@@ -28,8 +28,23 @@ def build_system_prompt(context: dict) -> str:
         if group_context else ""
     )
 
+    uchoice_candidates = context.get("uchoice_candidates") or {}
+    candidates_block = (
+        f"\n## 候选列表（用于模糊匹配，不是让你调用工具，只是预取的参考数据）\n"
+        f"{json.dumps(uchoice_candidates, ensure_ascii=False, indent=2)}\n"
+        "匹配规则：\n"
+        "- addresses：将用户描述的目的地与此列表匹配，提取 address_id 填入 destination_address_id。\n"
+        "- storage_buckets：outbound 申请中，若某条 sku_lines 缺少 boxes_per_pallet，从此列表中同一 sku_code+warehouse_code 下"
+        "选择 pallet_count 最大的 bucket 作为默认值填入，并在 reply 中明确告知用户这是自动选择的默认值。\n"
+        "- pending_inbound_requests / pending_outbound_requests：将用户提到的申请（或未提及时的唯一在途申请）与此列表匹配，"
+        "提取 serial_number 填入 reference_serial。0 条：告知用户当前没有待处理申请。多条且用户未指明：在 reply 中列出候选让用户选择，"
+        "不要自行猜测，也不要设置 all_fields_collected=true。\n"
+        "- members：将用户提到的人名与此列表的 display_name 匹配，提取 wechat_openid 填入 target_openid。\n"
+        if uchoice_candidates else ""
+    )
+
     return f"""你是一个中文物流助手机器人，运行在企业微信群里，帮助用户提交物流服务申请。
-{group_context_block}
+{group_context_block}{candidates_block}
 ## 当前用户信息
 - 姓名：{context["display_name"]}
 - 角色：{context["role"]}

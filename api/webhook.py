@@ -126,7 +126,7 @@ def _process_message(message: dict) -> None:
             return
 
         session = session_manager.resolve_session(db, result, message["content"])
-        context = session_manager.build_context(result, session, message)
+        context = session_manager.build_context(db, result, session, message)
 
         print("[pipeline] calling AI...", flush=True)
         ai_response = ai_chain.process(context)

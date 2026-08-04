@@ -33,7 +33,7 @@ class YDDLabelBaseHandler(BaseHandler):
         ydd_account_code — optional           (from group_service.config)
     """
 
-    def handle(self, context: dict, config: dict) -> dict:
+    def handle(self, context: dict, config: dict, db=None) -> dict:
         fields = context.get("collected_fields", {})
 
         carrier = config.get("carrier")

@@ -47,6 +47,8 @@ def update_group(group_id: str, body: GroupUpdate, db: Session = Depends(get_db)
         group.daily_request_limit = body.daily_request_limit
     if "context" in body.model_fields_set:   # explicit null clears it; omitting leaves unchanged
         group.context = body.context
+    if "group_robot_webhook_url" in body.model_fields_set:
+        group.group_robot_webhook_url = body.group_robot_webhook_url
 
     db.commit()
     db.refresh(group)

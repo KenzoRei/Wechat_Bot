@@ -4,6 +4,8 @@ from contextlib import asynccontextmanager
 
 from database import SessionLocal
 from jobs.session_expiry import run_expiry_check
+from jobs.uchoice_daily import run_uchoice_daily
+from jobs.uchoice_invoice import run_uchoice_invoice
 from api import health, webhook, labels
 from api.admin import groups, members, services, reference, logs, sessions, roles
 
@@ -18,8 +20,27 @@ def _run_expiry_job():
     finally:
         db.close()
 
+
+def _run_uchoice_daily_job():
+    db = SessionLocal()
+    try:
+        run_uchoice_daily(db)
+    finally:
+        db.close()
+
+
+def _run_uchoice_invoice_job():
+    db = SessionLocal()
+    try:
+        run_uchoice_invoice(db)
+    finally:
+        db.close()
+
+
 scheduler = BackgroundScheduler()
 scheduler.add_job(_run_expiry_job, "interval", minutes=5, id="session_expiry")
+scheduler.add_job(_run_uchoice_daily_job, "cron", hour=8, id="uchoice_daily")
+scheduler.add_job(_run_uchoice_invoice_job, "cron", day=1, hour=9, id="uchoice_invoice")
 
 
 # ── App lifecycle ─────────────────────────────────────────────────────────────

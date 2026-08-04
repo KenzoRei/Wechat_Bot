@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session as DBSession
 from models.session import ConversationSession
 from models.request_log import RequestLog
 from core.access_control import AccessResult
+from core import uchoice_context
 import config
 
 SERIAL_PATTERN = re.compile(r'REQ-\d{8}-\d{6}')
@@ -114,6 +115,7 @@ def close_session(
 
 
 def build_context(
+    db: DBSession,
     access: AccessResult,
     session: ConversationSession | None,
     message: dict
@@ -125,16 +127,23 @@ def build_context(
         "group_id":          str(access.group_id),
         "role":              access.role,
         "display_name":      access.display_name,
+        "warehouse_code":    access.warehouse_code,
         "allowed_services":  access.allowed_services,
         "group_context":     access.group_context,
         "group_description": access.group_description,
 
         # from session (None if not yet created)
         "session_id":           str(session.session_id) if session else None,
+        "session_status":       session.status if session else None,
         "serial_number":        None,
         "service_type_id":      str(session.service_type_id) if session and session.service_type_id else None,
         "conversation_history": session.conversation_history if session else [],
         "collected_fields":     session.collected_fields if session else {},
+
+        # candidate-list context injection (addresses, pending requests,
+        # storage buckets, member list) — scoped to whichever services this
+        # caller's role can actually trigger
+        "uchoice_candidates": _build_uchoice_candidates(db, access, session),
 
         # from webhook_receiver
         "content":      message["content"],
@@ -147,3 +156,40 @@ def build_context(
         "result":         None,
         "error_detail":   None,
     }
+
+
+def _build_uchoice_candidates(
+    db: DBSession,
+    access: AccessResult,
+    session: ConversationSession | None
+) -> dict:
+    """
+    Conditionally fetches candidate lists based on which service names this
+    caller's role can trigger — no point injecting the member list for a
+    customer who could never call role_change.
+    """
+    names = {s["name"] for s in access.allowed_services}
+    by_name = {s["name"]: s["service_type_id"] for s in access.allowed_services}
+    collected = session.collected_fields if session else {}
+    scope_warehouse = collected.get("warehouse_code") or access.warehouse_code
+
+    candidates: dict = {}
+
+    if "uchoice_outbound_request" in names:
+        candidates["addresses"] = uchoice_context.address_candidates(db)
+        candidates["storage_buckets"] = uchoice_context.storage_bucket_candidates(db, scope_warehouse)
+
+    if "confirm_inbound_completion" in names and "uchoice_inbound_request" in by_name:
+        candidates["pending_inbound_requests"] = uchoice_context.pending_request_candidates(
+            db, scope_warehouse, [by_name["uchoice_inbound_request"]]
+        )
+
+    if "confirm_outbound_completion" in names and "uchoice_outbound_request" in by_name:
+        candidates["pending_outbound_requests"] = uchoice_context.pending_request_candidates(
+            db, scope_warehouse, [by_name["uchoice_outbound_request"]]
+        )
+
+    if "role_change" in names:
+        candidates["members"] = uchoice_context.member_candidates(db, access.group_id)
+
+    return candidates

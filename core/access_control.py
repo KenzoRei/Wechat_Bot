@@ -13,6 +13,7 @@ class AccessResult:
     role:              str            # role name, e.g. "admin" — resolved from role_id
     role_id:           UUID
     display_name:      str | None
+    warehouse_code:    str | None     # set only for role=warehouseman
     allowed_services:  list[dict]
     group_context:     dict | None    # location presets, aliases — passed to AI
     group_description: str | None     # human label for the group — used in keHuDanHao
@@ -60,7 +61,11 @@ def check_access(
         return AccessDenied(
             reason="user_not_member",
             notify_user=True,
-            message="抱歉，您没有权限使用此服务。"
+            message=(
+                "抱歉，您没有权限使用此服务。\n"
+                f"您的用户ID：{wechat_openid}\n"
+                "请将此ID提供给管理员以添加权限。"
+            )
         )
 
     member, role = row
@@ -97,6 +102,8 @@ def check_access(
             "workflow_id":     str(gs.workflow_id),
             "input_schema":    st.input_schema,   # tells AI which fields to collect
             "group_config":    gs.config,          # API credentials — stripped before sending to AI
+            "requires_confirmation":    st.requires_confirmation,
+            "targets_existing_request": st.targets_existing_request,
         }
         for gs, st in rows
     ]
@@ -107,6 +114,7 @@ def check_access(
         role=role.name,
         role_id=member.role_id,
         display_name=member.display_name,
+        warehouse_code=member.warehouse_code,
         allowed_services=allowed_services,
         group_context=group.context,
         group_description=group.description,

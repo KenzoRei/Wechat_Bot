@@ -2,8 +2,8 @@ from uuid import UUID
 from sqlalchemy.orm import Session as DBSession
 
 from ai.base import AIResponse
-from core import session_manager, request_logger
-from core.confirmation import build_confirmation_message
+from core import session_manager, request_logger, pre_confirm_validators
+from core.confirmation import build_confirmation_message, build_display_name, build_sections
 from clients.wechat_client import send_message as _send_raw
 
 
@@ -90,48 +90,127 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
     # update context with new session id so downstream can use it
     context["session_id"] = str(session.session_id)
 
+    # Log every resolved request immediately, regardless of eventual outcome —
+    # EXCEPT for targets_existing_request services, which never own a log of
+    # their own; they update the log they end up referencing instead.
+    if not service.get("targets_existing_request", False):
+        log = request_logger.create_log(
+            db,
+            wechat_openid=context["wechat_openid"],
+            group_id=UUID(context["group_id"]),
+            service_type_id=UUID(service["service_type_id"]),
+            raw_message=context["content"],
+            wechat_msg_id=context["msg_id"]
+        )
+        session.request_log_id = log.log_id
+        context["serial_number"] = log.serial_number
+        db.commit()
+
     # save any extracted fields from the first message
     if ai_response.extracted_fields:
         session_manager.update_collected_fields(db, session, ai_response.extracted_fields)
 
     # Q3 fix: if AI already has all fields from the first message, go straight to confirmation
     if ai_response.all_fields_collected:
-        _trigger_confirmation(context, ai_response, session, db)
+        _on_all_fields_collected(context, ai_response, service, session, db)
     else:
         session_manager.add_message(db, session, "assistant", ai_response.reply)
         send_message(context, ai_response.reply)
 
 
-def _trigger_confirmation(context: dict, ai_response: AIResponse, session, db: DBSession) -> None:
+def _on_all_fields_collected(
+    context: dict,
+    ai_response: AIResponse,
+    service: dict,
+    session,
+    db: DBSession
+) -> None:
     """
-    Shared helper — called when all_fields_collected=True.
-    Creates request_log, builds confirmation template, moves session to pending_confirmation.
-    Used by both _handle_new_request and _handle_continuation.
+    Shared branch point once all_fields_collected=True — used by both
+    _handle_new_request and _handle_continuation. Resolves a target request
+    for targets_existing_request services, runs pre-confirmation validators,
+    then either shows a confirmation template or executes immediately
+    depending on requires_confirmation.
     """
-    log = request_logger.create_log(
-        db,
-        wechat_openid=context["wechat_openid"],
-        group_id=UUID(context["group_id"]),
-        service_type_id=session.service_type_id,
-        raw_message=context["content"],
-        wechat_msg_id=context["msg_id"]
-    )
+    if service.get("targets_existing_request", False):
+        target, error = _resolve_target_request(session, db)
+        if error:
+            send_message(context, error)
+            return
+        session.request_log_id = target.log_id
+        context["serial_number"] = target.serial_number
+        db.commit()
+
+    error = pre_confirm_validators.run(service["name"], context, session.collected_fields, db)
+    if error:
+        send_message(context, error)
+        return
+
+    if service.get("requires_confirmation", True):
+        _trigger_confirmation(context, session, db)
+    else:
+        _execute_workflow_and_finish(context, session, db)
+        # _execute_workflow_and_finish sends its own reply via reply_wechat / failure message
+
+
+def _resolve_target_request(session, db: DBSession):
+    """
+    For targets_existing_request services — resolves session.collected_fields
+    ["reference_serial"] (already disambiguated by the AI against the injected
+    candidate list) to an existing RequestLog. Returns (log, None) on success,
+    (None, error_message) otherwise. Deeper validation (warehouse match,
+    direction) happens in the service's own lookup_and_validate handler step,
+    right before the mutation it protects.
+    """
+    from models.request_log import RequestLog
+
+    reference_serial = session.collected_fields.get("reference_serial")
+    if not reference_serial:
+        return None, "未能确定要处理的申请编号，请重新描述或提供申请编号。"
+
+    target = db.query(RequestLog).filter_by(serial_number=reference_serial).first()
+    if target is None:
+        return None, f"未找到申请编号 {reference_serial}，请确认后重试。"
+    if target.status != "processing":
+        return None, f"申请 {reference_serial} 当前状态为「{target.status}」，无法处理。"
+
+    return target, None
+
+
+def _trigger_confirmation(context: dict, session, db: DBSession) -> None:
+    """
+    Builds the confirmation template and moves the session to
+    pending_confirmation. request_log already exists at this point (created
+    in _handle_new_request, or resolved to a target in _on_all_fields_collected)
+    — this function only renders and sends the template.
+    """
+    # context["serial_number"] is only populated within the turn the log was
+    # created/resolved — on a later continuation turn it's a fresh context,
+    # so fall back to the DB via session.request_log_id (same pattern as the
+    # Q1 fix in _handle_confirm).
+    if not context.get("serial_number") and session.request_log_id:
+        from models.request_log import RequestLog
+        log = db.query(RequestLog).filter_by(log_id=session.request_log_id).first()
+        if log:
+            context["serial_number"] = log.serial_number
 
     service_type = db.query(ServiceType).filter_by(
         service_type_id=session.service_type_id
     ).first()
     note = service_type.confirmation_note if service_type else None
+    service_type_name = service_type.name if service_type else ""
+
+    display_name = build_display_name(service_type_name, session.collected_fields)
+    sections = build_sections(service_type_name, session.collected_fields, db)
 
     confirmation_text = build_confirmation_message(
-        service_type_name=service_type.name if service_type else "",
-        collected_fields=session.collected_fields,
-        serial_number=log.serial_number,
-        confirmation_note=note
+        serial_number=context.get("serial_number", ""),
+        service_display_name=display_name,
+        sections=sections,
+        note=note
     )
 
     session_manager.add_message(db, session, "assistant", confirmation_text)
-    context["serial_number"] = log.serial_number
-    session.request_log_id = log.log_id
     session.status = "pending_confirmation"
     db.commit()
 
@@ -148,11 +227,13 @@ def _handle_continuation(context: dict, ai_response: AIResponse, db: DBSession) 
         send_message(context, "抱歉，未找到您的申请，请重新发起。")
         return
 
+    service = _find_service_by_type_id(context, session.service_type_id)
+
     session_manager.add_message(db, session, "user", context["content"])
     session_manager.update_collected_fields(db, session, ai_response.extracted_fields)
 
-    if ai_response.all_fields_collected:
-        _trigger_confirmation(context, ai_response, session, db)
+    if ai_response.all_fields_collected and service is not None:
+        _on_all_fields_collected(context, ai_response, service, session, db)
     else:
         session_manager.add_message(db, session, "assistant", ai_response.reply)
         send_message(context, ai_response.reply)
@@ -178,6 +259,18 @@ def _handle_confirm(context: dict, db: DBSession) -> None:
         if log:
             context["serial_number"] = log.serial_number
 
+    _execute_workflow_and_finish(context, session, db)
+
+
+def _execute_workflow_and_finish(context: dict, session, db: DBSession) -> None:
+    """
+    Shared by _handle_confirm and the requires_confirmation=false immediate
+    path. Transitions the log to 'processing', runs workflow steps, marks
+    success/failure, closes the session.
+    """
+    if session.request_log_id:
+        request_logger.mark_processing(db, session.request_log_id)
+
     try:
         _run_workflow_steps(context, session, db)
         # success — workflow's reply_wechat step sends the success message
@@ -194,9 +287,19 @@ def _handle_confirm(context: dict, db: DBSession) -> None:
 
 
 def _handle_cancel(context: dict, db: DBSession) -> None:
-    """User explicitly cancelled. Close the session and notify."""
+    """
+    User explicitly cancelled. Close the session and notify.
+    Only marks request_log as cancelled if this session actually owns the
+    log (i.e. its service isn't targets_existing_request) — cancelling a
+    completion-confirmation session must never touch the original request
+    it was merely referencing.
+    """
     session = _get_session(context, db)
     if session:
+        service = _find_service_by_type_id(context, session.service_type_id)
+        owns_log = service is None or not service.get("targets_existing_request", False)
+        if session.request_log_id and owns_log:
+            request_logger.mark_cancelled(db, session.request_log_id)
         session_manager.close_session(db, session, status="cancelled")
     send_message(context, "已取消，您可以随时发起新申请。")
 
@@ -211,7 +314,7 @@ def _handle_unrecognized(context: dict, ai_response: AIResponse) -> None:
     Message couldn't be classified. Send the AI's reply.
     Existing session stays open — user can continue or cancel.
     """
-    send_message(context["wechat_openid"], ai_response.reply)
+    send_message(context, ai_response.reply)
 
 
 # ── Workflow step runner ──────────────────────────────────────────────────────
@@ -234,6 +337,7 @@ def _run_workflow_steps(context: dict, session, db: DBSession) -> None:
     )
 
     context["result"] = {}
+    context["request_log_id"] = str(session.request_log_id) if session.request_log_id else None
 
     # load group-level config for this service (ydd_cust_id, ydd_channel_id, etc.)
     group_config = _get_group_config(context, session)
@@ -248,7 +352,7 @@ def _run_workflow_steps(context: dict, session, db: DBSession) -> None:
         merged_config = {**step.config, **group_config}
 
         handler = handler_class()
-        step_result = handler.handle(context, merged_config)
+        step_result = handler.handle(context, merged_config, db)
         context["result"].update(step_result)
 
 
@@ -272,6 +376,17 @@ def _find_service(context: dict, service_type_name: str | None) -> dict | None:
         return None
     for service in context.get("allowed_services", []):
         if service["name"] == service_type_name:
+            return service
+    return None
+
+
+def _find_service_by_type_id(context: dict, service_type_id) -> dict | None:
+    """Finds a service entry in allowed_services by service_type_id (UUID or str)."""
+    if service_type_id is None:
+        return None
+    target = str(service_type_id)
+    for service in context.get("allowed_services", []):
+        if service["service_type_id"] == target:
             return service
     return None
 
