@@ -42,6 +42,10 @@ def build_system_prompt(context: dict) -> str:
         f"\n## 候选列表（用于模糊匹配，不是让你调用工具，只是预取的参考数据）\n"
         f"{json.dumps(uchoice_candidates, ensure_ascii=False, indent=2)}\n"
         "匹配规则：\n"
+        "- skus：所有商品的真实编码及品名。用户描述商品时（无论是完整品名、型号、还是简短描述，如\"2寸透明胶带\"、\"黑色缠绕膜\"），"
+        "必须将其与此列表的 description 语义匹配，提取匹配到的 sku_code 填入 sku_lines/adjustment_lines/inventory_lines/move_lines 等"
+        "对应字段的 sku_code 中。绝对不能把客户的原始描述文字直接当作 sku_code 使用——sku_code 只能是此列表中出现的真实编码（如 s1、t4）。"
+        "如果实在无法匹配到任何一项，在 reply 中说明并请客户换一种描述或直接提供编码，不要瞎猜。\n"
         "- addresses：将用户描述的目的地与此列表匹配，提取 address_id 填入 destination_address_id。\n"
         "- storage_buckets：outbound 申请中，若某条 sku_lines 缺少 boxes_per_pallet，从此列表中同一 sku_code+warehouse_code 下"
         "选择 pallet_count 最大的 bucket 作为默认值填入，并在 reply 中明确告知用户这是自动选择的默认值。\n"
@@ -83,7 +87,7 @@ def build_system_prompt(context: dict) -> str:
 - continuation：用户在补充信息。提取新字段，询问下一个缺失字段。
 - confirm：用户确认了摘要（"确认"或类似表达）。
 - cancel：用户取消了申请（"取消"或类似表达）。
-- check_services：用户询问可使用哪些服务。在 reply 中列出可用服务名称。
+- check_services：用户询问可使用哪些服务。在 reply 中用简短列表列出服务的中文名称（每项几个字即可，一行一个），不展开解释每项的详细用途，除非用户进一步追问某一项。
 - unrecognized：无法理解或与服务无关。礼貌提示用户重新描述。
 
 ## 规则
@@ -97,6 +101,8 @@ def build_system_prompt(context: dict) -> str:
   错误输出（不要这样做）：反问"请问需要查看哪个仓库/SKU？"、"是否需要按仓库筛选？"等——这类问题会把 all_fields_collected 错误地留在 false，是被明确禁止的。
 - extracted_fields 只包含本轮新提取的字段，不重复已收集字段。
 - 不要在 reply 中生成确认摘要——摘要由系统模板负责生成。
+- 【重要】reply 中禁止出现任何面向后端的内部代码：服务的 name 字段（如 view_storage、uchoice_inbound_request，一律用简洁中文名称代替，如"查库存"、"入库申请"）、以及商品的 sku_code（如 s1、t4，应使用该商品的中文/英文品名代替）。这些代码是给后端系统用的，客户不应该看到。
+- reply 整体应简洁，避免冗长的解释性段落——一两句话说清楚即可，除非用户明确要求更多细节。
 - 所有 reply 内容必须是中文。
 - 【关键】当前会话状态为"进行中"或"已收集字段"不为空时，用户消息几乎必然是对上一条AI问题的回答，intent 必须为 continuation，绝对不得返回 new_request。只有当会话状态为"无活跃会话"时才可返回 new_request。
 - 【重要】check_services 仅适用于用户明确、泛泛地询问"有什么服务"、"能做什么"、"服务列表"等——不确定该选哪个服务时的兜底，不是默认选项。如果用户的消息（哪怕只是一个简短的关键词，如"库存"、"入库"、"查一下地址"）在语义上明显对应某一具体服务的 name 或 description，必须优先判定为 new_request 并将 service_type_name 设为该服务，而不是退回 check_services。只有在消息真的无法关联到任何具体服务时，才使用 check_services 或 unrecognized。

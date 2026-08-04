@@ -106,6 +106,18 @@ def _field_label(field_key: str) -> str:
     return _FIELD_LABELS.get(field_key, field_key)
 
 
+# ── SKU label resolution ─────────────────────────────────────────────────────
+
+def _sku_label_map(db: DBSession) -> dict[str, str]:
+    """sku_code -> human-readable description, e.g. 't4' -> 'T4 2-inch Clear Packing Tape'."""
+    from models.uchoice import UchoiceSku
+    return {s.sku_code: s.description for s in db.query(UchoiceSku).all()}
+
+
+def _sku_label(sku_labels: dict[str, str], sku_code: str) -> str:
+    return sku_labels.get(sku_code, sku_code)
+
+
 # ── Sections builders ────────────────────────────────────────────────────────
 
 def _label_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
@@ -128,19 +140,43 @@ def _label_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]
     return sections
 
 
+def _inbound_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
+    """uchoice_inbound_request — resolve sku_code to a human-readable product name."""
+    sku_labels = _sku_label_map(db)
+    items = {}
+    for line in collected_fields.get("sku_lines", []) or []:
+        label = _sku_label(sku_labels, line.get("sku_code", "?"))
+        if "box_count" in line:
+            items[label] = f"散箱 x{line['box_count']}"
+        else:
+            items[label] = f"{line.get('pallet_count', '?')} 托 @ {line.get('boxes_per_pallet', '?')}/托"
+
+    sections = [{"label": "入库明细", "type": "kv", "items": items}]
+    if "needs_unpacking" in collected_fields:
+        sections.append({
+            "label": "拆包费用",
+            "type": "kv",
+            "items": {"是否需要拆包": "是" if collected_fields.get("needs_unpacking") else "否"},
+        })
+    return sections
+
+
 def _outbound_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
     """
     uchoice_outbound_request — must surface the AI's largest-bucket default
     explicitly (safety net for the no-guess rule), not silently apply it.
+    Also resolves sku_code to a human-readable product name.
     """
     from models.uchoice import UchoiceStorage
 
+    sku_labels = _sku_label_map(db)
     warehouse_code = collected_fields.get("warehouse_code")
     items = {}
     for line in collected_fields.get("sku_lines", []) or []:
         sku = line.get("sku_code", "?")
+        label = _sku_label(sku_labels, sku)
         if "box_count" in line:
-            items[sku] = f"散箱 x{line['box_count']}"
+            items[label] = f"散箱 x{line['box_count']}"
             continue
 
         bpp = line.get("boxes_per_pallet")
@@ -154,13 +190,40 @@ def _outbound_sections_builder(collected_fields: dict, db: DBSession) -> list[di
             )
             bpp = bucket.boxes_per_pallet if bucket else "未知"
             default_note = "（系统自动选择的默认托盘规格，如有误请更正）"
-        items[sku] = f"{line.get('pallet_count', '?')} 托 @ {bpp}/托{default_note}"
+        items[label] = f"{line.get('pallet_count', '?')} 托 @ {bpp}/托{default_note}"
 
     sections = [{"label": "出库明细", "type": "kv", "items": items}]
     if collected_fields.get("destination_address_id"):
         sections.append({"label": "目的地", "type": "kv", "items": {"地址ID": collected_fields["destination_address_id"]}})
     sections.append({"label": "打托费用", "type": "kv", "items": {"新增打托数": collected_fields.get("new_pallet_count", 0)}})
     return sections
+
+
+def _adjust_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
+    """adjust_storage — resolve sku_code to a human-readable product name."""
+    sku_labels = _sku_label_map(db)
+    items = {}
+    for line in collected_fields.get("adjustment_lines", []) or []:
+        label = _sku_label(sku_labels, line.get("sku_code", "?"))
+        bpp = line.get("boxes_per_pallet", "?")
+        delta = line.get("pallet_delta", 0)
+        sign = "+" if isinstance(delta, (int, float)) and delta > 0 else ""
+        reason = line.get("reason", "")
+        items[f"{label} @ {bpp}/托"] = f"{sign}{delta} 托（{reason}）" if reason else f"{sign}{delta} 托"
+    return [{"label": "库存调整明细", "type": "kv", "items": items}]
+
+
+def _move_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
+    """move_storage — resolve sku_code to a human-readable product name."""
+    sku_labels = _sku_label_map(db)
+    items = {}
+    for line in collected_fields.get("move_lines", []) or []:
+        label = _sku_label(sku_labels, line.get("sku_code", "?"))
+        src = line.get("source_boxes_per_pallet", "?")
+        tgt = line.get("target_boxes_per_pallet", "?")
+        count = line.get("box_count_moved", "?")
+        items[label] = f"从 {src}/托 移动 {count} 箱到 {tgt}/托"
+    return [{"label": "库存调拨明细", "type": "kv", "items": items}]
 
 
 def _recount_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
@@ -170,6 +233,7 @@ def _recount_sections_builder(collected_fields: dict, db: DBSession) -> list[dic
     """
     from models.uchoice import UchoiceStorage
 
+    sku_labels = _sku_label_map(db)
     warehouse_code = collected_fields.get("warehouse_code")
     reported = {
         (l["sku_code"], l["boxes_per_pallet"]): l["pallet_count"]
@@ -186,7 +250,8 @@ def _recount_sections_builder(collected_fields: dict, db: DBSession) -> list[dic
         delta = after - before
         if delta != 0:
             sign = "+" if delta > 0 else ""
-            diff_items[f"{sku} @ {bpp}/托"] = f"{before} → {after}（{sign}{delta}）"
+            label = _sku_label(sku_labels, sku)
+            diff_items[f"{label} @ {bpp}/托"] = f"{before} → {after}（{sign}{delta}）"
 
     if not diff_items:
         diff_items["（无变化）"] = ""
@@ -209,8 +274,11 @@ def _default_sections_builder(collected_fields: dict, db: DBSession) -> list[dic
 CONFIRMATION_BUILDERS: dict[str, Callable[[dict, DBSession], list[dict]]] = {
     "fedex_label":              _label_sections_builder,
     "ups_label":                _label_sections_builder,
+    "uchoice_inbound_request":  _inbound_sections_builder,
     "uchoice_outbound_request": _outbound_sections_builder,
+    "adjust_storage":           _adjust_sections_builder,
     "recount_storage":          _recount_sections_builder,
+    "move_storage":             _move_sections_builder,
     "upsert_address":           _address_sections_builder,
 }
 

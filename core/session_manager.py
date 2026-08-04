@@ -175,6 +175,14 @@ def _build_uchoice_candidates(
 
     candidates: dict = {}
 
+    SKU_DEPENDENT_SERVICES = {
+        "uchoice_inbound_request", "uchoice_outbound_request",
+        "adjust_storage", "recount_storage", "move_storage",
+        "view_storage", "view_storage_history",
+    }
+    if names & SKU_DEPENDENT_SERVICES:
+        candidates["skus"] = uchoice_context.sku_catalog(db)
+
     if "uchoice_outbound_request" in names:
         candidates["addresses"] = uchoice_context.address_candidates(db)
         candidates["storage_buckets"] = uchoice_context.storage_bucket_candidates(db, scope_warehouse)
