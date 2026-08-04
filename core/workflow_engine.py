@@ -267,14 +267,25 @@ def _execute_workflow_and_finish(context: dict, session, db: DBSession) -> None:
     Shared by _handle_confirm and the requires_confirmation=false immediate
     path. Transitions the log to 'processing', runs workflow steps, marks
     success/failure, closes the session.
+
+    awaits_completion services (uchoice_inbound_request/uchoice_outbound_request)
+    are two-step: confirming only starts the request — it isn't actually done
+    until a warehouseman later runs the matching targets_existing_request
+    completion service against it. For those, a successful run leaves the log
+    at 'processing' (only the session closes as completed); mark_success is
+    skipped here and happens later, on the target log, when that completion
+    service's own _execute_workflow_and_finish runs.
     """
     if session.request_log_id:
         request_logger.mark_processing(db, session.request_log_id)
 
     try:
         _run_workflow_steps(context, session, db)
-        # success — workflow's reply_wechat step sends the success message
-        request_logger.mark_success(db, session.request_log_id, context.get("result", {}))
+        service = _find_service_by_type_id(context, session.service_type_id)
+        awaits_completion = bool(service.get("awaits_completion", False)) if service else False
+        if not awaits_completion:
+            # success — workflow's reply_wechat step sends the success message
+            request_logger.mark_success(db, session.request_log_id, context.get("result", {}))
         session_manager.close_session(db, session, status="completed")
 
     except Exception as e:

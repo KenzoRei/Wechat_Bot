@@ -28,9 +28,15 @@ class LookupAndValidateCompletionHandler(BaseHandler):
         if target.status != "processing":
             raise RuntimeError(f"目标申请当前状态为「{target.status}」，无法处理。")
 
+        # Both the customer's original session and the confirming
+        # warehouseman's own completion session end up pointing at this same
+        # request_log_id (by design — that's how targets_existing_request
+        # routes mark_success at the right row). Filter on wechat_openid too,
+        # or the newest-first order picks the warehouseman's own session
+        # (wrong fields) instead of the customer's original one (right fields).
         original_session = (
             db.query(ConversationSession)
-            .filter_by(request_log_id=target.log_id)
+            .filter_by(request_log_id=target.log_id, wechat_openid=target.wechat_openid)
             .order_by(ConversationSession.created_at.desc())
             .first()
         )
