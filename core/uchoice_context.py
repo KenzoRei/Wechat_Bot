@@ -6,10 +6,21 @@ context, the same mechanism as the existing group_context/location_presets
 block in ai/prompt_builder.py, just generalized to four more lists.
 """
 from sqlalchemy.orm import Session as DBSession
-from models.uchoice import UchoiceAddress, UchoiceStorage
+from models.uchoice import UchoiceAddress, UchoiceStorage, UchoiceSku
 from models.request_log import RequestLog
 from models.group import GroupMember
 from models.role import Role
+
+
+def sku_catalog(db: DBSession) -> list[dict]:
+    """
+    All 8 U-Choice SKUs — cheap, full table every time (no scoping needed).
+    Lets the AI resolve a free-text product description (e.g. "2寸透明胶带")
+    to the real sku_code (e.g. "t4") instead of inventing one from the
+    customer's own words.
+    """
+    rows = db.query(UchoiceSku).all()
+    return [{"sku_code": s.sku_code, "description": s.description} for s in rows]
 
 
 def address_candidates(db: DBSession) -> list[dict]:
