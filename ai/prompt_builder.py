@@ -7,9 +7,18 @@ from ai.base import AIResponse
 
 
 def build_system_prompt(context: dict) -> str:
-    # keep only name + input_schema for AI — strip credentials and internal IDs
+    # keep name + description + input_schema for AI — strip credentials and
+    # internal IDs. description matters more than it looks: service names
+    # like "view_storage"/"uchoice_inbound_request" are opaque identifiers,
+    # not natural language — without a description the AI has nothing to
+    # semantically match a terse/vague user message against (e.g. a bare
+    # "库存" not being recognized as view_storage).
     ai_services = [
-        {"name": svc["name"], "input_schema": svc.get("input_schema", {})}
+        {
+            "name": svc["name"],
+            "description": svc.get("description") or "",
+            "input_schema": svc.get("input_schema", {}),
+        }
         for svc in context.get("allowed_services", [])
     ]
     services_block  = json.dumps(ai_services, ensure_ascii=False, indent=2)
