@@ -18,4 +18,5 @@ class ServiceType(Base):
     is_active:           Mapped[bool]       = mapped_column(Boolean, nullable=False, default=True)
     requires_confirmation:    Mapped[bool]  = mapped_column(Boolean, nullable=False, default=True)
     targets_existing_request: Mapped[bool]  = mapped_column(Boolean, nullable=False, default=False)
+    awaits_completion:        Mapped[bool]  = mapped_column(Boolean, nullable=False, default=False)
     created_at:          Mapped[datetime]   = mapped_column(DateTime(timezone=True), server_default=text("now()"))

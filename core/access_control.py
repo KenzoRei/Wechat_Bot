@@ -104,6 +104,7 @@ def check_access(
             "group_config":    gs.config,          # API credentials — stripped before sending to AI
             "requires_confirmation":    st.requires_confirmation,
             "targets_existing_request": st.targets_existing_request,
+            "awaits_completion":        st.awaits_completion,
         }
         for gs, st in rows
     ]
