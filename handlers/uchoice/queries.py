@@ -91,14 +91,15 @@ class ComputeInvoiceHandler(BaseHandler):
     """
     view_invoice — requires_confirmation=false, executes immediately.
 
-    Also pushes the detailed Excel workbook to the group's
-    group_robot_webhook_url, if configured — response_url (the private
-    per-message reply channel) doesn't support file messages at all, so
-    there's no way to send the file privately to just the requester; this is
-    a whole-group broadcast, same as the daily/monthly pushes. Silently
-    skipped if the group has no webhook configured, and never allowed to
-    fail the main text response — this is a best-effort extra, not a
-    dependency of view_invoice actually working.
+    Also builds the detailed Excel workbook and attaches a short-lived
+    download link (result["download_url"]) so the text reply itself can
+    include it — response_url (the private per-message reply channel)
+    doesn't support file messages at all, but it does support markdown
+    links, so this is the only way to hand the requester the file
+    privately. Additionally pushes the same workbook to the group's
+    group_robot_webhook_url as a whole-group broadcast, if configured —
+    kept as a secondary option, not the primary delivery path anymore.
+    Both are best-effort: never allowed to fail the main text response.
     """
 
     def handle(self, context: dict, config: dict, db) -> dict:
@@ -112,25 +113,29 @@ class ComputeInvoiceHandler(BaseHandler):
         invoice = compute_invoice(db, warehouse_code, start_month, end_month)
         result = {k: (str(v) if hasattr(v, "quantize") else v) for k, v in invoice.items()}
 
-        self._try_push_workbook(context, db, warehouse_code, start_month, end_month)
+        download_url = self._try_build_workbook_and_link(context, db, warehouse_code, start_month, end_month)
+        if download_url:
+            result["download_url"] = download_url
         return result
 
     @staticmethod
-    def _try_push_workbook(context: dict, db, warehouse_code: str, start_month: str, end_month: str) -> None:
+    def _try_build_workbook_and_link(context: dict, db, warehouse_code: str, start_month: str, end_month: str) -> str | None:
         try:
-            from models.group import GroupConfig
+            import config
             from core.uchoice_invoice_export import build_invoice_workbook
-            from clients.wechat_client import send_group_webhook_file
-
-            group_id = context.get("group_id")
-            group = db.query(GroupConfig).filter_by(group_id=group_id).first() if group_id else None
-            webhook_url = group.group_robot_webhook_url if group else None
-            if not webhook_url:
-                return
+            from core.download_tokens import create_token
 
             data = build_invoice_workbook(db, warehouse_code, start_month, end_month)
             filename = f"invoice_{warehouse_code}_{start_month}_{end_month or start_month}.xlsx"
-            send_group_webhook_file(webhook_url, data, filename)
+            token = create_token(
+                data, filename,
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            base_url = getattr(config, "SERVER_BASE_URL", "https://wechat-bot-atse.onrender.com")
+
+            ComputeInvoiceHandler._try_push_workbook(context, db, data, filename)
+
+            return f"{base_url}/invoices/download/{token}"
         except Exception as e:
             # A DB-level failure here (e.g. a bad query) leaves the session
             # in an aborted-transaction state — without rolling back, every
@@ -138,4 +143,21 @@ class ComputeInvoiceHandler(BaseHandler):
             # reply_wechat step right after this one) would fail too, turning
             # a "best-effort extra" into a hard failure of the whole request.
             db.rollback()
-            print(f"[uchoice] invoice workbook push failed (non-fatal): {e}", flush=True)
+            print(f"[uchoice] invoice workbook build failed (non-fatal): {e}", flush=True)
+            return None
+
+    @staticmethod
+    def _try_push_workbook(context: dict, db, data: bytes, filename: str) -> None:
+        try:
+            from models.group import GroupConfig
+            from clients.wechat_client import send_group_webhook_file
+
+            group_id = context.get("group_id")
+            group = db.query(GroupConfig).filter_by(group_id=group_id).first() if group_id else None
+            webhook_url = group.group_robot_webhook_url if group else None
+            if not webhook_url:
+                return
+            send_group_webhook_file(webhook_url, data, filename)
+        except Exception as e:
+            db.rollback()
+            print(f"[uchoice] invoice workbook group push failed (non-fatal): {e}", flush=True)
