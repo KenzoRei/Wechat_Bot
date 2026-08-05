@@ -8,9 +8,6 @@ Key differences from 自建应用:
 - Replies must be encrypted JSON (stream format)
 """
 import json
-import time
-import random
-import string
 import config
 from core.WXBizJsonMsgCrypt import WXBizJsonMsgCrypt
 
@@ -101,25 +98,3 @@ def _extract_message(data: dict) -> dict:
         "response_url": data.get("response_url", ""),  # for sending replies
         "raw":          data,
     }
-
-
-def make_encrypted_reply(content: str, nonce: str, timestamp: str) -> str:
-    """
-    Encrypts a text reply in Smart Robot stream format.
-    Used to send an immediate acknowledgement back in the POST response.
-    """
-    stream_id = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
-    payload = json.dumps({
-        "msgtype": "stream",
-        "stream": {
-            "id":      stream_id,
-            "finish":  True,
-            "content": content
-        }
-    }, ensure_ascii=False)
-
-    crypt = _get_crypt()
-    ret, encrypted = crypt.EncryptMsg(payload, nonce, timestamp)
-    if ret != 0:
-        return ""
-    return encrypted

@@ -1,6 +1,6 @@
 import threading
 from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import PlainTextResponse, Response
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session as DBSession
 
 from database import SessionLocal
@@ -88,10 +88,11 @@ async def receive_webhook(
     )
     thread.start()
 
-    # Return immediate ack so WeChat doesn't time out waiting
-    ack = webhook_receiver.make_encrypted_reply("收到，处理中...", nonce, timestamp)
-    if ack:
-        return Response(content=ack, media_type="text/plain")
+    # Return immediate ack so WeChat doesn't time out waiting — deliberately
+    # no visible content (same "success" no-op used for duplicate drops
+    # above): the real reply is what workflow_engine sends via response_url
+    # from the background thread. A visible "收到，处理中..." bubble here
+    # would double up as a second, redundant message on every single turn.
     return PlainTextResponse(content="success")
 
 
