@@ -109,8 +109,12 @@ def build_system_prompt(context: dict) -> str:
 ## 意图说明
 - new_request：用户发起新申请。识别服务类型，开始收集必填字段。service_type_name 必须设置为服务的 name 字段（如 "fedex_label"），不得为 null。
 - continuation：用户在补充信息。提取新字段，询问下一个缺失字段。
-- confirm：用户确认了摘要（"确认"或类似表达）。【重要】只有当前会话状态为"待确认"（系统已生成并发送过确认摘要）时才允许返回 confirm。如果当前状态是"进行中"（尚未生成过确认摘要），无论用户这句话听起来多像是在确认（如"不需要拆包""好的可以了"），都必须返回 continuation——先把这句话里的字段提取到 extracted_fields；如果这正好是最后一个必填字段，则同时设置 all_fields_collected=true，系统会自动生成确认摘要并发给用户，真正的确认要等用户看到摘要后的下一轮消息。
-  示例：会话状态为"进行中"，仅缺 needs_unpacking 字段，用户回复"不需要拆包" → 正确输出：intent=continuation，extracted_fields={{"needs_unpacking": false}}，all_fields_collected=true。错误输出（禁止）：intent=confirm——此时系统还没生成过确认摘要，没有"摘要"可言，会导致找不到待确认的申请而报错。
+- confirm：用户确认了摘要（"确认"或类似表达）。【重要】只有当前会话状态为"待确认"（系统已生成并发送过确认摘要）时才允许返回 confirm。这与用户这句话里是否出现"确认"两个字无关——判断依据只看当前会话状态，不看措辞。
+  · 状态为"进行中"（尚未生成过确认摘要）：无论这句话多像是在确认（如"不需要拆包""好的可以了"），都必须返回 continuation——先把这句话里的字段提取到 extracted_fields；如果这正好是最后一个必填字段，则同时设置 all_fields_collected=true，系统会自动生成确认摘要并发给用户，真正的确认要等用户看到摘要后的下一轮消息。
+    示例：会话状态为"进行中"，仅缺 needs_unpacking 字段，用户回复"不需要拆包" → 正确输出：intent=continuation，extracted_fields={{"needs_unpacking": false}}，all_fields_collected=true。错误输出（禁止）：intent=confirm。
+  · 状态为"无活跃会话"：即使用户第一句话就带着"确认"字样（例如仓管员对某个待处理申请说"确认入库 REQ-X"，或候选列表只有一条时说"确认"），也必须返回 new_request，而不是 confirm——这是在发起一个新的服务请求（如 confirm_inbound_completion 这类"确认收货"服务，name/description 里本身就包含"确认"字样，容易和 intent=confirm 混淆，但两者是完全不同的东西）。识别服务类型、按候选列表规则提取 reference_serial 等字段，字段齐全则 all_fields_collected=true，由系统生成确认摘要，用户看到摘要后的下一轮回复才是真正的 intent=confirm。
+    示例：无活跃会话，候选列表中只有一条待处理入库申请 REQ-Y，用户消息是"确认入库" → 正确输出：intent=new_request，service_type_name="confirm_inbound_completion"，extracted_fields 中 reference_serial 填 REQ-Y，all_fields_collected=true（前提是其余必填字段已满足），reply 类似"好的，正在为您确认 REQ-Y 的入库"。错误输出（禁止）：intent=confirm——此时根本没有 session，没有摘要可言，会导致"未找到待确认的申请"报错。
+  两种错误情况的共同后果：intent=confirm 但实际没有对应的待确认 session 时，系统会直接报错"未找到待确认的申请"，且这句话里提取的字段会被完全丢弃，用户必须重新发起。
 - cancel：用户取消了申请（"取消"或类似表达）。
 - check_services：用户询问可使用哪些服务。在 reply 中用简短列表列出服务的中文名称（每项几个字即可，一行一个），不展开解释每项的详细用途，除非用户进一步追问某一项。
 - unrecognized：无法理解或与服务无关。礼貌提示用户重新描述。
