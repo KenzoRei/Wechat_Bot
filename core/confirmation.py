@@ -233,7 +233,7 @@ def _outbound_sections_builder(collected_fields: dict, db: DBSession) -> list[di
     destination_address_id is resolved to the real company/address, not
     left as a raw UUID. new_pallet_count only shown when > 0.
     """
-    from models.uchoice import UchoiceStorage, UchoiceAddress
+    from models.uchoice import UchoiceAddress
     from core.uchoice_rates import PALLETIZATION_PER_PALLET
 
     sku_labels = _sku_label_map(db)
@@ -249,17 +249,13 @@ def _outbound_sections_builder(collected_fields: dict, db: DBSession) -> list[di
             formatted.append(f'{label}：散箱 x{line["box_count"]}')
             continue
 
-        bpp = line.get("boxes_per_pallet")
-        default_note = ""
-        if bpp is None:
-            bucket = (
-                db.query(UchoiceStorage)
-                .filter_by(warehouse_code=warehouse_code, sku_code=sku)
-                .order_by(UchoiceStorage.pallet_count.desc())
-                .first()
-            )
-            bpp = bucket.boxes_per_pallet if bucket else "未知"
-            default_note = '　（系统自动选择，如有误请更正）'
+        # boxes_per_pallet is resolved and persisted to collected_fields by
+        # workflow_engine._resolve_outbound_pallet_defaults before this
+        # confirmation is ever built — this only renders the flag it left,
+        # rather than re-deriving the default itself (see that function's
+        # docstring for why a display-only default was the original bug).
+        bpp = line.get("boxes_per_pallet", "未知")
+        default_note = '　（系统自动选择，如有误请更正）' if line.get("_bpp_auto_default") else ""
         pallet_count = line.get("pallet_count", "?")
         formatted.append(f'{label}：{pallet_count} 托 @ {bpp}/托{default_note}')
 

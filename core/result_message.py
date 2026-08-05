@@ -309,6 +309,10 @@ def _completion_result_sections_builder(context: dict, db: DBSession) -> list[di
     if destination_warehouse_code:
         sections += _warehouse_storage_summary_sections(db, destination_warehouse_code, "仓当前库存")
 
+    pdf_url = context.get("result", {}).get("pdf_url")
+    if pdf_url:
+        sections.append({"label": None, "type": "raw", "items": [f"[下载送货单]({pdf_url})（1小时内有效）"]})
+
     return sections
 
 

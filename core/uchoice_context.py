@@ -132,6 +132,23 @@ def pending_request_candidates(db: DBSession, warehouse_code: str | None, servic
     return candidates
 
 
+def resolve_default_bucket(db: DBSession, warehouse_code: str | None, sku_code: str) -> int | None:
+    """
+    Largest-pallet-count bucket for a sku+warehouse — the "propose the
+    largest available bucket as a default" rule for an outbound line missing
+    boxes_per_pallet. Shared by the confirmation-display resolver and the
+    session-mutating resolver in workflow_engine so both pick the same
+    default instead of maintaining two copies of this query.
+    """
+    bucket = (
+        db.query(UchoiceStorage)
+        .filter_by(warehouse_code=warehouse_code, sku_code=sku_code)
+        .order_by(UchoiceStorage.pallet_count.desc())
+        .first()
+    )
+    return bucket.boxes_per_pallet if bucket else None
+
+
 def storage_bucket_candidates(db: DBSession, warehouse_code: str | None) -> list[dict]:
     query = db.query(UchoiceStorage)
     if warehouse_code:
