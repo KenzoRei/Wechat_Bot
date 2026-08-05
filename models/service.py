@@ -19,4 +19,5 @@ class ServiceType(Base):
     requires_confirmation:    Mapped[bool]  = mapped_column(Boolean, nullable=False, default=True)
     targets_existing_request: Mapped[bool]  = mapped_column(Boolean, nullable=False, default=False)
     awaits_completion:        Mapped[bool]  = mapped_column(Boolean, nullable=False, default=False)
+    keywords:            Mapped[list]       = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     created_at:          Mapped[datetime]   = mapped_column(DateTime(timezone=True), server_default=text("now()"))

@@ -161,3 +161,35 @@ class ComputeInvoiceHandler(BaseHandler):
         except Exception as e:
             db.rollback()
             print(f"[uchoice] invoice workbook group push failed (non-fatal): {e}", flush=True)
+
+
+class ExplainServiceHandler(BaseHandler):
+    """
+    explain_service — requires_confirmation=false, executes immediately.
+
+    Looks up the matched service_type by name and returns its stored
+    description/keywords untouched — the AI's job (in prompt_builder.py) is
+    only to identify WHICH service the user is asking about, never to author
+    or paraphrase the explanation itself. Not scoped to the caller's own
+    allowed_services: read-only info about what a service does isn't
+    sensitive, and in practice the AI can only match against services already
+    present in its own context anyway (see build_system_prompt), so this
+    mainly just avoids an unnecessary extra restriction.
+    """
+
+    def handle(self, context: dict, config: dict, db) -> dict:
+        from models.service import ServiceType
+
+        fields = context.get("collected_fields", {})
+        target_name = fields.get("target_service_name")
+
+        service = db.query(ServiceType).filter_by(name=target_name, is_active=True).first() if target_name else None
+        if service is None:
+            return {"found": False, "target_service_name": target_name}
+
+        return {
+            "found": True,
+            "target_service_name": service.name,
+            "service_description": service.description or "",
+            "service_keywords": service.keywords or [],
+        }

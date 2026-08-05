@@ -20,6 +20,7 @@ def build_system_prompt(context: dict) -> str:
         {
             "name": svc["name"],
             "description": svc.get("description") or "",
+            "keywords": svc.get("keywords") or [],
             "input_schema": svc.get("input_schema", {}),
         }
         for svc in context.get("allowed_services", [])
@@ -89,6 +90,10 @@ def build_system_prompt(context: dict) -> str:
         "用户接着回复\"后面那个\"或\"第二个\" → 根据你刚才列出的顺序，这指的是 REQ-B，extracted_fields 中 reference_serial 填 REQ-B，"
         "all_fields_collected=true。\n"
         "- members：将用户提到的人名与此列表的 display_name 匹配，提取 wechat_openid 填入 target_openid。\n"
+        "- service_catalog：用户询问某个具体服务是什么/怎么用/有什么区别时（explain_service），将其表述与此列表中每一项的 name/description/keywords "
+        "做语义匹配，提取匹配到的 name 填入 target_service_name。这个列表不受当前用户自己权限范围限制，即使用户本人不能使用某个服务，"
+        "也可以询问该服务的说明。只提取 target_service_name，绝不能自己编写或转述服务说明的内容——那部分内容由系统按 description 原文返回，"
+        "你只负责判断问的是哪个服务。\n"
         if uchoice_candidates else ""
     )
 
@@ -136,7 +141,8 @@ def build_system_prompt(context: dict) -> str:
     示例：无活跃会话，候选列表中只有一条待处理入库申请 REQ-Y，用户消息是"确认入库" → 正确输出：intent=new_request，service_type_name="confirm_inbound_completion"，extracted_fields 中 reference_serial 填 REQ-Y，all_fields_collected=true（前提是其余必填字段已满足），reply 类似"好的，正在为您确认 REQ-Y 的入库"。错误输出（禁止）：intent=confirm——此时根本没有 session，没有摘要可言，会导致"未找到待确认的申请"报错。
   两种错误情况的共同后果：intent=confirm 但实际没有对应的待确认 session 时，系统会直接报错"未找到待确认的申请"，且这句话里提取的字段会被完全丢弃，用户必须重新发起。
 - cancel：用户取消了申请（"取消"、"算了"、"不要了"、"别弄了"等表达）。【重要】只要用户的意思是终止/放弃当前这个申请，就必须判定为 cancel，优先级高于候选列表匹配等其他逻辑——不要因为候选列表里有内容可以匹配，就把一句明确的取消话语误判为 continuation 或去追问选哪一条。
-- check_services：用户询问可使用哪些服务。在 reply 中用简短列表列出服务的中文名称（每项几个字即可，一行一个），不展开解释每项的详细用途，除非用户进一步追问某一项。
+- check_services：用户询问可使用哪些服务（泛泛地问"有什么服务"）。在 reply 中用简短列表列出服务的中文名称（每项几个字即可，一行一个），不展开解释每项的详细用途。
+  【重要】如果用户是在问某一个具体服务是什么/怎么用/干什么用的（如"入库申请是什么意思""怎么用查库存""确认出库和确认入库有什么区别"），不要用 check_services，应判定为 new_request，service_type_name 设为 "explain_service"，按 service_catalog 的匹配规则提取 target_service_name。
 - unrecognized：无法理解或与服务无关。礼貌提示用户重新描述。
 
 ## 规则
@@ -161,6 +167,7 @@ def build_system_prompt(context: dict) -> str:
 - 【重要】收集 upsert_address 的 addr 字段时，必须检查用户提供的内容是否至少包含一个真实地址应有的基本要素（门牌号+街道名、城市、州、邮编），并整理成规范格式（如"123 Main St, City, ST 12345"，逗号分隔、州用两位缩写、邮编独立成段）。如果用户原话缺少这些要素中的关键部分（如只给了街道没给城市/州/邮编），不要直接照抄或瞎猜补全，必须在 reply 中指出缺了什么并请用户补充；如果用户原话包含全部要素但格式凌乱（如缺逗号、大小写混乱、单位缩写不一致），可以直接整理规范后填入 extracted_fields，不需要用户重新提供。
   示例：用户说"201 Gabor drive Newark De19711" → 要素齐全（门牌+街道、城市、州、邮编），只是格式凌乱 → 正确输出：extracted_fields 中 addr 填"201 Gabor Dr, Newark, DE 19711"。
   示例：用户说"发到Newark那个仓库" → 缺门牌号和街道名，只有城市 → 正确输出：all_fields_collected 不设为 true（addr 未满足），reply 询问具体门牌号和街道名。
+- 【重要】每个服务的 keywords 只是辅助判断的参考信号，不是100%确定的匹配依据，实际判断仍要结合上下文语义。如果用户明确表示某个判断不对（如"不是这个""你搞错了""我不是要这个服务""我说的不是XX"），必须立即采纳用户的说法并重新判断当前到底是哪个服务或哪个意图，不能因为消息中命中了某个 keyword 就固执坚持最初的判断，也不能反复用同一个理由说服用户接受你先前的判断。
 
 ## 位置别名规则（重要）
 群组知识库中的 location_presets 包含预设地址。当用户提到别名（如”LAX”、”DE”）时：

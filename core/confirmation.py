@@ -53,6 +53,7 @@ _DISPLAY_NAMES = {
     "view_storage":               "查询库存",
     "view_storage_history":       "库存变动记录",
     "view_invoice":               "费用报告",
+    "explain_service":            "服务说明",
 }
 
 
@@ -107,6 +108,7 @@ _CHARGE_TYPE_LABELS = {
     "short_delivery":  "短途配送",
     "delivery":        "配送",
     "truck_transfer":  "卡车转仓",
+    "self_pickup":     "自提",
 }
 
 
