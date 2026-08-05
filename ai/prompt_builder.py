@@ -66,7 +66,15 @@ def build_system_prompt(context: dict) -> str:
         "如果实在无法匹配到任何一项，在 reply 中说明并请客户换一种描述或直接提供编码，不要瞎猜。\n"
         "- addresses：将用户描述的目的地与此列表匹配，提取 address_id 填入 destination_address_id。"
         "【重要】在 reply 中向用户确认匹配到的目的地时，必须同时给出公司名和完整地址（如\"发往 ABC 公司（123 Main St, City, ST 12345）\"），"
-        "不能只提公司名——地址信息才是用户真正需要核对的部分。\n"
+        "不能只提公司名——地址信息才是用户真正需要核对的部分。"
+        "【重要】destination_address_id 只能填此列表中真实存在的 address_id（一个 UUID），绝不能把客户描述的公司名/地址原文当作 "
+        "destination_address_id 直接填入——如果此列表中没有任何一项能匹配客户描述的目的地（注意：客户压根还没提到目的地，属于正常的"
+        "缺失字段等待，不算这种情况；这里特指客户已经明确说了一个目的地，但列表里找不到对应项），不要设置 all_fields_collected=true，"
+        "也不要在 extracted_fields 里填 destination_address_id。此时改为在顶层字段 unmatched_new_address 中尽力提取一个"
+        "{{\"company_name\": \"<公司名，提取不到则省略此键>\", \"addr\": \"<地址，按上面 upsert_address 的地址整理规则处理，"
+        "要素不全就只填齐全的部分，不要瞎猜补全，提取不到则省略此键>\"}}，供系统据此转为新增地址流程使用。"
+        "同时 reply 中必须说明：这是一个新地址、尚未收录，系统已将其转为新增地址流程，原出库申请已自动取消，"
+        "还需要补充计费类型（以及所属仓库，如果无法判断）后才能完成新增，新增完成后请重新提交出库申请。\n"
         "- storage_buckets：outbound 申请中，若某条 sku_lines 缺少 boxes_per_pallet，从此列表中同一 sku_code+warehouse_code 下"
         "选择 pallet_count 最大的 bucket 作为默认值填入，并在 reply 中明确告知用户这是自动选择的默认值。\n"
         "- pending_inbound_requests / pending_outbound_requests：当前所有待处理的入库/出库申请候选列表。\n"
@@ -150,7 +158,8 @@ def build_system_prompt(context: dict) -> str:
   "reply": "<发送给用户的中文消息>",
   "extracted_fields": {{}},
   "all_fields_collected": false,
-  "service_type_name": null
+  "service_type_name": null,
+  "unmatched_new_address": null
 }}
 
 ## 意图说明
@@ -238,4 +247,5 @@ def parse_response(raw: str) -> AIResponse:
         extracted_fields=data.get("extracted_fields", {}),
         all_fields_collected=data.get("all_fields_collected", False),
         service_type_name=data.get("service_type_name"),
+        unmatched_new_address=data.get("unmatched_new_address"),
     )

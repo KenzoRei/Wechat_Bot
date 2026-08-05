@@ -122,8 +122,48 @@ def _loose_inbound_restatement_required(context: dict, collected_fields: dict, d
     return f"商品 {missing_labels} 是散箱入库，请说明打包成了多少箱/托、共多少托。"
 
 
+def _valid_destination_address_required(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """
+    uchoice_outbound_request: destination_address_id must be a real
+    uchoice_address row — the AI is instructed to only fill it in from the
+    injected address candidate list (a fuzzy match against real UUIDs), but
+    when nothing in that list matches what the customer described, it has
+    been observed live to fall back to writing the customer's free-text
+    company/address description into destination_address_id instead of
+    leaving it unset. That string then reaches a raw
+    `WHERE address_id = <value>::UUID` query downstream and crashes with a
+    DB-level type error, not a clean message — this is the same class of bug
+    as the loose-line/pallet-bucket issues fixed earlier: an AI field
+    extraction that's supposed to be constrained to a known set of values
+    needs a deterministic backstop, not just a prompt instruction.
+    """
+    dest_id = collected_fields.get("destination_address_id")
+    if not dest_id:
+        return None
+
+    not_found_message = (
+        "未能识别这个送货地址——它还没有被收录在地址库中，请提供完整的公司名、地址"
+        "（门牌号+街道+城市+州+邮编）以及计费类型，联系管理员添加后再重新提交。"
+    )
+
+    import uuid
+    try:
+        uuid.UUID(str(dest_id))
+    except (ValueError, TypeError):
+        # Not even UUID-shaped — never send this to the DB. A raw
+        # `::UUID` cast on a non-UUID string fails at the driver level and
+        # leaves the SQLAlchemy session in a failed-transaction state for
+        # the rest of this request, which is worse than the original crash.
+        return not_found_message
+
+    from models.uchoice import UchoiceAddress
+    addr = db.query(UchoiceAddress).filter_by(address_id=dest_id).first()
+    return None if addr is not None else not_found_message
+
+
 PRE_CONFIRM_VALIDATORS = {
     "role_change": _last_admin_protection,
+    "uchoice_outbound_request": _valid_destination_address_required,
     "confirm_outbound_completion": _loose_outbound_pick_required,
     "confirm_inbound_completion": _loose_inbound_restatement_required,
 }
