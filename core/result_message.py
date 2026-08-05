@@ -123,11 +123,11 @@ def _format_sku_bucket_lines(rows: list[dict], sku_labels: dict[str, str]) -> li
         label = sku_labels.get(sku_code, sku_code)
         if len(buckets) == 1:
             b = buckets[0]
-            lines.append(f'{label}：<font color="info">{b["pallet_count"]} 托</font> @ {b["boxes_per_pallet"]}/托')
+            lines.append(f'{label}：{b["pallet_count"]} 托 @ {b["boxes_per_pallet"]}/托')
         else:
             bucket_str = "，".join(f'{b["pallet_count"]} 托 @ {b["boxes_per_pallet"]}/托' for b in buckets)
             total = sum(b["pallet_count"] for b in buckets)
-            lines.append(f'{label}：{bucket_str}（合计 <font color="info">{total} 托</font>）')
+            lines.append(f'{label}：{bucket_str}（合计 {total} 托）')
     return lines
 
 
