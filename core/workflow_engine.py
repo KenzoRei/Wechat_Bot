@@ -114,12 +114,45 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
     if ai_response.extracted_fields:
         session_manager.update_collected_fields(db, session, ai_response.extracted_fields)
 
+    auto_resolved = _autoresolve_single_candidate(context, service, session, db)
+
     # Q3 fix: if AI already has all fields from the first message, go straight to confirmation
-    if ai_response.all_fields_collected:
+    if ai_response.all_fields_collected or auto_resolved:
         _on_all_fields_collected(context, ai_response, service, session, db)
     else:
         session_manager.add_message(db, session, "assistant", ai_response.reply)
         send_message(context, ai_response.reply)
+
+
+_REFERENCE_SERIAL_CANDIDATE_KEYS = {
+    "confirm_inbound_completion":  "pending_inbound_requests",
+    "confirm_outbound_completion": "pending_outbound_requests",
+}
+
+
+def _autoresolve_single_candidate(context: dict, service: dict, session, db: DBSession) -> bool:
+    """
+    Deterministic replacement for relying on the AI to notice "only one
+    pending candidate, don't ask which one" — that instruction has proven
+    flaky under live testing even with worked examples reinforcing it.
+    reference_serial is the ONLY required field on both targets_existing_
+    request services, so resolving it here means all required fields are
+    now genuinely collected — no AI judgment needed for this decision at
+    all, and it doesn't depend on the AI having reasoned correctly about
+    which service is even active this turn.
+    """
+    if not service.get("targets_existing_request", False):
+        return False
+    if session.collected_fields.get("reference_serial"):
+        return False
+    candidate_key = _REFERENCE_SERIAL_CANDIDATE_KEYS.get(service["name"])
+    if not candidate_key:
+        return False
+    candidates = (context.get("uchoice_candidates") or {}).get(candidate_key) or []
+    if len(candidates) != 1:
+        return False
+    session_manager.update_collected_fields(db, session, {"reference_serial": candidates[0]["serial_number"]})
+    return True
 
 
 def _on_all_fields_collected(
@@ -236,7 +269,9 @@ def _handle_continuation(context: dict, ai_response: AIResponse, db: DBSession) 
     session_manager.add_message(db, session, "user", context["content"])
     session_manager.update_collected_fields(db, session, ai_response.extracted_fields)
 
-    if ai_response.all_fields_collected and service is not None:
+    auto_resolved = service is not None and _autoresolve_single_candidate(context, service, session, db)
+
+    if (ai_response.all_fields_collected or auto_resolved) and service is not None:
         _on_all_fields_collected(context, ai_response, service, session, db)
     else:
         session_manager.add_message(db, session, "assistant", ai_response.reply)

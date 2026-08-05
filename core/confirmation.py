@@ -105,7 +105,7 @@ def _field_label(field_key: str) -> str:
 
 _CHARGE_TYPE_LABELS = {
     "short_delivery":  "短途配送",
-    "delivery":        "普通配送",
+    "delivery":        "配送",
     "truck_transfer":  "卡车转仓",
 }
 
@@ -359,6 +359,17 @@ def _outbound_completion_sections_builder(collected_fields: dict, db: DBSession)
     sections = [{"label": f"关联申请 {reference_serial}（{warehouse_code} 仓）", "type": "list", "items": formatted}]
     if not restated:
         sections.append({"label": None, "type": "list", "items": ["（按原申请数量发货，如实发数量有出入请重新说明）"]})
+
+    destination_address_id = original_fields.get("destination_address_id")
+    if destination_address_id:
+        from models.uchoice import UchoiceAddress
+        addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
+        if addr and addr.destination_warehouse_code:
+            sections.append({
+                "label": None, "type": "list",
+                "items": [f"⚠️ 此为内部调仓：确认后将同时增加 {addr.destination_warehouse_code} 仓对应库存"],
+            })
+
     return sections
 
 

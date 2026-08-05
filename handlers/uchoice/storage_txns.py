@@ -53,11 +53,35 @@ class ApplyOutboundStorageHandler(BaseHandler):
         request_log_id = context.get("request_log_id")
         created_by = context.get("wechat_openid")
 
+        # If the destination resolves to one of our own two warehouses (not
+        # an external customer), this is an inter-warehouse transfer: one
+        # confirmation moves storage on both sides — origin decreases here,
+        # destination increases in the same step below — rather than a
+        # second separate inbound request the destination warehouseman would
+        # otherwise have to confirm on their own.
+        transportation_fee = 0
+        destination_warehouse_code = None
+        destination_address_id = original_fields.get("destination_address_id")
+        if destination_address_id:
+            from models.uchoice import UchoiceAddress
+            addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
+            if addr:
+                transportation_fee = CHARGE_TYPE_RATES.get(addr.charge_type, 0)
+                destination_warehouse_code = addr.destination_warehouse_code
+
+        origin_txn_type = "transfer_out" if destination_warehouse_code else "outbound"
+        dest_txn_type = "transfer_in"
+        transfer_note = f"transfer to {destination_warehouse_code}" if destination_warehouse_code else None
+
         applied = []
         for line in fulfillment_lines:
             sku = line["sku_code"]
             if "source_boxes_per_pallet" in line and "resulting_boxes_per_pallet" in line:
-                # loose-box convert pair — never defaulted, per the design doc
+                # loose-box convert pair — never defaulted, per the design doc.
+                # The bucket reclassification at the origin (convert_out/
+                # convert_in) happens regardless of whether this is a
+                # transfer; what actually left the warehouse is the
+                # difference between the two bucket sizes.
                 source_bpp = line["source_boxes_per_pallet"]
                 resulting_bpp = line["resulting_boxes_per_pallet"]
                 apply_storage_delta(
@@ -69,22 +93,32 @@ class ApplyOutboundStorageHandler(BaseHandler):
                     request_log_id, note="loose-box fulfillment pick", created_by=created_by
                 )
                 applied.append({"sku_code": sku, "convert": f"{source_bpp}->{resulting_bpp}"})
+
+                if destination_warehouse_code:
+                    shipped_bpp = source_bpp - resulting_bpp
+                    if shipped_bpp <= 0:
+                        raise RuntimeError(
+                            f"商品 {sku} 的拆零记录无效：source_boxes_per_pallet（{source_bpp}）"
+                            f"必须大于 resulting_boxes_per_pallet（{resulting_bpp}），否则无法确定实际发出的箱数。"
+                        )
+                    apply_storage_delta(
+                        db, destination_warehouse_code, sku, shipped_bpp, 1, dest_txn_type,
+                        request_log_id, note=transfer_note, created_by=created_by
+                    )
             else:
                 bpp = line["boxes_per_pallet"]
                 qty = line["pallet_count"]
                 apply_storage_delta(
-                    db, warehouse_code, sku, bpp, -qty, "outbound", request_log_id,
-                    note=None, created_by=created_by
+                    db, warehouse_code, sku, bpp, -qty, origin_txn_type, request_log_id,
+                    note=transfer_note, created_by=created_by
                 )
                 applied.append({"sku_code": sku, "boxes_per_pallet": bpp, "pallet_count": qty})
 
-        transportation_fee = 0
-        destination_address_id = original_fields.get("destination_address_id")
-        if destination_address_id:
-            from models.uchoice import UchoiceAddress
-            addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
-            if addr:
-                transportation_fee = CHARGE_TYPE_RATES.get(addr.charge_type, 0)
+                if destination_warehouse_code:
+                    apply_storage_delta(
+                        db, destination_warehouse_code, sku, bpp, qty, dest_txn_type,
+                        request_log_id, note=transfer_note, created_by=created_by
+                    )
 
         new_pallet_count = original_fields.get("new_pallet_count") or 0
         palletization_fee = new_pallet_count * PALLETIZATION_PER_PALLET
@@ -93,6 +127,7 @@ class ApplyOutboundStorageHandler(BaseHandler):
             "fulfillment_lines": applied,
             "transportation_fee": transportation_fee,
             "palletization_fee": palletization_fee,
+            "destination_warehouse_code": destination_warehouse_code,
         }
 
 

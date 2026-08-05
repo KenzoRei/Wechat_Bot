@@ -99,6 +99,7 @@ _TXN_TYPE_LABELS = {
     "inbound": "入库", "outbound": "出库",
     "convert_in": "转换入", "convert_out": "转换出",
     "move_in": "调拨入", "move_out": "调拨出",
+    "transfer_in": "转仓入", "transfer_out": "转仓出",
     "adjust": "调整", "recount": "盘点",
 }
 
@@ -285,7 +286,15 @@ def _completion_result_sections_builder(context: dict, db: DBSession) -> list[di
     incidentally reveal aggregate business volume unrelated to that customer.
     """
     target = context.get("_uchoice_target", {})
-    return _warehouse_storage_summary_sections(db, target.get("warehouse_code"), "仓当前库存")
+    sections = _warehouse_storage_summary_sections(db, target.get("warehouse_code"), "仓当前库存")
+
+    # Inter-warehouse transfer — also show the destination warehouse's
+    # updated storage, since this one confirmation just changed both sides.
+    destination_warehouse_code = context.get("result", {}).get("destination_warehouse_code")
+    if destination_warehouse_code:
+        sections += _warehouse_storage_summary_sections(db, destination_warehouse_code, "仓当前库存")
+
+    return sections
 
 
 def _adjust_result_sections_builder(context: dict, db: DBSession) -> list[dict]:
