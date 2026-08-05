@@ -7,7 +7,7 @@ from jobs.session_expiry import run_expiry_check
 from jobs.uchoice_daily import run_uchoice_daily
 from jobs.uchoice_invoice import run_uchoice_invoice
 from api import health, webhook, labels, admin_panel
-from api.admin import groups, members, services, reference, logs, sessions, roles
+from api.admin import groups, members, services, reference, logs, sessions, roles, invoices
 
 
 # ── Scheduler setup ───────────────────────────────────────────────────────────
@@ -74,3 +74,4 @@ app.include_router(reference.router)
 app.include_router(logs.router)
 app.include_router(sessions.router)
 app.include_router(roles.router)
+app.include_router(invoices.router)

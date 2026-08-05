@@ -1,9 +1,9 @@
 # Data Model
 # Logistics WeChat Bot Platform — v1
 
-**Version:** 2.0 — consolidated on rebuild
-**Date:** 2026-08-03
-**Status:** Finalized
+**Version:** 2.1 — U-Choice pipeline added (V3–V8)
+**Date:** 2026-08-05
+**Status:** Finalized (base platform); U-Choice implemented and live-tested, see `docs/uchoice-design.md` for the original design reasoning and `docs/ops/adding-a-service.md` for the process used to build it out
 
 ---
 
@@ -128,6 +128,76 @@ erDiagram
     conversation_session ||--o| request_log : "becomes"
 ```
 
+### U-Choice tables (added V3–V8)
+
+Deliberately a separate diagram — these tables have **no `group_id`**, on
+purpose. U-Choice owns its own packing-supply inventory; it's not a
+multi-tenant 3PL storing separate customers' goods, so there's no "whose
+pallets" question for these tables to answer. See `docs/uchoice-design.md`
+for the full reasoning.
+
+```mermaid
+erDiagram
+    uchoice_sku {
+        varchar sku_code PK
+        varchar description
+    }
+
+    uchoice_storage {
+        varchar warehouse_code PK
+        varchar sku_code PK_FK
+        integer boxes_per_pallet PK
+        integer pallet_count
+        timestamptz updated_at
+    }
+
+    uchoice_storage_txn {
+        uuid txn_id PK
+        varchar warehouse_code
+        varchar sku_code
+        integer boxes_per_pallet
+        integer pallet_delta
+        varchar txn_type
+        uuid request_log_id FK
+        text note
+        varchar created_by
+        timestamptz created_at
+    }
+
+    uchoice_address {
+        uuid address_id PK
+        varchar company_name
+        varchar charge_type
+        text addr
+        varchar warehouse_code
+        text note
+        varchar created_by
+        timestamptz created_at
+    }
+
+    uchoice_storage_fee_ledger {
+        uuid ledger_id PK
+        varchar warehouse_code
+        date fee_date
+        integer pallet_count
+        numeric storage_fee
+    }
+
+    interaction_log {
+        uuid interaction_id PK
+        varchar wechat_openid
+        uuid group_id FK
+        varchar intent
+        varchar intent_type
+        uuid service_type_id FK
+        uuid request_log_id FK
+        timestamptz created_at
+    }
+
+    uchoice_sku ||--o{ uchoice_storage : "tracked as"
+    uchoice_storage_txn }o--o| request_log : "caused by"
+```
+
 ---
 
 ## Table Summary
@@ -144,6 +214,12 @@ erDiagram
 | `workflow_step` | Ordered steps per workflow | Config |
 | `conversation_session` | Active multi-turn conversations | Runtime (temporary) |
 | `request_log` | Permanent request history | Runtime (permanent) |
+| `interaction_log` | Write-once log of every classified message, regardless of outcome — funnel/efficiency analysis | Runtime (permanent, append-only) |
+| `uchoice_sku` | U-Choice's 8-product catalog (stretch wrap, tape) | Config |
+| `uchoice_storage` | Current balance per (warehouse, sku, boxes_per_pallet) bucket — **no `group_id`**, company-wide inventory | Runtime |
+| `uchoice_storage_txn` | Audit log of every storage mutation | Runtime (permanent) |
+| `uchoice_address` | Shared address book for outbound destinations and inter-warehouse transfers — **no `group_id`** | Config/Runtime |
+| `uchoice_storage_fee_ledger` | Daily storage-fee snapshot per warehouse, populated by `jobs/uchoice_daily.py` | Runtime (permanent) |
 
 ---
 
@@ -182,6 +258,7 @@ One row per WeChat group chat. The root of all group-scoped data.
 | `is_active` | boolean | NOT NULL | `true` | If false, `access_control.check_access()` silently ignores all messages from this group — no reply sent |
 | `daily_request_limit` | integer | nullable | — | Per-group daily cap. NULL = unlimited. **Column exists but is not yet enforced anywhere in code** |
 | `context` | JSONB | nullable | — | Free-form group knowledge injected into the AI prompt — currently used for `location_presets` (named shipper/recipient address shortcuts like "LAX", "DE") |
+| `group_robot_webhook_url` | text | nullable | — | *(V3)* WeChat Work Group Robot Webhook URL — a persistent, static URL (unlike `response_url`, single-use per inbound message). Used for scheduled/proactive pushes: daily broadcast, monthly invoice, cross-group completion notifications, and file attachments (`response_url` cannot send files at all — confirmed against the official docs; file delivery is only possible via this webhook, meaning it always goes to the whole group, never privately to one requester). NULL = these pushes silently no-op for that group. |
 | `created_at` / `updated_at` | timestamptz | NOT NULL | `now()` | Standard audit timestamps |
 
 ### `group_member`
@@ -193,6 +270,7 @@ Who can talk to the bot in a given group, and what role they hold there. Composi
 | `group_id` | UUID | PK (2/2), FK → `group_config.group_id` ON DELETE CASCADE | — | Which group this membership row applies to |
 | `role_id` | UUID | NOT NULL, FK → `role.role_id` ON DELETE RESTRICT | — | Which role this member holds in this group. Resolved to a role *name* string (e.g. `"admin"`) before being loaded into the AI prompt context and into `AccessResult.role` |
 | `display_name` | varchar(200) | nullable | — | Name shown in bot replies, confirmation templates, and request logs. Scoped per-group deliberately — same person can have a different display name in different groups |
+| `warehouse_code` | varchar(20) | nullable | — | *(V3)* Which U-Choice warehouse (`JFK`/`DE`) this member is responsible for. Required-for-`warehouseman`/cleared-on-role-change-away is enforced at the API layer (`api/admin/members.py`), not a DB CHECK — a CHECK can't reach across the FK to know the role's name |
 | `is_active` | boolean | NOT NULL | `true` | Suspended members get a permission-denied reply instead of being silently ignored |
 | `joined_at` / `updated_at` | timestamptz | NOT NULL | `now()` | Audit timestamps |
 
@@ -250,8 +328,11 @@ Defines one kind of request the bot can handle — what fields the AI must colle
 | `description` | varchar(500) | nullable | — | Human-readable summary, shown in `/admin/service-types` |
 | `input_schema` | JSONB | NOT NULL | `'{}'` | Tells the AI what to collect from the *customer*: `{required: [...], optional: [...], field_hints: {...}}`. Sent to the AI verbatim (minus credentials) inside the system prompt |
 | `group_config_schema` | JSONB | NOT NULL | `'{}'` | Tells the admin API what to require in `group_service.config` when assigning this service to a group. Same `{required, optional, field_hints}` shape as `input_schema`, different purpose |
-| `confirmation_note` | text | nullable | — | Optional disclaimer appended to the confirmation message shown to the customer before they confirm (e.g. billing terms) |
+| `confirmation_note` | text | nullable | — | Optional disclaimer appended to the confirmation message shown to the customer before they confirm (e.g. billing terms). **Must be Chinese** — it renders verbatim in an otherwise-Chinese message; every note in the original U-Choice seed data was written in English and had to be translated in a follow-up migration once this was noticed live |
 | `is_active` | boolean | NOT NULL | `true` | Inactive service types are excluded from `/admin/service-types` and from `allowed_services` in access control |
+| `requires_confirmation` | boolean | NOT NULL | `true` | *(V3)* `false` skips the confirm/cancel template entirely — the workflow executes immediately once `all_fields_collected` fires. Used by pure read-only queries (`view_storage`, `view_storage_history`, `view_invoice`) |
+| `targets_existing_request` | boolean | NOT NULL | `false` | *(V3)* `true` means this service locates and updates an existing `request_log` row (by `reference_serial`) instead of creating a new one — the `confirm_inbound_completion`/`confirm_outbound_completion` pattern. See `docs/ops/adding-a-service.md` §7 for the direction-check gap this pattern needs to guard against |
+| `awaits_completion` | boolean | NOT NULL | `false` | *(V4)* `true` means confirming this service does NOT mean the job is done — the log stays at `status='processing'` until a separate `targets_existing_request` service later completes it. `uchoice_inbound_request`/`uchoice_outbound_request` only. Added after a real bug: without this flag, `workflow_engine` marked these `'success'` the instant the customer confirmed, before any physical warehouse work happened |
 | `created_at` | timestamptz | NOT NULL | `now()` | Audit timestamp |
 
 ### `workflow`
@@ -287,12 +368,12 @@ One in-flight request. Ephemeral by design — represents "where a customer curr
 | `status` | varchar(30) | NOT NULL | `"active"` | One of `active`, `pending_confirmation`, `completed`, `cancelled`, `rejected`, `failed`, `timed_out`. Only `active`/`pending_confirmation` count as "in progress" — that's what `session_manager.find_current_session()` filters on |
 | `conversation_history` | JSONB (list) | NOT NULL | `'[]'` | Full `[{role, content}, ...]` turn history, sent to the AI on every call so it has conversational memory |
 | `collected_fields` | JSONB (dict) | NOT NULL | `'{}'` | Accumulated `extracted_fields` from the AI across turns — this becomes `context["collected_fields"]` that handlers read from |
-| `request_log_id` | UUID | nullable | — | Set once `_trigger_confirmation()` fires — links forward to the permanent `request_log` row created at that point. **Not a DB-level FK** (added via `ALTER TABLE` after `request_log` existed, to avoid a circular dependency at table-creation time — see Key Design Decisions) |
+| `request_log_id` | UUID | nullable | — | Set as soon as the request_log row is created/resolved — at `new_request` time for ordinary services *(changed V3)*, or once the target is resolved for `targets_existing_request` services (points at the *target's* row, not a new one — see `service_type.targets_existing_request`). **Not a DB-level FK** (added via `ALTER TABLE` after `request_log` existed, to avoid a circular dependency at table-creation time — see Key Design Decisions) |
 | `expires_at` | timestamptz | NOT NULL | `now() + 1 hour` | Reset on every new message (`session_manager.add_message()`); a background job (`jobs/session_expiry.py`, runs every 5 min) closes sessions past this and notifies the user |
 | `created_at` / `updated_at` | timestamptz | NOT NULL | `now()` | Audit timestamps |
 
 ### `request_log`
-The permanent audit trail. **Only created once a request reaches `all_fields_collected = true`** — messages that never get that far (unrecognized, access-denied, abandoned mid-collection) leave no row here at all, only a `conversation_session` status change.
+The permanent audit trail. **Created as soon as a service is resolved at `new_request` time** *(changed V3 — was "once `all_fields_collected = true`")*, status `pending`, so every resolved request is logged regardless of eventual outcome (confirmed, cancelled, or abandoned) — this also fixed a pre-existing bug where cancelling a request never touched `request_log` at all. Messages that never resolve to a service (unrecognized, access-denied) still leave no row here, only a `conversation_session` status change. Exception: `targets_existing_request` services never create their own row — they update the *target's* row instead.
 
 | Column | Type | Null? | Default | Purpose |
 |---|---|---|---|---|
@@ -301,14 +382,86 @@ The permanent audit trail. **Only created once a request reaches `all_fields_col
 | `wechat_openid` | varchar(128) | NOT NULL | — | Who submitted the request |
 | `group_id` | UUID | nullable, FK → `group_config.group_id` ON DELETE SET NULL | — | Which group. SET NULL (not CASCADE) so historical logs survive a group being deleted |
 | `service_type_id` | UUID | nullable, FK → `service_type.service_type_id` ON DELETE SET NULL | — | Which service. Same SET NULL rationale |
-| `status` | varchar(20) | NOT NULL | `"processing"` | `processing` → `success` \| `failed` \| `timed_out` |
+| `status` | varchar(20) | NOT NULL | `"pending"` *(V5, was `"processing"`)* | Lifecycle (expanded V3): `pending` (awaiting customer confirm) → `processing` (confirmed, awaiting completion — momentary for single-shot services like FedEx, long-lived for U-Choice's two-step inbound/outbound flow) → `success` \| `failed` \| `cancelled` \| `timed_out` \| `stale` (a `processing` request that sat >7 days with no warehouse completion — retired daily by `jobs/uchoice_daily.py`) |
 | `raw_message` | text | NOT NULL | — | The exact message that triggered `all_fields_collected` — kept verbatim for dispute resolution |
 | `parsed_input` | JSONB | NOT NULL | `'{}'` | Snapshot of `collected_fields` at confirmation time |
 | `result` | JSONB | nullable | — | Whatever the workflow's handlers returned — tracking number, label base64, OMS work order number, etc. Shape varies by service type; there is no fixed schema for this column |
 | `error_detail` | text | nullable | — | Exception message if `status = failed` |
 | `wechat_msg_id` | varchar(128) | nullable, UNIQUE | — | The WeChat message ID that triggered this log entry — doubles as a dedup safety net at the DB level, on top of the in-memory dedup in `api/webhook.py` |
-| `created_at` | timestamptz | NOT NULL | `now()` | When the request was logged (confirmation-trigger time, not submission time) |
-| `completed_at` | timestamptz | nullable | — | Set when status moves to a terminal state |
+| `created_at` | timestamptz | NOT NULL | `now()` | When the request was logged — now `new_request` time, not confirmation-trigger time (see note above) |
+| `completed_at` | timestamptz | nullable | — | Set when status moves to a terminal state. `core/uchoice_invoice.py`'s `compute_invoice()` bills by this, not `created_at` — a request submitted July 31 but physically fulfilled August 2 belongs to August's invoice |
+
+### `interaction_log` *(V3)*
+Write-once, append-only. One row per incoming message once intent is classified, **regardless of outcome** (including small talk and rejected/unrecognized messages) — separate from `request_log`, which only covers requests that resolved to an actual service. Purpose: funnel/efficiency analysis ("what fraction of a group's traffic becomes real work") without the stricter lookup/update semantics `request_log` needs.
+
+| Column | Type | Null? | Default | Purpose |
+|---|---|---|---|---|
+| `interaction_id` | UUID | PK | `gen_random_uuid()` | Internal identifier |
+| `wechat_openid` | varchar(128) | NOT NULL | — | Who sent the message |
+| `group_id` | UUID | nullable, FK → `group_config.group_id` ON DELETE SET NULL | — | Which group |
+| `intent` | varchar(30) | NOT NULL | — | The AI's raw classification (`new_request`, `continuation`, `confirm`, `cancel`, `check_services`, `unrecognized`), plus `rejected` (set by the workflow engine, not the AI, when access control or service lookup fails) |
+| `intent_type` | varchar(20) | NOT NULL | — | Derived category for cheap `GROUP BY` analysis: `new_request`/`continuation`/`confirm` → `productive`, `cancel` → `abandoned`, `check_services` → `informational`, `unrecognized` → `noise`, `rejected` → `denied` |
+| `service_type_id` | UUID | nullable, FK → `service_type.service_type_id` ON DELETE SET NULL | — | Which service, if resolved |
+| `request_log_id` | UUID | nullable, FK → `request_log.log_id` ON DELETE SET NULL | — | Linked request, if one was created |
+| `created_at` | timestamptz | NOT NULL | `now()` | When |
+
+### `uchoice_sku` *(V3)*
+Catalog of the 8 real U-Choice products (stretch wrap, packing tape) — excludes `uchoice_plt` (通用托盘, a unit-of-measure helper, not a trackable/shippable product).
+
+| Column | Type | Null? | Default | Purpose |
+|---|---|---|---|---|
+| `sku_code` | varchar(50) | PK | — | e.g. `s1`, `t4` — referenced by `uchoice_storage`, `uchoice_storage_txn`, and every SKU-carrying `request_log.result`/`collected_fields` |
+| `description` | varchar(200) | NOT NULL | — | Human-readable product name, e.g. "T4 2-inch Clear Packing Tape". This is what every confirmation/response builder resolves `sku_code` to via `core/uchoice_context.py`'s `sku_label_map()` — a raw `sku_code` should never reach a customer's screen |
+
+### `uchoice_storage` *(V3)* — **no `group_id`**
+Current balance per `(warehouse, sku, boxes_per_pallet)` bucket.
+
+| Column | Type | Null? | Default | Purpose |
+|---|---|---|---|---|
+| `warehouse_code` | varchar(20) | PK (1/3) | — | `JFK` or `DE` — the only two warehouses |
+| `sku_code` | varchar(50) | PK (2/3), FK → `uchoice_sku.sku_code` | — | Which product |
+| `boxes_per_pallet` | integer | PK (3/3) | — | **A free integer, not a pre-registered catalog value.** Buckets are created dynamically the first time a given box-count occurs — real box counts drift from ad-hoc partial picks (an 80-box pallet becomes a 77-box pallet after a 3-box pick), so there's no fixed enumeration of valid configs |
+| `pallet_count` | integer | NOT NULL, `CHECK (pallet_count >= 0)` | `0` | Current balance. The CHECK is the negative-balance safety net — `core/uchoice_storage.py`'s `apply_storage_delta()` catches the resulting DB error and turns it into a clean "库存不足" message rather than leaking the raw constraint error |
+| `updated_at` | timestamptz | NOT NULL | `now()` | Audit timestamp |
+
+### `uchoice_storage_txn` *(V3)* — **no `group_id`**
+Audit log — every mutation to `uchoice_storage` writes exactly one row here, via the shared `apply_storage_delta()` (`core/uchoice_storage.py`) — no other code path writes to either table.
+
+| Column | Type | Null? | Default | Purpose |
+|---|---|---|---|---|
+| `txn_id` | UUID | PK | `gen_random_uuid()` | Internal identifier |
+| `warehouse_code` / `sku_code` / `boxes_per_pallet` | — | NOT NULL | — | Which bucket this transaction affected |
+| `pallet_delta` | integer | NOT NULL | — | Signed change applied |
+| `txn_type` | varchar(20) | NOT NULL, `CHECK IN (...)` | — | `inbound`, `outbound`, `convert_in`/`convert_out` (customer-fulfillment loose-box picks), `move_in`/`move_out` (internal warehouse repackaging — same arithmetic as convert, deliberately distinct type so `view_storage_history` can tell them apart), `adjust`, `recount` |
+| `request_log_id` | UUID | nullable, FK → `request_log.log_id` ON DELETE SET NULL | — | Which request caused this, if any |
+| `note` | text | nullable | — | Free text, e.g. an `adjust_storage` reason |
+| `created_by` | varchar(128) | NOT NULL | — | `wechat_openid` of whoever triggered it |
+| `created_at` | timestamptz | NOT NULL | `now()` | When |
+
+### `uchoice_address` *(V3)* — **no `group_id`**
+Shared, company-wide address book — outbound shipping destinations and inter-warehouse transfer addresses.
+
+| Column | Type | Null? | Default | Purpose |
+|---|---|---|---|---|
+| `address_id` | UUID | PK | `gen_random_uuid()` | Referenced by `uchoice_outbound_request.destination_address_id` |
+| `company_name` | varchar(200) | NOT NULL | — | Shown resolved (not the raw `address_id`) in every confirmation/response — this was a real bug, fixed after the address side of `uchoice_outbound_request`'s confirmation was found showing a raw UUID |
+| `charge_type` | varchar(20) | NOT NULL, `CHECK IN ('short_delivery','delivery','truck_transfer')` | — | Delivery method tier, not distance — renamed from an initial `distance_tier` naming. Always shown with its rate via `core/confirmation.py`'s `charge_type_label()`, e.g. "卡车转仓（$85）" |
+| `addr` | text | NOT NULL | — | Free-text address |
+| `warehouse_code` | varchar(20) | **required as of V7** (enforced at the `input_schema` level, not a DB NOT NULL) | — | Which warehouse this address is associated with — every address, not just `truck_transfer` ones, per explicit decision |
+| `note` | text | nullable | — | Free text, e.g. a nickname |
+| `created_by` | varchar(128) | NOT NULL | — | Who created/last updated it |
+| `created_at` | timestamptz | NOT NULL | `now()` | Audit timestamp |
+
+### `uchoice_storage_fee_ledger` *(V3)* — **no `group_id`**
+One row per warehouse per day, populated by `jobs/uchoice_daily.py`'s daily job — sums `uchoice_storage.pallet_count` across all SKUs for a warehouse × `$1/pallet/day`.
+
+| Column | Type | Null? | Default | Purpose |
+|---|---|---|---|---|
+| `ledger_id` | UUID | PK | `gen_random_uuid()` | Internal identifier |
+| `warehouse_code` | varchar(20) | NOT NULL | — | Which warehouse |
+| `fee_date` | date | NOT NULL | — | Which day. `UNIQUE(warehouse_code, fee_date)` — one snapshot per warehouse per day, upserted if the job reruns |
+| `pallet_count` | integer | NOT NULL | — | Total pallets across all SKUs that day |
+| `storage_fee` | numeric(10,2) | NOT NULL | — | `pallet_count × $1`. Summed by `core/uchoice_invoice.py`'s `compute_invoice()` for the storage-fee line item |
 
 ---
 
@@ -325,13 +478,19 @@ The permanent audit trail. **Only created once a request reaches `all_fields_col
 
 | File | Purpose | Run order |
 |---|---|---|
-| `db/migrations/V1__initial_schema.sql` | Creates all 10 tables, indexes, constraints — the schema exactly as it exists today | 1st |
+| `db/migrations/V1__initial_schema.sql` | Creates all 10 base-platform tables, indexes, constraints | 1st |
 | `db/migrations/V2__seed_catalog.sql` | Seeds `role` (`admin`, `customer`), `service_type` (`fedex_label`, `ups_label`), `workflow`/`workflow_step` (`fedex_workorder`, `ups_only`) — the global catalog only, no group-specific data | 2nd |
+| `db/migrations/V3__uchoice_catalog.sql` | The whole U-Choice pipeline: `service_type`/`group_member`/`group_config`/`request_log` schema changes, `interaction_log` + all 5 `uchoice_*` tables, `warehouseman`/`accountant` roles, SKU catalog seed, inter-warehouse address seed, 12 U-Choice `service_type` rows + workflows | 3rd |
+| `db/migrations/V4__request_lifecycle_fix.sql` | Adds `service_type.awaits_completion` — fixes a real bug found via live testing (see that column's entry above) | 4th |
+| `db/migrations/V5__completion_flow_fixes.sql` | `reference_serial` required for both completion services; translates all 9 English `confirmation_note` values to Chinese | 5th |
+| `db/migrations/V6__storage_history_range.sql` | `view_storage_history`: `target_month` → `start_month`/`end_month`, multi-month range support | 6th |
+| `db/migrations/V7__address_warehouse_required.sql` | `uchoice_address.warehouse_code` required for every address | 7th |
+| `db/migrations/V8__invoice_range.sql` | `view_invoice`: same range change as V6 | 8th |
 
-**Consolidated 2026-08-03.** The original history (V1 → V7, built incrementally through Phase 6 testing) accumulated real churn worth knowing about if you ever need to reconstruct it from git: a duplicate `V4__*.sql` filename from a dead-end column-add attempt, an `input_schema` that was seeded wrong in V2 and rewritten in V4, a two-service `fedex_label`/`fedex_oms_label` split later merged into one service with `oms_outbound_order_no` as an optional field, and a `group_member.role` string column migrated to a `role_id` FK via an add-column/backfill/drop-column dance (only necessary because it ran against live data). None of that history carries forward — this file represents the current design, seeded fresh.
+**Consolidated 2026-08-03 (V1/V2).** The original history (V1 → V7, built incrementally through Phase 6 testing) accumulated real churn worth knowing about if you ever need to reconstruct it from git: a duplicate `V4__*.sql` filename from a dead-end column-add attempt, an `input_schema` that was seeded wrong in V2 and rewritten in V4, a two-service `fedex_label`/`fedex_oms_label` split later merged into one service with `oms_outbound_order_no` as an optional field, and a `group_member.role` string column migrated to a `role_id` FK via an add-column/backfill/drop-column dance (only necessary because it ran against live data). None of that history carries forward past that point.
+
+**V3 onward were all found and fixed through actually building and testing the U-Choice pipeline** (not a second consolidation) — several (V4, V5, V6/V8, V7) are direct fixes for gaps found via live testing or user review after V3 shipped. This is the expected pattern going forward: real bugs get their own small migration, not a rewrite of the one that introduced them.
 
 Group-specific setup (registering a group, adding members with roles, assigning services with credentials, granting service-role permissions) is **not** in any migration file — it's done live via the Admin API onboarding flow. See `docs/ops/admin-api-reference.md` → "Typical Onboarding Flow".
 
-**Adding new service types or workflows in future versions:**
-Create a new numbered file — `V3__add_rate_quote.sql`, `V4__add_warehouse_in.sql`, etc.
-Never edit existing migration files after deployment.
+**Adding new service types or workflows in future versions:** see `docs/ops/adding-a-service.md` for the full process, not just the migration step. Short version: create a new numbered file, never edit an existing one after it's been applied to a real database.

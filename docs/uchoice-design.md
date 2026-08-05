@@ -1,10 +1,18 @@
 # U-Choice Pipeline — Design Reference
 # Logistics WeChat Bot Platform — V1.1/V2 expansion
 
-**Status:** Design locked, not yet implemented. This document is the source of truth
-for writing the V3 migration + handlers. Written to preserve an extended design
-conversation before context was lost — if anything here conflicts with a later
-decision, the later decision wins, but check with the user before assuming so.
+**Status:** Implemented (V3–V8) and live-tested as of 2026-08-05. This document
+is the **original design record** — it captures the reasoning behind the
+decisions below, and most of it still holds, but a number of specifics were
+found wrong or incomplete only once actually built and tested against a real
+DB and a real AI model (multi-month date ranges, several confirmation/response
+formatting bugs, a request-lifecycle gap, a cross-direction validation gap —
+see `docs/data-model.md`'s per-column notes and the migration list there for
+exactly what changed and why). For current schema, read `docs/data-model.md`.
+For the process to follow when adding another service, read
+`docs/ops/adding-a-service.md` — it was written directly from what broke and
+had to be fixed while building this pipeline. If this document conflicts with
+either of those on any concrete detail, they win.
 
 **Business model, established through this design pass:** U-Choice is a company
 that owns and distributes its own packing-supply product line (stretch wrap, tape).

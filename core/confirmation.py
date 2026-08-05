@@ -7,6 +7,7 @@ that go into it — mirroring handlers/registry.py's idiom. Most services
 """
 from typing import Callable
 from sqlalchemy.orm import Session as DBSession
+from core.message_sections import render_sections
 
 
 def build_confirmation_message(
@@ -25,14 +26,7 @@ def build_confirmation_message(
         f"服务类型：{service_display_name}",
     ]
 
-    for section in sections:
-        lines += ["", f"**{section['label']}**"]
-        if section["type"] == "kv":
-            for key, val in section["items"].items():
-                lines.append(f"- {key}：{val}")
-        else:  # "list"
-            for item in section["items"]:
-                lines.append(f"- {item}")
+    lines += render_sections(sections)
 
     lines += ["", '回复 **确认** 提交申请，或 **取消** 放弃。']
 
@@ -56,6 +50,9 @@ _DISPLAY_NAMES = {
     "move_storage":               "库存内部调拨",
     "upsert_address":             "地址簿更新",
     "role_change":                "角色变更",
+    "view_storage":               "查询库存",
+    "view_storage_history":       "库存变动记录",
+    "view_invoice":               "费用报告",
 }
 
 
@@ -106,12 +103,55 @@ def _field_label(field_key: str) -> str:
     return _FIELD_LABELS.get(field_key, field_key)
 
 
+_CHARGE_TYPE_LABELS = {
+    "short_delivery":  "短途配送",
+    "delivery":        "普通配送",
+    "truck_transfer":  "卡车转仓",
+}
+
+
+def charge_type_label(code: str | None) -> str:
+    from core.uchoice_rates import CHARGE_TYPE_RATES
+    label = _CHARGE_TYPE_LABELS.get(code, code or "?")
+    rate = CHARGE_TYPE_RATES.get(code)
+    return f"{label}（${rate}）" if rate is not None else label
+
+
+_ROLE_LABELS = {
+    "admin":        "管理员",
+    "customer":     "客户",
+    "warehouseman": "仓库管理员",
+    "accountant":   "财务",
+}
+
+
+def role_label(code: str | None) -> str:
+    return _ROLE_LABELS.get(code, code or "?")
+
+
+def member_display_label(db: DBSession, wechat_openid: str | None) -> str:
+    """
+    Resolves a wechat_openid to "display_name（wechat_openid）" for confirm/
+    response messages, falling back to the bare ID if unresolvable. Looked
+    up by wechat_openid alone (GroupMember's real PK also includes group_id,
+    not available to confirmation builders) — acceptable given the current
+    one-shared-group-per-deployment model, and the raw ID is always shown
+    alongside as the authoritative value regardless.
+    """
+    from models.group import GroupMember
+    if not wechat_openid:
+        return "?"
+    member = db.query(GroupMember).filter_by(wechat_openid=wechat_openid).first()
+    if member and member.display_name:
+        return f"{member.display_name}（{wechat_openid}）"
+    return wechat_openid
+
+
 # ── SKU label resolution ─────────────────────────────────────────────────────
 
 def _sku_label_map(db: DBSession) -> dict[str, str]:
-    """sku_code -> human-readable description, e.g. 't4' -> 'T4 2-inch Clear Packing Tape'."""
-    from models.uchoice import UchoiceSku
-    return {s.sku_code: s.description for s in db.query(UchoiceSku).all()}
+    from core.uchoice_context import sku_label_map
+    return sku_label_map(db)
 
 
 def _sku_label(sku_labels: dict[str, str], sku_code: str) -> str:
@@ -141,42 +181,70 @@ def _label_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]
 
 
 def _inbound_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
-    """uchoice_inbound_request — resolve sku_code to a human-readable product name."""
+    """
+    uchoice_inbound_request — resolve sku_code to a human-readable product
+    name, highlight quantity with WeChat markdown's supported color tag, and
+    only show what actually matters at confirm time: warehouse + qty per
+    line. needs_unpacking is only shown when true — no boilerplate "否" line.
+
+    Sorted by (sku_code, boxes_per_pallet) rather than the order the AI
+    happened to extract them in — also avoids a dict-collision bug: keying
+    by product label alone would silently drop a second line for the same
+    SKU at a different boxes_per_pallet (a legitimate case per the design's
+    free-boxes_per_pallet model), so this uses a plain sorted list instead.
+    """
     sku_labels = _sku_label_map(db)
-    items = {}
-    for line in collected_fields.get("sku_lines", []) or []:
+    raw_lines = collected_fields.get("sku_lines", []) or []
+    sorted_lines = sorted(raw_lines, key=lambda l: (l.get("sku_code", ""), l.get("boxes_per_pallet", l.get("box_count", 0))))
+
+    formatted = []
+    for line in sorted_lines:
         label = _sku_label(sku_labels, line.get("sku_code", "?"))
         if "box_count" in line:
-            items[label] = f"散箱 x{line['box_count']}"
+            qty = f'<font color="info">散箱 x{line["box_count"]}</font>'
         else:
-            items[label] = f"{line.get('pallet_count', '?')} 托 @ {line.get('boxes_per_pallet', '?')}/托"
+            pallet_count = line.get("pallet_count", "?")
+            bpp = line.get("boxes_per_pallet", "?")
+            qty = f'<font color="info">{pallet_count} 托</font> @ {bpp}/托'
+        formatted.append(f"{label}：{qty}")
 
-    sections = [{"label": "入库明细", "type": "kv", "items": items}]
-    if "needs_unpacking" in collected_fields:
+    warehouse_code = collected_fields.get("warehouse_code", "?")
+    sections = [{"label": f"入库明细（{warehouse_code} 仓）", "type": "list", "items": formatted}]
+
+    if collected_fields.get("needs_unpacking"):
         sections.append({
-            "label": "拆包费用",
-            "type": "kv",
-            "items": {"是否需要拆包": "是" if collected_fields.get("needs_unpacking") else "否"},
+            "label": None,
+            "type": "list",
+            "items": ['<font color="warning">需要拆包（+$300）</font>'],
         })
     return sections
 
 
 def _outbound_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
     """
-    uchoice_outbound_request — must surface the AI's largest-bucket default
-    explicitly (safety net for the no-guess rule), not silently apply it.
-    Also resolves sku_code to a human-readable product name.
+    uchoice_outbound_request — same treatment as uchoice_inbound_request:
+    sorted list (not dict, avoids the same same-SKU-different-bucket
+    collision), colored qty, warehouse in the section header. Still must
+    surface the AI's largest-bucket default explicitly (safety net for the
+    no-guess rule) — that note is a flagged AI assumption, not routine
+    boilerplate, so it stays even though other optional fields got trimmed.
+    destination_address_id is resolved to the real company/address, not
+    left as a raw UUID. new_pallet_count only shown when > 0.
     """
-    from models.uchoice import UchoiceStorage
+    from models.uchoice import UchoiceStorage, UchoiceAddress
+    from core.uchoice_rates import PALLETIZATION_PER_PALLET
 
     sku_labels = _sku_label_map(db)
-    warehouse_code = collected_fields.get("warehouse_code")
-    items = {}
-    for line in collected_fields.get("sku_lines", []) or []:
+    warehouse_code = collected_fields.get("warehouse_code", "?")
+    raw_lines = collected_fields.get("sku_lines", []) or []
+    sorted_lines = sorted(raw_lines, key=lambda l: (l.get("sku_code", ""), l.get("boxes_per_pallet", l.get("box_count", 0))))
+
+    formatted = []
+    for line in sorted_lines:
         sku = line.get("sku_code", "?")
         label = _sku_label(sku_labels, sku)
         if "box_count" in line:
-            items[label] = f"散箱 x{line['box_count']}"
+            formatted.append(f'{label}：<font color="info">散箱 x{line["box_count"]}</font>')
             continue
 
         bpp = line.get("boxes_per_pallet")
@@ -189,41 +257,154 @@ def _outbound_sections_builder(collected_fields: dict, db: DBSession) -> list[di
                 .first()
             )
             bpp = bucket.boxes_per_pallet if bucket else "未知"
-            default_note = "（系统自动选择的默认托盘规格，如有误请更正）"
-        items[label] = f"{line.get('pallet_count', '?')} 托 @ {bpp}/托{default_note}"
+            default_note = '　<font color="warning">（系统自动选择，如有误请更正）</font>'
+        pallet_count = line.get("pallet_count", "?")
+        formatted.append(f'{label}：<font color="info">{pallet_count} 托</font> @ {bpp}/托{default_note}')
 
-    sections = [{"label": "出库明细", "type": "kv", "items": items}]
-    if collected_fields.get("destination_address_id"):
-        sections.append({"label": "目的地", "type": "kv", "items": {"地址ID": collected_fields["destination_address_id"]}})
-    sections.append({"label": "打托费用", "type": "kv", "items": {"新增打托数": collected_fields.get("new_pallet_count", 0)}})
+    sections = [{"label": f"出库明细（{warehouse_code} 仓）", "type": "list", "items": formatted}]
+
+    dest_id = collected_fields.get("destination_address_id")
+    if dest_id:
+        addr = db.query(UchoiceAddress).filter_by(address_id=dest_id).first()
+        dest_label = f"{addr.company_name}（{addr.addr}）" if addr else "未知地址"
+        sections.append({"label": None, "type": "list", "items": [f"目的地：{dest_label}"]})
+
+    new_pallet_count = collected_fields.get("new_pallet_count")
+    if new_pallet_count:
+        fee = new_pallet_count * PALLETIZATION_PER_PALLET
+        sections.append({
+            "label": None, "type": "list",
+            "items": [f'需要打托 <font color="info">{new_pallet_count}</font> 托（+${fee}）'],
+        })
+
+    return sections
+
+
+def _inbound_completion_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
+    """
+    confirm_inbound_completion — must show the EFFECTIVE lines about to be
+    applied, whether the warehouseman restated them or they're defaulting
+    from the original request (reference_serial is now required, so it's
+    guaranteed present here — see V5 migration). Without this, a
+    warehouseman relying on the default could confirm completely blind to
+    what's about to be applied.
+    """
+    from core.uchoice_context import resolve_completion_target
+
+    reference_serial = collected_fields.get("reference_serial")
+    target, original_fields = resolve_completion_target(db, reference_serial)
+    if target is None:
+        msg = f"未找到申请编号 {reference_serial}" if reference_serial else "未能确定关联申请"
+        return [{"label": None, "type": "list", "items": [f"⚠️ {msg}"]}]
+
+    sku_labels = _sku_label_map(db)
+    restated = collected_fields.get("received_lines")
+    effective_lines = restated or original_fields.get("sku_lines", [])
+    sorted_lines = sorted(
+        effective_lines,
+        key=lambda l: (l.get("sku_code", ""), l.get("boxes_per_pallet", l.get("box_count", 0))),
+    )
+
+    formatted = []
+    for line in sorted_lines:
+        label = _sku_label(sku_labels, line.get("sku_code", "?"))
+        if "box_count" in line:
+            formatted.append(f'{label}：<font color="info">散箱 x{line["box_count"]}</font>')
+        else:
+            pallet_count = line.get("pallet_count", "?")
+            bpp = line.get("boxes_per_pallet", "?")
+            formatted.append(f'{label}：<font color="info">{pallet_count} 托</font> @ {bpp}/托')
+
+    warehouse_code = original_fields.get("warehouse_code", "?")
+    sections = [{"label": f"关联申请 {reference_serial}（{warehouse_code} 仓）", "type": "list", "items": formatted}]
+    if not restated:
+        sections.append({"label": None, "type": "list", "items": ["（沿用原申请数量，如实收数量有出入请重新说明）"]})
+    return sections
+
+
+def _outbound_completion_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
+    """confirm_outbound_completion — same treatment, plus loose-box convert-pair lines."""
+    from core.uchoice_context import resolve_completion_target
+
+    reference_serial = collected_fields.get("reference_serial")
+    target, original_fields = resolve_completion_target(db, reference_serial)
+    if target is None:
+        msg = f"未找到申请编号 {reference_serial}" if reference_serial else "未能确定关联申请"
+        return [{"label": None, "type": "list", "items": [f"⚠️ {msg}"]}]
+
+    sku_labels = _sku_label_map(db)
+    restated = collected_fields.get("fulfillment_lines")
+    effective_lines = restated or original_fields.get("sku_lines", [])
+    sorted_lines = sorted(
+        effective_lines,
+        key=lambda l: (l.get("sku_code", ""), l.get("boxes_per_pallet", l.get("box_count", l.get("source_boxes_per_pallet", 0)))),
+    )
+
+    formatted = []
+    for line in sorted_lines:
+        label = _sku_label(sku_labels, line.get("sku_code", "?"))
+        if "source_boxes_per_pallet" in line and "resulting_boxes_per_pallet" in line:
+            formatted.append(
+                f'{label}：<font color="info">散箱调整</font> '
+                f'{line["source_boxes_per_pallet"]}/托 → {line["resulting_boxes_per_pallet"]}/托'
+            )
+        elif "box_count" in line:
+            formatted.append(f'{label}：<font color="info">散箱 x{line["box_count"]}</font>')
+        else:
+            pallet_count = line.get("pallet_count", "?")
+            bpp = line.get("boxes_per_pallet", "?")
+            formatted.append(f'{label}：<font color="info">{pallet_count} 托</font> @ {bpp}/托')
+
+    warehouse_code = original_fields.get("warehouse_code", "?")
+    sections = [{"label": f"关联申请 {reference_serial}（{warehouse_code} 仓）", "type": "list", "items": formatted}]
+    if not restated:
+        sections.append({"label": None, "type": "list", "items": ["（按原申请数量发货，如实发数量有出入请重新说明）"]})
     return sections
 
 
 def _adjust_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
-    """adjust_storage — resolve sku_code to a human-readable product name."""
+    """
+    adjust_storage — same treatment as the other line-item services: sorted
+    list (not dict — avoids collision if two lines touch the same
+    sku+boxes_per_pallet with different reasons), colored delta, warehouse
+    in the section header.
+    """
     sku_labels = _sku_label_map(db)
-    items = {}
-    for line in collected_fields.get("adjustment_lines", []) or []:
+    warehouse_code = collected_fields.get("warehouse_code", "?")
+    raw_lines = collected_fields.get("adjustment_lines", []) or []
+    sorted_lines = sorted(raw_lines, key=lambda l: (l.get("sku_code", ""), l.get("boxes_per_pallet", 0)))
+
+    formatted = []
+    for line in sorted_lines:
         label = _sku_label(sku_labels, line.get("sku_code", "?"))
         bpp = line.get("boxes_per_pallet", "?")
         delta = line.get("pallet_delta", 0)
-        sign = "+" if isinstance(delta, (int, float)) and delta > 0 else ""
         reason = line.get("reason", "")
-        items[f"{label} @ {bpp}/托"] = f"{sign}{delta} 托（{reason}）" if reason else f"{sign}{delta} 托"
-    return [{"label": "库存调整明细", "type": "kv", "items": items}]
+        delta_str = f'<font color="info">{delta:+d}</font>' if isinstance(delta, int) else f'<font color="info">{delta}</font>'
+        line_str = f"{label} @ {bpp}/托：{delta_str} 托"
+        if reason:
+            line_str += f"（{reason}）"
+        formatted.append(line_str)
+
+    return [{"label": f"库存调整明细（{warehouse_code} 仓）", "type": "list", "items": formatted}]
 
 
 def _move_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
-    """move_storage — resolve sku_code to a human-readable product name."""
+    """move_storage — same treatment: sorted list, colored count, warehouse in the header."""
     sku_labels = _sku_label_map(db)
-    items = {}
-    for line in collected_fields.get("move_lines", []) or []:
+    warehouse_code = collected_fields.get("warehouse_code", "?")
+    raw_lines = collected_fields.get("move_lines", []) or []
+    sorted_lines = sorted(raw_lines, key=lambda l: (l.get("sku_code", ""), l.get("source_boxes_per_pallet", 0)))
+
+    formatted = []
+    for line in sorted_lines:
         label = _sku_label(sku_labels, line.get("sku_code", "?"))
         src = line.get("source_boxes_per_pallet", "?")
         tgt = line.get("target_boxes_per_pallet", "?")
         count = line.get("box_count_moved", "?")
-        items[label] = f"从 {src}/托 移动 {count} 箱到 {tgt}/托"
-    return [{"label": "库存调拨明细", "type": "kv", "items": items}]
+        formatted.append(f'{label}：从 {src}/托 移动 <font color="info">{count}</font> 箱到 {tgt}/托')
+
+    return [{"label": f"库存调拨明细（{warehouse_code} 仓）", "type": "list", "items": formatted}]
 
 
 def _recount_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
@@ -234,7 +415,7 @@ def _recount_sections_builder(collected_fields: dict, db: DBSession) -> list[dic
     from models.uchoice import UchoiceStorage
 
     sku_labels = _sku_label_map(db)
-    warehouse_code = collected_fields.get("warehouse_code")
+    warehouse_code = collected_fields.get("warehouse_code", "?")
     reported = {
         (l["sku_code"], l["boxes_per_pallet"]): l["pallet_count"]
         for l in collected_fields.get("inventory_lines", []) or []
@@ -242,28 +423,47 @@ def _recount_sections_builder(collected_fields: dict, db: DBSession) -> list[dic
     current_rows = db.query(UchoiceStorage).filter_by(warehouse_code=warehouse_code).all()
     current = {(r.sku_code, r.boxes_per_pallet): r.pallet_count for r in current_rows}
 
-    diff_items = {}
+    formatted = []
     for key in sorted(set(reported) | set(current)):
         sku, bpp = key
         before = current.get(key, 0)
         after = reported.get(key, 0)
         delta = after - before
-        if delta != 0:
-            sign = "+" if delta > 0 else ""
-            label = _sku_label(sku_labels, sku)
-            diff_items[f"{label} @ {bpp}/托"] = f"{before} → {after}（{sign}{delta}）"
+        if delta == 0:
+            continue
+        label = _sku_label(sku_labels, sku)
+        formatted.append(f'{label} @ {bpp}/托：{before} → {after}（<font color="info">{delta:+d}</font>）')
 
-    if not diff_items:
-        diff_items["（无变化）"] = ""
+    if not formatted:
+        formatted = ["（无变化）"]
 
-    return [{"label": f"{warehouse_code} 库存盘点差异", "type": "kv", "items": diff_items}]
+    return [{"label": f"{warehouse_code} 仓库存盘点差异", "type": "list", "items": formatted}]
 
 
 def _address_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
-    """upsert_address — must state create-vs-update mode explicitly."""
+    """upsert_address — must state create-vs-update mode explicitly. charge_type shown as its Chinese label, not the raw enum code."""
     mode = "更新" if collected_fields.get("matched_address_id") else "新增"
-    items = {_field_label(k): v for k, v in collected_fields.items() if k != "matched_address_id"}
+    items = {}
+    for k, v in collected_fields.items():
+        if k == "matched_address_id":
+            continue
+        items[_field_label(k)] = charge_type_label(v) if k == "charge_type" else v
     return [{"label": f"您正在{mode}此地址", "type": "kv", "items": items}]
+
+
+def _role_change_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
+    """role_change — resolve target_openid to a display name and new_role to its Chinese label."""
+    target_openid = collected_fields.get("target_openid")
+    new_role = collected_fields.get("new_role")
+    warehouse_code = collected_fields.get("warehouse_code")
+
+    items = {
+        "目标成员": member_display_label(db, target_openid),
+        "新角色":   role_label(new_role),
+    }
+    if warehouse_code:
+        items["负责仓库"] = warehouse_code
+    return [{"label": None, "type": "kv", "items": items}]
 
 
 def _default_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
@@ -274,12 +474,15 @@ def _default_sections_builder(collected_fields: dict, db: DBSession) -> list[dic
 CONFIRMATION_BUILDERS: dict[str, Callable[[dict, DBSession], list[dict]]] = {
     "fedex_label":              _label_sections_builder,
     "ups_label":                _label_sections_builder,
-    "uchoice_inbound_request":  _inbound_sections_builder,
-    "uchoice_outbound_request": _outbound_sections_builder,
+    "uchoice_inbound_request":    _inbound_sections_builder,
+    "uchoice_outbound_request":   _outbound_sections_builder,
+    "confirm_inbound_completion": _inbound_completion_sections_builder,
+    "confirm_outbound_completion": _outbound_completion_sections_builder,
     "adjust_storage":           _adjust_sections_builder,
     "recount_storage":          _recount_sections_builder,
     "move_storage":             _move_sections_builder,
     "upsert_address":           _address_sections_builder,
+    "role_change":              _role_change_sections_builder,
 }
 
 
