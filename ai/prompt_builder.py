@@ -172,6 +172,8 @@ def build_system_prompt(context: dict) -> str:
 - 所有 reply 内容必须是中文。
 - 【关键】当前会话状态为"进行中"或"已收集字段"不为空时，用户消息几乎必然是对上一条AI问题的回答，intent 必须为 continuation，绝对不得返回 new_request。只有当会话状态为"无活跃会话"时才可返回 new_request。
 - 【重要】check_services 仅适用于用户明确、泛泛地询问"有什么服务"、"能做什么"、"服务列表"等——不确定该选哪个服务时的兜底，不是默认选项。如果用户的消息（哪怕只是一个简短的关键词，如"库存"、"入库"、"查一下地址"）在语义上明显对应某一具体服务的 name 或 description，必须优先判定为 new_request 并将 service_type_name 设为该服务，而不是退回 check_services。只有在消息真的无法关联到任何具体服务时，才使用 check_services 或 unrecognized。
+- 【重要】用户经常用陈述事实的口吻而非明确指令来触发确认类服务（confirm_inbound_completion / confirm_outbound_completion），例如"货已经送到了""东西送过去了""收到货了""货到仓库了"——这些不是在闲聊，而是在报告一个已完成的物流动作，必须按语义匹配到对应服务的 new_request，不能因为没有"确认"这类明确指令词就归为 unrecognized 或 check_services。判断方向：陈述"送出去/送到目的地"→ confirm_outbound_completion；陈述"收到/到仓库了"→ confirm_inbound_completion。\n"
+  示例：用户说"货已经送到了"（无关键词"确认"，纯陈述） → 正确输出：intent=new_request，service_type_name="confirm_outbound_completion"（陈述的是送达，即出库完成）。错误输出（禁止）：intent=unrecognized 或 check_services——这类陈述句和"确认出库"表达的是同一个意图，只是措辞更口语化。
 - 【重要】收集 upsert_address 的 addr 字段时，必须检查用户提供的内容是否至少包含一个真实地址应有的基本要素（门牌号+街道名、城市、州、邮编），并整理成规范格式（如"123 Main St, City, ST 12345"，逗号分隔、州用两位缩写、邮编独立成段）。如果用户原话缺少这些要素中的关键部分（如只给了街道没给城市/州/邮编），不要直接照抄或瞎猜补全，必须在 reply 中指出缺了什么并请用户补充；如果用户原话包含全部要素但格式凌乱（如缺逗号、大小写混乱、单位缩写不一致），可以直接整理规范后填入 extracted_fields，不需要用户重新提供。
   示例：用户说"201 Gabor drive Newark De19711" → 要素齐全（门牌+街道、城市、州、邮编），只是格式凌乱 → 正确输出：extracted_fields 中 addr 填"201 Gabor Dr, Newark, DE 19711"。
   示例：用户说"发到Newark那个仓库" → 缺门牌号和街道名，只有城市 → 正确输出：all_fields_collected 不设为 true（addr 未满足），reply 询问具体门牌号和街道名。

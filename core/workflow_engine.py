@@ -133,6 +133,7 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
     else:
         session_manager.add_message(db, session, "assistant", ai_response.reply)
         send_message(context, ai_response.reply)
+        _close_if_no_pending_candidates(service, session, context, db)
 
 
 _REFERENCE_SERIAL_CANDIDATE_KEYS = {
@@ -163,6 +164,32 @@ def _autoresolve_single_candidate(context: dict, service: dict, session, db: DBS
     if len(candidates) != 1:
         return False
     session_manager.update_collected_fields(db, session, {"reference_serial": candidates[0]["serial_number"]})
+    return True
+
+
+def _close_if_no_pending_candidates(service: dict, session, context: dict, db: DBSession) -> bool:
+    """
+    A targets_existing_request session that still lacks reference_serial and
+    has zero pending candidates can never resolve — there's nothing to wait
+    for. Leaving it open anyway meant the user's next unrelated message got
+    routed as a `continuation` of this now-orphaned session instead of a
+    fresh new_request. Observed live: the AI, continuing a stuck
+    confirm_outbound_completion session with nothing concrete to anchor on,
+    drifted into talking about confirm_inbound_completion instead — a
+    confusing reply for a session that was never about inbound at all.
+    Closing here means the very next message starts clean.
+    """
+    if not service.get("targets_existing_request", False):
+        return False
+    if session.collected_fields.get("reference_serial"):
+        return False
+    candidate_key = _REFERENCE_SERIAL_CANDIDATE_KEYS.get(service["name"])
+    if not candidate_key:
+        return False
+    candidates = (context.get("uchoice_candidates") or {}).get(candidate_key) or []
+    if candidates:
+        return False
+    session_manager.close_session(db, session, status="cancelled")
     return True
 
 
@@ -337,6 +364,8 @@ def _handle_continuation(context: dict, ai_response: AIResponse, db: DBSession) 
     else:
         session_manager.add_message(db, session, "assistant", ai_response.reply)
         send_message(context, ai_response.reply)
+        if service is not None:
+            _close_if_no_pending_candidates(service, session, context, db)
 
 
 def _handle_confirm(context: dict, db: DBSession) -> None:
