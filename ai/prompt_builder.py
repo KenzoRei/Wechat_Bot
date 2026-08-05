@@ -135,7 +135,7 @@ def build_system_prompt(context: dict) -> str:
   · 状态为"无活跃会话"：即使用户第一句话就带着"确认"字样（例如仓管员对某个待处理申请说"确认入库 REQ-X"，或候选列表只有一条时说"确认"），也必须返回 new_request，而不是 confirm——这是在发起一个新的服务请求（如 confirm_inbound_completion 这类"确认收货"服务，name/description 里本身就包含"确认"字样，容易和 intent=confirm 混淆，但两者是完全不同的东西）。识别服务类型、按候选列表规则提取 reference_serial 等字段，字段齐全则 all_fields_collected=true，由系统生成确认摘要，用户看到摘要后的下一轮回复才是真正的 intent=confirm。
     示例：无活跃会话，候选列表中只有一条待处理入库申请 REQ-Y，用户消息是"确认入库" → 正确输出：intent=new_request，service_type_name="confirm_inbound_completion"，extracted_fields 中 reference_serial 填 REQ-Y，all_fields_collected=true（前提是其余必填字段已满足），reply 类似"好的，正在为您确认 REQ-Y 的入库"。错误输出（禁止）：intent=confirm——此时根本没有 session，没有摘要可言，会导致"未找到待确认的申请"报错。
   两种错误情况的共同后果：intent=confirm 但实际没有对应的待确认 session 时，系统会直接报错"未找到待确认的申请"，且这句话里提取的字段会被完全丢弃，用户必须重新发起。
-- cancel：用户取消了申请（"取消"或类似表达）。
+- cancel：用户取消了申请（"取消"、"算了"、"不要了"、"别弄了"等表达）。【重要】只要用户的意思是终止/放弃当前这个申请，就必须判定为 cancel，优先级高于候选列表匹配等其他逻辑——不要因为候选列表里有内容可以匹配，就把一句明确的取消话语误判为 continuation 或去追问选哪一条。
 - check_services：用户询问可使用哪些服务。在 reply 中用简短列表列出服务的中文名称（每项几个字即可，一行一个），不展开解释每项的详细用途，除非用户进一步追问某一项。
 - unrecognized：无法理解或与服务无关。礼貌提示用户重新描述。
 

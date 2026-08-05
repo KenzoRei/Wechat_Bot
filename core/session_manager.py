@@ -167,9 +167,27 @@ def _build_uchoice_candidates(
     Conditionally fetches candidate lists based on which service names this
     caller's role can trigger — no point injecting the member list for a
     customer who could never call role_change.
+
+    Once a session already has a locked-in service (mid-collection or
+    pending_confirmation), candidates are scoped to just that one service
+    instead of the caller's full role-wide set. Injecting everything the
+    role can ever reach — SKUs, pending inbound/outbound requests,
+    addresses, members — into every turn of an already-committed session
+    has been observed live to distract the AI into referencing an unrelated
+    candidate (e.g. surfacing a stray pending outbound request mid-way
+    through an unrelated view_invoice session) instead of correctly handling
+    the actual turn, including cancel. The full role-wide set is still used
+    for a brand-new session, where the service itself hasn't been chosen yet
+    and the AI legitimately needs the full picture to route the request.
     """
-    names = {s["name"] for s in access.allowed_services}
     by_name = {s["name"]: s["service_type_id"] for s in access.allowed_services}
+    by_id = {s["service_type_id"]: s["name"] for s in access.allowed_services}
+
+    if session is not None and session.service_type_id:
+        active_name = by_id.get(str(session.service_type_id))
+        names = {active_name} if active_name else set()
+    else:
+        names = {s["name"] for s in access.allowed_services}
     collected = session.collected_fields if session else {}
     scope_warehouse = collected.get("warehouse_code") or access.warehouse_code
 

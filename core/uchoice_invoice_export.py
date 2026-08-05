@@ -13,7 +13,7 @@ from openpyxl.styles import Font, Alignment
 from openpyxl.utils import get_column_letter
 
 from core.uchoice_invoice import compute_invoice, _resolve_range, _completed_logs, _ledger_rows
-from core.uchoice_context import sku_label_map
+from core.uchoice_context import sku_label_map, get_original_fields
 
 _HEADER_FONT = Font(bold=True)
 
@@ -58,8 +58,14 @@ def build_invoice_workbook(db: DBSession, warehouse_code: str, start_month: str,
     _autosize(ws)
 
     # ── Transportation & Palletization (outbound completions) ──────────────
+    from models.uchoice import UchoiceAddress
+
     ws2 = wb.create_sheet("Transportation & Palletization")
-    _write_header(ws2, 1, ["Serial Number", "Completed At (UTC)", "SKU Lines", "Transportation Fee", "Palletization Fee"])
+    _write_header(ws2, 1, [
+        "Serial Number", "Completed At (UTC)", "SKU Lines",
+        "Destination Company", "Destination Address",
+        "Transportation Fee", "Palletization Fee",
+    ])
     outbound_logs = _completed_logs(db, "uchoice_outbound_request", warehouse_code, start, end_exclusive)
     for log in outbound_logs:
         result = log.result or {}
@@ -68,10 +74,26 @@ def build_invoice_workbook(db: DBSession, warehouse_code: str, start_month: str,
             f"{sku_labels.get(l.get('sku_code'), l.get('sku_code', '?'))} x{l.get('pallet_count', l.get('box_count', '?'))}"
             for l in lines
         )
+
+        # destination isn't in result — it's on the original request, not the
+        # completion's own fields, so it's resolved the same way the
+        # confirmation/response builders do (core/uchoice_context.py).
+        destination_company = ""
+        destination_addr = ""
+        original_fields = get_original_fields(db, log)
+        destination_address_id = original_fields.get("destination_address_id")
+        if destination_address_id:
+            addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
+            if addr:
+                destination_company = addr.company_name
+                destination_addr = addr.addr
+
         ws2.append([
             log.serial_number,
             log.completed_at.strftime("%Y-%m-%d %H:%M") if log.completed_at else "",
             sku_summary,
+            destination_company,
+            destination_addr,
             float(Decimal(str(result.get("transportation_fee", 0)))),
             float(Decimal(str(result.get("palletization_fee", 0)))),
         ])
