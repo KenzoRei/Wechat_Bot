@@ -170,11 +170,17 @@ class ExplainServiceHandler(BaseHandler):
     Looks up the matched service_type by name and returns its stored
     description/keywords untouched — the AI's job (in prompt_builder.py) is
     only to identify WHICH service the user is asking about, never to author
-    or paraphrase the explanation itself. Not scoped to the caller's own
-    allowed_services: read-only info about what a service does isn't
-    sensitive, and in practice the AI can only match against services already
-    present in its own context anyway (see build_system_prompt), so this
-    mainly just avoids an unnecessary extra restriction.
+    or paraphrase the explanation itself.
+
+    Scoped to services actually granted to the caller's own group (via
+    context["allowed_services"], the same deny-by-default list every other
+    service already respects) — NOT a global service_type lookup. This
+    platform is multi-tenant (each WeCom group belongs to a different
+    client); an unscoped lookup let one client's group learn that another
+    client's services (e.g. fedex_label/ups_label) exist at all, found live
+    when a U-Choice group's admin could see a different client's label
+    services. Checked here too, not just in the candidate list the AI
+    matches against, so a literal exact-name guess can't bypass it.
     """
 
     def handle(self, context: dict, config: dict, db) -> dict:
@@ -183,7 +189,10 @@ class ExplainServiceHandler(BaseHandler):
         fields = context.get("collected_fields", {})
         target_name = fields.get("target_service_name")
 
-        service = db.query(ServiceType).filter_by(name=target_name, is_active=True).first() if target_name else None
+        allowed_names = {s["name"] for s in context.get("allowed_services", [])}
+        service = None
+        if target_name and target_name in allowed_names:
+            service = db.query(ServiceType).filter_by(name=target_name, is_active=True).first()
         if service is None:
             return {"found": False, "target_service_name": target_name}
 

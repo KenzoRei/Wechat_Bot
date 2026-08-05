@@ -219,6 +219,19 @@ def _build_uchoice_candidates(
         candidates["members"] = uchoice_context.member_candidates(db, access.group_id)
 
     if "explain_service" in names:
-        candidates["service_catalog"] = uchoice_context.service_catalog(db)
+        # Scoped to this group's own granted services — NOT system-wide.
+        # This platform is multi-tenant (each WeCom group belongs to a
+        # different client); explain_service was originally built with an
+        # unrestricted system-wide catalog on the reasoning that read-only
+        # info about a service isn't sensitive, but that reasoning only
+        # holds for role-scoping within one client. Across clients it leaks
+        # which other clients/services exist on the platform at all — found
+        # live when a U-Choice group's admin could see yestech's fedex_label/
+        # ups_label. group_service already tracks exactly what's granted to
+        # this group, so reuse it instead of a separate unrestricted query.
+        candidates["service_catalog"] = [
+            {"name": s["name"], "description": s.get("description") or "", "keywords": s.get("keywords") or []}
+            for s in access.allowed_services
+        ]
 
     return candidates

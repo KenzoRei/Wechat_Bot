@@ -91,9 +91,9 @@ def build_system_prompt(context: dict) -> str:
         "all_fields_collected=true。\n"
         "- members：将用户提到的人名与此列表的 display_name 匹配，提取 wechat_openid 填入 target_openid。\n"
         "- service_catalog：用户询问某个具体服务是什么/怎么用/有什么区别时（explain_service），将其表述与此列表中每一项的 name/description/keywords "
-        "做语义匹配，提取匹配到的 name 填入 target_service_name。这个列表不受当前用户自己权限范围限制，即使用户本人不能使用某个服务，"
-        "也可以询问该服务的说明。只提取 target_service_name，绝不能自己编写或转述服务说明的内容——那部分内容由系统按 description 原文返回，"
-        "你只负责判断问的是哪个服务。\n"
+        "做语义匹配，提取匹配到的 name 填入 target_service_name。这个列表只包含当前群组实际开通的服务，如果用户问的服务不在列表中，"
+        "按未匹配处理（不要凭空猜测或编造一个 name）。只提取 target_service_name，绝不能自己编写或转述服务说明的内容——"
+        "那部分内容由系统按 description 原文返回，你只负责判断问的是哪个服务。\n"
         if uchoice_candidates else ""
     )
 
