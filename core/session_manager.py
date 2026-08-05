@@ -199,7 +199,12 @@ def _build_uchoice_candidates(
         "view_storage", "view_storage_history",
     }
     if names & SKU_DEPENDENT_SERVICES:
-        candidates["skus"] = uchoice_context.sku_catalog(db)
+        # Defaults to JFK when the warehouse isn't known yet — same default
+        # used for uchoice_outbound_request's warehouse_code itself (real
+        # customers essentially never state it), so the stock signal used
+        # for SKU disambiguation matches whichever warehouse the request
+        # will actually end up defaulting to.
+        candidates["skus"] = uchoice_context.sku_catalog(db, scope_warehouse or "JFK")
 
     if "uchoice_outbound_request" in names:
         candidates["addresses"] = uchoice_context.address_candidates(db)

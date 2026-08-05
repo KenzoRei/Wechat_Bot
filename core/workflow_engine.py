@@ -325,6 +325,7 @@ def _on_all_fields_collected(
         db.commit()
 
     if service["name"] == "uchoice_outbound_request":
+        _resolve_outbound_warehouse_default(context, session, db)
         _resolve_outbound_pallet_defaults(context, session, db)
 
     if service["name"] == "confirm_outbound_completion":
@@ -340,6 +341,27 @@ def _on_all_fields_collected(
     else:
         _execute_workflow_and_finish(context, session, db)
         # _execute_workflow_and_finish sends its own reply via reply_wechat / failure message
+
+
+def _resolve_outbound_warehouse_default(context: dict, session, db: DBSession) -> None:
+    """
+    warehouse_code became optional on uchoice_outbound_request (V12) —
+    real dispatch messages essentially never state it (found reviewing 57
+    real outbound requests: not one names JFK or DE explicitly). Defaults to
+    JFK, persisted here before confirmation is built (and before
+    _resolve_outbound_pallet_defaults runs, since that function's storage-
+    bucket lookup needs the real warehouse_code to find the right buckets)
+    — marked with _warehouse_auto_default so the confirmation display can
+    flag it as an assumption the customer can still correct.
+    """
+    fields = session.collected_fields
+    if fields.get("warehouse_code"):
+        return
+    session_manager.update_collected_fields(db, session, {
+        "warehouse_code": "JFK",
+        "_warehouse_auto_default": True,
+    })
+    context["collected_fields"] = session.collected_fields
 
 
 def _resolve_outbound_pallet_defaults(context: dict, session, db: DBSession) -> None:
