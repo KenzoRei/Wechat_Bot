@@ -8,8 +8,10 @@
 
 ALTER TABLE uchoice_address ADD COLUMN destination_warehouse_code VARCHAR(20);
 
-UPDATE uchoice_address SET destination_warehouse_code = 'DE'  WHERE company_name = 'U-Choice DE Warehouse';
-UPDATE uchoice_address SET destination_warehouse_code = 'JFK' WHERE company_name = 'U-Choice JFK Warehouse';
+-- Matched by addr rather than company_name — company_name is user-editable
+-- via upsert_address, but these two physical addresses are stable.
+UPDATE uchoice_address SET destination_warehouse_code = 'DE'  WHERE addr = '201 Gabor DR, Newark, DE 19711';
+UPDATE uchoice_address SET destination_warehouse_code = 'JFK' WHERE addr = '14502 156th St, Jamaica, NY 11434';
 
 -- New txn_type values so the audit trail (view_storage_history) can tell an
 -- inter-warehouse transfer apart from a normal customer-facing inbound/outbound.

@@ -173,8 +173,8 @@ INSERT INTO uchoice_sku (sku_code, description) VALUES
 -- ── uchoice_address seed (inter-warehouse transfer addresses) ──────────────
 
 INSERT INTO uchoice_address (company_name, charge_type, addr, warehouse_code, note, created_by) VALUES
-    ('U-Choice DE Warehouse',  'truck_transfer', '201 Gabor DR, Newark, DE 19711',    'JFK', 'DE warehouse',  'system'),
-    ('U-Choice JFK Warehouse', 'truck_transfer', '14502 156th St, Jamaica, NY 11434', 'DE',  'JFK warehouse', 'system');
+    ('DE Warehouse',  'truck_transfer', '201 Gabor DR, Newark, DE 19711',    'JFK', 'DE warehouse',  'system'),
+    ('JFK Warehouse', 'truck_transfer', '14502 156th St, Jamaica, NY 11434', 'DE',  'JFK warehouse', 'system');
 
 
 -- ── Service Types ────────────────────────────────────────────────────────────
