@@ -229,10 +229,16 @@ def _invoice_sections_builder(context: dict, db: DBSession) -> list[dict]:
         "仓储费": f"${result.get('storage_fee', 0)}",
         "合计":   f"${result.get('total', 0)}",
     }
-    return [
+    sections = [
         {"label": None, "type": "raw", "items": [f"仓库：{warehouse_code}　范围：{range_str}"]},
         {"label": None, "type": "kv", "items": items},
     ]
+
+    download_url = result.get("download_url")
+    if download_url:
+        sections.append({"label": None, "type": "raw", "items": [f"[下载详细报表]({download_url})（1小时内有效）"]})
+
+    return sections
 
 
 def _empty_sections_builder(context: dict, db: DBSession) -> list[dict]:

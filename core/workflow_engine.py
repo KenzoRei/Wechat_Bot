@@ -114,6 +114,17 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
     if ai_response.extracted_fields:
         session_manager.update_collected_fields(db, session, ai_response.extracted_fields)
 
+    # context["collected_fields"] was set from session.collected_fields at
+    # build_context() time, when session was still None (still {}).
+    # update_collected_fields() above reassigns session.collected_fields to
+    # a brand-new dict rather than mutating in place, so context's reference
+    # goes stale immediately — and workflow-step handlers only ever see
+    # context, never session directly, so an immediate-execution service
+    # resolving all fields on this very first message would otherwise run
+    # with an empty collected_fields. Must refresh before anything downstream
+    # reads it.
+    context["collected_fields"] = session.collected_fields
+
     auto_resolved = _autoresolve_single_candidate(context, service, session, db)
 
     # Q3 fix: if AI already has all fields from the first message, go straight to confirmation
@@ -268,6 +279,12 @@ def _handle_continuation(context: dict, ai_response: AIResponse, db: DBSession) 
 
     session_manager.add_message(db, session, "user", context["content"])
     session_manager.update_collected_fields(db, session, ai_response.extracted_fields)
+
+    # see the matching comment in _handle_new_request — same staleness bug,
+    # this is the path that actually surfaced it live (the last required
+    # field, e.g. warehouse_code, supplied on a later turn ended up missing
+    # from the executed query because context still held the pre-merge dict).
+    context["collected_fields"] = session.collected_fields
 
     auto_resolved = service is not None and _autoresolve_single_candidate(context, service, session, db)
 
