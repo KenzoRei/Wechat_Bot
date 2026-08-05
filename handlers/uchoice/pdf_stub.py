@@ -38,7 +38,7 @@ class GeneratePdfStubHandler(BaseHandler):
             if destination_address_id:
                 addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
                 if addr:
-                    consignee_company, consignee_addr = addr.company_name, addr.addr
+                    consignee_company, consignee_addr = addr.company_name or "", addr.addr
 
             sku_labels = sku_label_map(db)
             product_lines = []

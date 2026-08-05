@@ -85,7 +85,7 @@ def build_invoice_workbook(db: DBSession, warehouse_code: str, start_month: str,
         if destination_address_id:
             addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
             if addr:
-                destination_company = addr.company_name
+                destination_company = addr.company_name or ""
                 destination_addr = addr.addr
 
         ws2.append([

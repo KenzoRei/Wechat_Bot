@@ -238,6 +238,7 @@ def _outbound_sections_builder(collected_fields: dict, db: DBSession) -> list[di
 
     sku_labels = _sku_label_map(db)
     warehouse_code = collected_fields.get("warehouse_code", "?")
+    warehouse_note = "，系统默认，如有误请更正" if collected_fields.get("_warehouse_auto_default") else ""
     raw_lines = collected_fields.get("sku_lines", []) or []
     sorted_lines = sorted(raw_lines, key=lambda l: (l.get("sku_code", ""), l.get("boxes_per_pallet", l.get("box_count", 0))))
 
@@ -259,12 +260,13 @@ def _outbound_sections_builder(collected_fields: dict, db: DBSession) -> list[di
         pallet_count = line.get("pallet_count", "?")
         formatted.append(f'{label}：{pallet_count} 托 @ {bpp}/托{default_note}')
 
-    sections = [{"label": f"出库明细（{warehouse_code} 仓）", "type": "list", "items": formatted}]
+    sections = [{"label": f"出库明细（{warehouse_code} 仓{warehouse_note}）", "type": "list", "items": formatted}]
 
     dest_id = collected_fields.get("destination_address_id")
     if dest_id:
+        from core.uchoice_context import format_address_label
         addr = db.query(UchoiceAddress).filter_by(address_id=dest_id).first()
-        dest_label = f"{addr.company_name}（{addr.addr}）" if addr else "未知地址"
+        dest_label = format_address_label(addr)
         sections.append({"label": None, "type": "list", "items": [f"目的地：{dest_label}"]})
 
     new_pallet_count = collected_fields.get("new_pallet_count")

@@ -12,15 +12,45 @@ from models.group import GroupMember
 from models.role import Role
 
 
-def sku_catalog(db: DBSession) -> list[dict]:
+def format_address_label(addr) -> str:
+    """
+    company_name is optional (V12) — several real addresses are only ever
+    known by a bare address or a location nickname, no formal company name.
+    Shared by every place that renders an address for display, so a missing
+    company_name degrades to just the address instead of literally printing
+    "None（...）".
+    """
+    if addr is None:
+        return "未知地址"
+    if addr.company_name:
+        return f"{addr.company_name}（{addr.addr}）"
+    return addr.addr
+
+
+def sku_catalog(db: DBSession, warehouse_code: str | None = None) -> list[dict]:
     """
     All 8 U-Choice SKUs — cheap, full table every time (no scoping needed).
     Lets the AI resolve a free-text product description (e.g. "2寸透明胶带")
     to the real sku_code (e.g. "t4") instead of inventing one from the
     customer's own words.
+
+    When warehouse_code is given, each entry also carries in_stock — real
+    customer wording is sometimes ambiguous between two catalog entries with
+    overlapping descriptions (e.g. "棕色胶带" could mean either t2 "Dark
+    Brown" or t3 "Light Brown" Packing Tape), and current stock is a strong,
+    real disambiguating signal: if only one of the plausible matches is
+    actually stocked, that's almost certainly the one meant.
     """
     rows = db.query(UchoiceSku).all()
-    return [{"sku_code": s.sku_code, "description": s.description} for s in rows]
+    if warehouse_code is None:
+        return [{"sku_code": s.sku_code, "description": s.description} for s in rows]
+
+    buckets = db.query(UchoiceStorage).filter_by(warehouse_code=warehouse_code).all()
+    stocked_skus = {b.sku_code for b in buckets if b.pallet_count > 0}
+    return [
+        {"sku_code": s.sku_code, "description": s.description, "in_stock": s.sku_code in stocked_skus}
+        for s in rows
+    ]
 
 
 def sku_label_map(db: DBSession) -> dict[str, str]:
@@ -108,7 +138,7 @@ def pending_request_candidates(db: DBSession, warehouse_code: str | None, servic
         if destination_address_id:
             addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
             if addr:
-                candidate["destination"] = f"{addr.company_name}（{addr.addr}）"
+                candidate["destination"] = format_address_label(addr)
 
         candidates.append(candidate)
 
