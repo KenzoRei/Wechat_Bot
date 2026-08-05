@@ -105,6 +105,18 @@ class ApplyOutboundStorageHandler(BaseHandler):
                         db, destination_warehouse_code, sku, shipped_bpp, 1, dest_txn_type,
                         request_log_id, note=transfer_note, created_by=created_by
                     )
+            elif "box_count" in line:
+                # No sensible default exists for a loose-type line — the
+                # original request was submitted as loose boxes, not a
+                # pallet count, so there's no "boxes_per_pallet" to default
+                # in the first place. Mirrors ApplyInboundStorageHandler's
+                # identical guard — the design doc requires explicit
+                # restatement as a source/resulting conversion pair for
+                # both directions, never silently defaulted.
+                raise RuntimeError(
+                    f"商品 {sku} 为散箱出库，必须明确说明发货方式（从哪个托盘规格取出、剩余多少箱），"
+                    f"无法使用默认值。"
+                )
             else:
                 bpp = line.get("boxes_per_pallet")
                 if bpp is None:
