@@ -109,7 +109,8 @@ def build_system_prompt(context: dict) -> str:
 ## 意图说明
 - new_request：用户发起新申请。识别服务类型，开始收集必填字段。service_type_name 必须设置为服务的 name 字段（如 "fedex_label"），不得为 null。
 - continuation：用户在补充信息。提取新字段，询问下一个缺失字段。
-- confirm：用户确认了摘要（"确认"或类似表达）。
+- confirm：用户确认了摘要（"确认"或类似表达）。【重要】只有当前会话状态为"待确认"（系统已生成并发送过确认摘要）时才允许返回 confirm。如果当前状态是"进行中"（尚未生成过确认摘要），无论用户这句话听起来多像是在确认（如"不需要拆包""好的可以了"），都必须返回 continuation——先把这句话里的字段提取到 extracted_fields；如果这正好是最后一个必填字段，则同时设置 all_fields_collected=true，系统会自动生成确认摘要并发给用户，真正的确认要等用户看到摘要后的下一轮消息。
+  示例：会话状态为"进行中"，仅缺 needs_unpacking 字段，用户回复"不需要拆包" → 正确输出：intent=continuation，extracted_fields={{"needs_unpacking": false}}，all_fields_collected=true。错误输出（禁止）：intent=confirm——此时系统还没生成过确认摘要，没有"摘要"可言，会导致找不到待确认的申请而报错。
 - cancel：用户取消了申请（"取消"或类似表达）。
 - check_services：用户询问可使用哪些服务。在 reply 中用简短列表列出服务的中文名称（每项几个字即可，一行一个），不展开解释每项的详细用途，除非用户进一步追问某一项。
 - unrecognized：无法理解或与服务无关。礼貌提示用户重新描述。
