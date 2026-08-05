@@ -3,7 +3,10 @@ Shared prompt building logic used by all AI providers.
 Extracting here avoids duplicating the system prompt across Claude and OpenAI.
 """
 import json
+from datetime import datetime, timezone
 from ai.base import AIResponse
+
+_WEEKDAY_CN = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
 
 
 def build_system_prompt(context: dict) -> str:
@@ -49,14 +52,35 @@ def build_system_prompt(context: dict) -> str:
         "- addresses：将用户描述的目的地与此列表匹配，提取 address_id 填入 destination_address_id。\n"
         "- storage_buckets：outbound 申请中，若某条 sku_lines 缺少 boxes_per_pallet，从此列表中同一 sku_code+warehouse_code 下"
         "选择 pallet_count 最大的 bucket 作为默认值填入，并在 reply 中明确告知用户这是自动选择的默认值。\n"
-        "- pending_inbound_requests / pending_outbound_requests：将用户提到的申请（或未提及时的唯一在途申请）与此列表匹配，"
-        "提取 serial_number 填入 reference_serial。0 条：告知用户当前没有待处理申请。多条且用户未指明：在 reply 中列出候选让用户选择，"
-        "不要自行猜测，也不要设置 all_fields_collected=true。\n"
+        "- pending_inbound_requests / pending_outbound_requests：当前所有待处理的入库/出库申请候选列表。\n"
+        "  · 0 条：告知用户当前没有待处理的申请，不要设置 all_fields_collected=true。\n"
+        "  · 恰好 1 条：不需要询问，也不需要列出来给用户选——直接把这唯一一条的 serial_number 填入 reference_serial，"
+        "视为已确认关联，并设置 all_fields_collected=true（前提是其余必填字段也已满足）。【绝对禁止】在只有一条候选时反问"
+        "\"请问是哪一条？\"——只有一个选项时问这个没有意义，这属于错误输出。\n"
+        "    示例：候选列表只有一条 REQ-X，用户说\"确认入库\"（未提及任何编号）→ 正确输出："
+        "extracted_fields 中 reference_serial 填 REQ-X，all_fields_collected=true，"
+        "reply 类似\"好的，正在为您确认 REQ-X 的入库\"。错误输出（禁止）：\"当前有以下待处理申请：1. REQ-X，请问是哪一条？\"。\n"
+        "  · 多条：如果用户消息中提到了具体编号、或能明确对应到其中一条（包括序数/指代表达，如\"第一个\"\"后面那个\"\"最新那个\"——"
+        "根据你上一轮 reply 中列出候选的顺序来判断具体指哪一条），提取对应的 serial_number 填入 reference_serial，并设置 all_fields_collected=true。\n"
+        "    如果用户没有指明是哪一条，你必须在本轮 reply 中【直接列出全部候选的 serial_number】（不要只说\"请提供编号\"这类空泛回复，"
+        "必须把编号本身列出来），不要设置 all_fields_collected=true，等待用户下一轮选择。\n"
+        "    示例：候选列表有两条 REQ-A、REQ-B。用户说\"确认入库\"（未指明是哪条）→ reply 必须包含两条编号列表，如"
+        "\"当前有以下待处理申请：\\n1. REQ-A\\n2. REQ-B\\n请问是哪一条？\"，all_fields_collected=false。"
+        "用户接着回复\"后面那个\"或\"第二个\" → 根据你刚才列出的顺序，这指的是 REQ-B，extracted_fields 中 reference_serial 填 REQ-B，"
+        "all_fields_collected=true。\n"
         "- members：将用户提到的人名与此列表的 display_name 匹配，提取 wechat_openid 填入 target_openid。\n"
         if uchoice_candidates else ""
     )
 
+    today = datetime.now(timezone.utc).date()
+    today_str = f"{today.isoformat()}（{_WEEKDAY_CN[today.weekday()]}）"
+
     return f"""你是一个中文物流助手机器人，运行在企业微信群里，帮助用户提交物流服务申请。
+
+## 当前日期
+今天是 {today_str}。解析用户消息中的相对时间表达（如"今年"、"上个月"、"这个季度"、"最近三个月"）时，必须以此日期为基准计算，不得凭空猜测年份。
+【重要】涉及 start_month/end_month 这类范围字段的服务（如库存变动记录、费用报告）时，两个字段必须同时给出，不能只提取 start_month 就设置 all_fields_collected=true——单月查询时 start_month 和 end_month 相同，多月/季度查询时两者才不同，但两者都是必填字段，缺一不可。
+示例：今天是 2026-08-05，用户说"今年一季度JFK的账单" → 一季度 = 1-3月，正确输出 extracted_fields 中同时包含 {{"start_month": "2026-01", "end_month": "2026-03"}}，而不是只给 start_month。
 {group_context_block}{candidates_block}
 ## 当前用户信息
 - 姓名：{context["display_name"]}

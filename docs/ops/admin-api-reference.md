@@ -82,6 +82,15 @@ Invoke-RestMethod "$base/admin/groups/{group_id}" -Method PATCH -Headers $h `
 ```
 All fields optional. Omitting a field leaves it unchanged. Setting `"context": null` clears it.
 
+### Set the Group Robot Webhook URL
+Required for the daily broadcast, monthly invoice, cross-group completion notifications, and any file attachments (Excel invoice exports) — `response_url` (the normal reply channel) cannot send files or push proactively, only reply to a live inbound message. Set up by an admin right-clicking the real WeChat group → 添加群机器人 → copy the resulting URL.
+```powershell
+Invoke-RestMethod "$base/admin/groups/{group_id}" -Method PATCH -Headers $h `
+  -ContentType "application/json" `
+  -Body '{"group_robot_webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=XXX"}'
+```
+Omitted for a group = every proactive push to that group silently no-ops. Pass `null` to clear it.
+
 ### Set location presets
 Location presets let the AI auto-fill shipper/recipient addresses when a customer says e.g. "从LAX寄到DE".
 ```powershell
@@ -128,9 +137,10 @@ Invoke-RestMethod "$base/admin/groups/{group_id}/members" -Method POST -Headers 
 ```
 | Field | Required | Notes |
 |---|---|---|
-| `wechat_openid` | ✅ | WeChat user ID (the `from` field in webhook messages) |
+| `wechat_openid` | ✅ | WeChat user ID (the `from` field in webhook messages) — there's no way to look this up in advance; have the person send one message in the target group first, then read it off the `[webhook] from=...` line in the server logs (or, for a *member's own* ID specifically, the bot's own self-service reply to an unregistered sender already includes it — no log-digging needed for that case) |
 | `role` | ✅ | Role name — must exist in the `role` table. See "Roles" section below to list/add roles |
 | `display_name` | — | Name shown in bot replies and request logs |
+| `warehouse_code` | Required if `role` is `warehouseman` | `JFK` or `DE` — which warehouse this member is responsible for. 400 if omitted for a `warehouseman`. Cleared automatically if the member's role is later changed away from `warehouseman` |
 
 ### List members
 ```powershell
@@ -201,6 +211,33 @@ Invoke-RestMethod "$base/admin/groups/{group_id}/services" -Method POST -Headers
 | `ydd_api_key` | ✅ | YiDiDa login password |
 | `ydd_channel_id` | ✅ | YiDiDa channel name |
 | `ydd_account_code` | — | Optional YiDiDa billing account code |
+
+### U-Choice service type & workflow IDs (current)
+
+`service_type_id` and `workflow_id` are identical for every U-Choice service —
+1:1 mapping, no service shares a workflow with another. `config` for all of
+them is `{}` (no per-group credentials needed, unlike FedEx/UPS's YiDiDa
+keys).
+
+| Service | ID (both service_type and workflow) | Role |
+|---|---|---|
+| `uchoice_inbound_request` | `c1000000-...-000000000001` / `c2000000-...-000000000001` | customer |
+| `uchoice_outbound_request` | `...-000000000002` | customer |
+| `confirm_inbound_completion` | `...-000000000003` | warehouseman |
+| `confirm_outbound_completion` | `...-000000000004` | warehouseman |
+| `view_storage` | `...-000000000005` | customer, warehouseman, accountant, admin |
+| `view_storage_history` | `...-000000000006` | customer, warehouseman, accountant, admin |
+| `adjust_storage` | `...-000000000007` | warehouseman |
+| `recount_storage` | `...-000000000008` | warehouseman |
+| `move_storage` | `...-000000000009` | warehouseman |
+| `upsert_address` | `...-00000000000a` | customer, warehouseman |
+| `role_change` | `...-00000000000b` | admin |
+| `view_invoice` | `...-00000000000c` | customer, accountant |
+
+Full UUID prefix is `c1000000-0000-0000-0000-` for `service_type_id`,
+`c2000000-0000-0000-0000-` for `workflow_id` — or just `GET
+/admin/service-types` / `GET /admin/workflows` and match by name, don't rely
+on this table staying accurate forever.
 
 ### List services for group
 ```powershell
@@ -293,6 +330,36 @@ Returns the FedEx/UPS label as a PDF download.
 
 ---
 
+## U-Choice Invoice Export
+
+Downloads the full detail backing an invoice as `.xlsx` — Summary sheet plus
+one row per contributing transaction (Transportation & Palletization,
+Unpacking, Storage sheets), not just the totals the chat `view_invoice`
+reply shows. Same underlying `compute_invoice()` row-selection logic as the
+chat response, so the two can never silently disagree.
+
+```powershell
+Invoke-WebRequest "$base/admin/invoices/export?warehouse_code=JFK&start_month=2026-01&end_month=2026-03" `
+  -Headers $h -OutFile "invoice.xlsx"
+```
+| Param | Required | Notes |
+|---|---|---|
+| `warehouse_code` | ✅ | `JFK` or `DE` |
+| `start_month` | ✅ | `YYYY-MM` |
+| `end_month` | — | `YYYY-MM`, defaults to `start_month` for a single-month invoice |
+
+Plain browser URL bar won't work — it needs the `X-Admin-Key` header, which a
+bare URL can't send. Use curl/PowerShell/Postman, not a pasted link.
+
+The bot also pushes this same workbook into the group automatically whenever
+anyone runs the `view_invoice` chat service — but only if that group has
+`group_robot_webhook_url` set (see "Set the Group Robot Webhook URL" above),
+and only as a whole-group broadcast — `response_url` (the private reply
+channel) cannot send files at all, confirmed against the official docs, so
+there is no way to deliver it privately to just the person who asked.
+
+---
+
 ## Typical Onboarding Flow (New Customer Group)
 
 ```
@@ -308,3 +375,9 @@ Returns the FedEx/UPS label as a PDF download.
    (deny-by-default — a service is invisible to everyone until granted; repeat per role per service)
 9. PATCH /admin/groups/{id}                                 → set context (location presets)
 ```
+
+**For a U-Choice group specifically:**
+- Step 5/6: use `warehouseman`/`accountant` roles too where applicable, and pass `warehouse_code` for any `warehouseman` — required, 400 without it.
+- Step 7: U-Choice services need no `config` at all — pass `{}`. See the U-Choice service catalog table above for the 12 `service_type_id`/`workflow_id` pairs.
+- MVP design is **one shared group** with all four roles as members, gated by step 8 — not separate groups per role. See `docs/uchoice-design.md` for the reasoning (and the deferred multi-tenant alternative, in the backlog there).
+- Step 9.5 (not in the numbered list above, easy to forget): `PATCH /admin/groups/{id}` with `group_robot_webhook_url` — without it, the daily digest, monthly invoice, cross-group completion notifications, and Excel invoice exports all silently no-op for that group.
