@@ -7,7 +7,7 @@ function is the only place that actually writes uchoice_storage/
 uchoice_storage_txn rows.
 """
 from handlers.base import BaseHandler
-from core.uchoice_storage import apply_storage_delta
+from core.uchoice_storage import apply_storage_delta, apply_loose_pick
 from core.uchoice_rates import UNPACKING_FLAT, PALLETIZATION_PER_PALLET, CHARGE_TYPE_RATES
 
 
@@ -76,46 +76,33 @@ class ApplyOutboundStorageHandler(BaseHandler):
         applied = []
         for line in fulfillment_lines:
             sku = line["sku_code"]
-            if "source_boxes_per_pallet" in line and "resulting_boxes_per_pallet" in line:
-                # loose-box convert pair — never defaulted, per the design doc.
-                # The bucket reclassification at the origin (convert_out/
-                # convert_in) happens regardless of whether this is a
-                # transfer; what actually left the warehouse is the
-                # difference between the two bucket sizes.
-                source_bpp = line["source_boxes_per_pallet"]
-                resulting_bpp = line["resulting_boxes_per_pallet"]
-                apply_storage_delta(
-                    db, warehouse_code, sku, source_bpp, -1, "convert_out",
-                    request_log_id, note="loose-box fulfillment pick", created_by=created_by
-                )
-                apply_storage_delta(
-                    db, warehouse_code, sku, resulting_bpp, 1, "convert_in",
-                    request_log_id, note="loose-box fulfillment pick", created_by=created_by
-                )
-                applied.append({"sku_code": sku, "convert": f"{source_bpp}->{resulting_bpp}"})
-
-                if destination_warehouse_code:
-                    shipped_bpp = source_bpp - resulting_bpp
-                    if shipped_bpp <= 0:
-                        raise RuntimeError(
-                            f"商品 {sku} 的拆零记录无效：source_boxes_per_pallet（{source_bpp}）"
-                            f"必须大于 resulting_boxes_per_pallet（{resulting_bpp}），否则无法确定实际发出的箱数。"
-                        )
-                    apply_storage_delta(
-                        db, destination_warehouse_code, sku, shipped_bpp, 1, dest_txn_type,
-                        request_log_id, note=transfer_note, created_by=created_by
+            if "picks" in line:
+                # Loose-box fulfillment — each pick draws box_count boxes
+                # from a specific source bucket (either stated explicitly by
+                # the warehouseman, or auto-resolved by workflow_engine's
+                # _resolve_outbound_loose_pick_defaults against the smallest
+                # available buckets first). apply_loose_pick derives the
+                # leftover-pallet math itself; nothing here needs to be told
+                # what remains on a partially-picked pallet.
+                picks_applied = []
+                for pick in line["picks"]:
+                    source_bpp = pick["source_boxes_per_pallet"]
+                    box_count = pick["box_count"]
+                    apply_loose_pick(
+                        db, warehouse_code, sku, source_bpp, box_count, request_log_id,
+                        created_by, origin_txn_type=origin_txn_type,
+                        destination_warehouse_code=destination_warehouse_code,
+                        transfer_note=transfer_note,
                     )
+                    picks_applied.append({"source_boxes_per_pallet": source_bpp, "box_count": box_count})
+                applied.append({"sku_code": sku, "picks": picks_applied})
             elif "box_count" in line:
-                # No sensible default exists for a loose-type line — the
-                # original request was submitted as loose boxes, not a
-                # pallet count, so there's no "boxes_per_pallet" to default
-                # in the first place. Mirrors ApplyInboundStorageHandler's
-                # identical guard — the design doc requires explicit
-                # restatement as a source/resulting conversion pair for
-                # both directions, never silently defaulted.
+                # No picks were resolved for this loose line — the
+                # pre-confirm validator should have caught this (insufficient
+                # stock to auto-default) before confirmation was ever shown.
+                # Fail loudly rather than guessing if it somehow slipped through.
                 raise RuntimeError(
-                    f"商品 {sku} 为散箱出库，必须明确说明发货方式（从哪个托盘规格取出、剩余多少箱），"
-                    f"无法使用默认值。"
+                    f"商品 {sku} 为散箱出库，缺少托盘取货明细，无法执行。"
                 )
             else:
                 bpp = line.get("boxes_per_pallet")

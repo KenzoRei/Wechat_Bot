@@ -132,6 +132,38 @@ def resolve_default_bucket(db: DBSession, warehouse_code: str | None, sku_code: 
     return bucket.boxes_per_pallet if bucket else None
 
 
+def resolve_loose_pick_defaults(
+    db: DBSession, warehouse_code: str | None, sku_code: str, box_count_needed: int
+) -> list[dict] | None:
+    """
+    Greedily fills a loose outbound pick from the smallest-boxes_per_pallet
+    bucket first (use up small/odd pallets before opening a bigger one),
+    spanning multiple buckets if one alone doesn't cover the requested
+    amount. Returns None if total available stock across all buckets for
+    this sku+warehouse can't cover box_count_needed at all — caller should
+    treat that as a blocking condition, not silently under-fulfill.
+    """
+    buckets = (
+        db.query(UchoiceStorage)
+        .filter_by(warehouse_code=warehouse_code, sku_code=sku_code)
+        .filter(UchoiceStorage.pallet_count > 0)
+        .order_by(UchoiceStorage.boxes_per_pallet.asc())
+        .all()
+    )
+    picks = []
+    remaining = box_count_needed
+    for b in buckets:
+        if remaining <= 0:
+            break
+        available = b.boxes_per_pallet * b.pallet_count
+        take = min(available, remaining)
+        picks.append({"source_boxes_per_pallet": b.boxes_per_pallet, "box_count": take})
+        remaining -= take
+    if remaining > 0:
+        return None
+    return picks
+
+
 def storage_bucket_candidates(db: DBSession, warehouse_code: str | None) -> list[dict]:
     query = db.query(UchoiceStorage)
     if warehouse_code:

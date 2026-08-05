@@ -68,9 +68,11 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
     Reject if a session is already in progress; otherwise create one.
     """
     if context.get("session_id"):
-        # session already open — reject and notify
-        send_message(context, "你有一个未完成的申请，请先完成或取消后再提交新请求。")
-        return
+        if not _supersede_stale_target_session(context, db):
+            # session already open, and it's not a supersedable stale
+            # targets_existing_request session — reject and notify
+            send_message(context, "你有一个未完成的申请，请先完成或取消后再提交新请求。")
+            return
 
     # find the matching service in the group's allowed list
     service = _find_service(context, ai_response.service_type_name)
@@ -134,6 +136,32 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
         session_manager.add_message(db, session, "assistant", ai_response.reply)
         send_message(context, ai_response.reply)
         _close_if_no_pending_candidates(service, session, context, db)
+
+
+def _supersede_stale_target_session(context: dict, db: DBSession) -> bool:
+    """
+    Scope-by-target for targets_existing_request sessions (confirm_inbound_
+    completion/confirm_outbound_completion): these track progress toward
+    confirming one specific OTHER request, not a payload of their own, so an
+    open one for REQ-62 should never block starting a fresh completion for
+    REQ-63 — unlike a regular multi-turn submission (e.g.
+    uchoice_outbound_request mid-collection), which genuinely can't have two
+    in flight without corrupting collected_fields, so that case still hard-
+    blocks. Nothing is lost by closing the stale one here: nothing commits to
+    real data until the final confirm, so the user can always re-trigger it
+    later (same "safe to abandon and retry" property already relied on
+    elsewhere in this flow). Returns True if it superseded (caller should
+    proceed with the new request), False if the block should stand.
+    """
+    old_session = _get_session(context, db)
+    if old_session is None:
+        return False
+    old_service = _find_service_by_type_id(context, old_session.service_type_id)
+    if not old_service or not old_service.get("targets_existing_request", False):
+        return False
+    session_manager.close_session(db, old_session, status="cancelled")
+    context["session_id"] = None
+    return True
 
 
 _REFERENCE_SERIAL_CANDIDATE_KEYS = {
@@ -219,6 +247,9 @@ def _on_all_fields_collected(
     if service["name"] == "uchoice_outbound_request":
         _resolve_outbound_pallet_defaults(context, session, db)
 
+    if service["name"] == "confirm_outbound_completion":
+        _resolve_outbound_loose_pick_defaults(context, session, db)
+
     error = pre_confirm_validators.run(service["name"], context, session.collected_fields, db)
     if error:
         send_message(context, error)
@@ -269,6 +300,60 @@ def _resolve_outbound_pallet_defaults(context: dict, session, db: DBSession) -> 
 
     if changed:
         session_manager.update_collected_fields(db, session, {"sku_lines": resolved_lines})
+        context["collected_fields"] = session.collected_fields
+
+
+def _resolve_outbound_loose_pick_defaults(context: dict, session, db: DBSession) -> None:
+    """
+    A loose (box_count) original outbound line has no default bucket at
+    request time — nobody yet knows which physical pallet the warehouseman
+    will draw from. At completion time, if the warehouseman didn't say which
+    bucket(s) to pick from, default to consuming the smallest-boxes_per_pallet
+    buckets first (use up small/odd pallets before opening a bigger one),
+    spilling into the next-smallest bucket if one alone doesn't cover the
+    amount. Persisted here, before confirmation is built, mirroring
+    _resolve_outbound_pallet_defaults's persist-before-display pattern —
+    marked with _auto_default on each pick so the confirmation display can
+    flag it as an assumption the warehouseman can still correct.
+    """
+    from core.uchoice_context import resolve_completion_target, resolve_loose_pick_defaults
+
+    reference_serial = session.collected_fields.get("reference_serial")
+    if not reference_serial:
+        return
+    target, original_fields = resolve_completion_target(db, reference_serial)
+    if target is None:
+        return
+
+    loose_box_counts = {
+        l["sku_code"]: l["box_count"]
+        for l in (original_fields.get("sku_lines") or []) if "box_count" in l
+    }
+    if not loose_box_counts:
+        return
+
+    warehouse_code = original_fields.get("warehouse_code")
+    fulfillment_lines = session.collected_fields.get("fulfillment_lines") or []
+    by_sku = {l.get("sku_code"): l for l in fulfillment_lines}
+    resolved_lines = list(fulfillment_lines)
+    changed = False
+
+    for sku, box_count_needed in loose_box_counts.items():
+        existing = by_sku.get(sku)
+        if existing and existing.get("picks"):
+            continue  # already explicitly specified this turn
+        picks = resolve_loose_pick_defaults(db, warehouse_code, sku, box_count_needed)
+        if picks is None:
+            continue  # insufficient stock — leave unresolved, pre_confirm_validators will block with a clear message
+        new_line = {"sku_code": sku, "picks": [{**p, "_auto_default": True} for p in picks]}
+        if existing:
+            resolved_lines = [new_line if l.get("sku_code") == sku else l for l in resolved_lines]
+        else:
+            resolved_lines.append(new_line)
+        changed = True
+
+    if changed:
+        session_manager.update_collected_fields(db, session, {"fulfillment_lines": resolved_lines})
         context["collected_fields"] = session.collected_fields
 
 
