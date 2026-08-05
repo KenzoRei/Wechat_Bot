@@ -94,6 +94,14 @@ def build_system_prompt(context: dict) -> str:
         "做语义匹配，提取匹配到的 name 填入 target_service_name。这个列表只包含当前群组实际开通的服务，如果用户问的服务不在列表中，"
         "按未匹配处理（不要凭空猜测或编造一个 name）。只提取 target_service_name，绝不能自己编写或转述服务说明的内容——"
         "那部分内容由系统按 description 原文返回，你只负责判断问的是哪个服务。\n"
+        "  【重要】target_service_name 只能填一个服务的 name，即使用户一次问了多个服务（如\"确认出库和确认入库有什么区别\"），"
+        "也只能选其中一个（通常是先提到的那个）填入 target_service_name 并立即设置 all_fields_collected=true，"
+        "绝不能因为要处理多个服务就设置 all_fields_collected=false 然后回复\"请稍等\"之类的占位话术——"
+        "系统一次只能返回一个服务的说明。在 reply 中简短说明你先解释哪一个，并告诉用户可以接着问另一个。\n"
+        "    示例：候选列表中有 confirm_outbound_completion 和 confirm_inbound_completion，用户说\"确认出库和确认入库有什么区别\" → "
+        "正确输出：target_service_name 填 \"confirm_outbound_completion\"（先提到的），all_fields_collected=true，"
+        "reply 类似\"先说说出库确认，稍后您可以再问入库确认\"。错误输出（禁止）：all_fields_collected=false，"
+        "reply 为\"请稍等，我来帮您查找相关信息\"——没有实际给出任何一个服务的说明。\n"
         if uchoice_candidates else ""
     )
 
