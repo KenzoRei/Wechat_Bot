@@ -218,4 +218,7 @@ def _build_uchoice_candidates(
     if "role_change" in names:
         candidates["members"] = uchoice_context.member_candidates(db, access.group_id)
 
+    if "explain_service" in names:
+        candidates["service_catalog"] = uchoice_context.service_catalog(db)
+
     return candidates

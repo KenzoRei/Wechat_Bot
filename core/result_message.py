@@ -58,6 +58,14 @@ def _address_result_title(service_type_name: str, context: dict) -> str:
     return f"地址已{mode}"
 
 
+def _explain_service_result_title(service_type_name: str, context: dict) -> str:
+    result = context.get("result", {})
+    if not result.get("found"):
+        return "未找到该服务"
+    target_display = build_display_name(result.get("target_service_name", ""), {})
+    return f"「{target_display}」服务说明"
+
+
 _RESULT_TITLE_BUILDERS: dict[str, Callable[[str, dict], str]] = {
     "fedex_label":                 _label_result_title,
     "ups_label":                   _label_result_title,
@@ -66,6 +74,7 @@ _RESULT_TITLE_BUILDERS: dict[str, Callable[[str, dict], str]] = {
     "confirm_inbound_completion":  _inbound_completion_result_title,
     "confirm_outbound_completion": _outbound_completion_result_title,
     "upsert_address":              _address_result_title,
+    "explain_service":             _explain_service_result_title,
 }
 
 
@@ -357,6 +366,25 @@ def _role_change_result_sections_builder(context: dict, db: DBSession) -> list[d
     return [{"label": None, "type": "kv", "items": items}]
 
 
+def _explain_service_sections_builder(context: dict, db: DBSession) -> list[dict]:
+    """
+    explain_service — shows the stored description verbatim, exactly as
+    written by an admin ("raw" type: no bullets/reformatting). The AI only
+    identified which service was being asked about; it never authors or
+    rewords this text.
+    """
+    result = context.get("result", {})
+    if not result.get("found"):
+        target = result.get("target_service_name") or "?"
+        return [{"label": None, "type": "list", "items": [f"⚠️ 未找到服务「{target}」，请换个说法或联系管理员确认服务名称。"]}]
+
+    items = [result.get("service_description", "")]
+    keywords = result.get("service_keywords") or []
+    if keywords:
+        items.append(f"常见触发词：{ '、'.join(keywords) }")
+    return [{"label": None, "type": "raw", "items": items}]
+
+
 RESULT_BUILDERS: dict[str, Callable[[dict, DBSession], list[dict]]] = {
     "fedex_label":                 _label_sections_builder,
     "ups_label":                   _label_sections_builder,
@@ -372,6 +400,7 @@ RESULT_BUILDERS: dict[str, Callable[[dict, DBSession], list[dict]]] = {
     "move_storage":                _move_result_sections_builder,
     "upsert_address":              _address_result_sections_builder,
     "role_change":                 _role_change_result_sections_builder,
+    "explain_service":             _explain_service_sections_builder,
 }
 
 

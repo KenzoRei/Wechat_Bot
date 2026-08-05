@@ -33,6 +33,23 @@ def sku_label_map(db: DBSession) -> dict[str, str]:
     return {s.sku_code: s.description for s in db.query(UchoiceSku).all()}
 
 
+def service_catalog(db: DBSession) -> list[dict]:
+    """
+    Every active service's name/description/keywords, system-wide — not
+    filtered to the caller's own allowed_services. explain_service is
+    deliberately unrestricted (read-only info about what a service does
+    isn't sensitive), so this is the one candidate list that intentionally
+    ignores per-role scoping.
+    """
+    from models.service import ServiceType
+
+    rows = db.query(ServiceType).filter_by(is_active=True).all()
+    return [
+        {"name": s.name, "description": s.description or "", "keywords": s.keywords or []}
+        for s in rows
+    ]
+
+
 def address_candidates(db: DBSession) -> list[dict]:
     rows = db.query(UchoiceAddress).all()
     return [
