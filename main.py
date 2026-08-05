@@ -6,7 +6,7 @@ from database import SessionLocal
 from jobs.session_expiry import run_expiry_check
 from jobs.uchoice_daily import run_uchoice_daily
 from jobs.uchoice_invoice import run_uchoice_invoice
-from api import health, webhook, labels, admin_panel, invoice_download
+from api import health, webhook, labels, admin_panel, file_download
 from api.admin import groups, members, services, reference, logs, sessions, roles, invoices
 
 
@@ -64,7 +64,7 @@ app = FastAPI(
 app.include_router(health.router)
 app.include_router(webhook.router)
 app.include_router(labels.router)
-app.include_router(invoice_download.router)
+app.include_router(file_download.router)
 app.include_router(admin_panel.router)  # public route — the page itself prompts for the admin key client-side
 
 # admin routes

@@ -66,6 +66,6 @@ def export_invoice_link(
         content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
     return {"data": {
-        "download_url": f"{_SERVER_BASE_URL}/invoices/download/{token}",
+        "download_url": f"{_SERVER_BASE_URL}/files/download/{token}",
         "expires_in_seconds": 3600,
     }}

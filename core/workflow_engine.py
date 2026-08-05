@@ -189,6 +189,9 @@ def _on_all_fields_collected(
         context["serial_number"] = target.serial_number
         db.commit()
 
+    if service["name"] == "uchoice_outbound_request":
+        _resolve_outbound_pallet_defaults(context, session, db)
+
     error = pre_confirm_validators.run(service["name"], context, session.collected_fields, db)
     if error:
         send_message(context, error)
@@ -199,6 +202,47 @@ def _on_all_fields_collected(
     else:
         _execute_workflow_and_finish(context, session, db)
         # _execute_workflow_and_finish sends its own reply via reply_wechat / failure message
+
+
+def _resolve_outbound_pallet_defaults(context: dict, session, db: DBSession) -> None:
+    """
+    A palletized outbound line missing boxes_per_pallet is meant to default
+    to the largest available storage bucket — but that resolution previously
+    only happened inside the confirmation *display* (core/confirmation.py's
+    _outbound_sections_builder), computed transiently and never written back.
+    session.collected_fields kept the line without boxes_per_pallet, so
+    execution (ApplyOutboundStorageHandler) crashed with a bare KeyError the
+    moment a customer actually relied on the documented default-bucket
+    behavior instead of specifying it explicitly. Resolve and persist here,
+    once, before the confirmation is even built, so what's shown is what's
+    stored is what's executed — marks each defaulted line with
+    _bpp_auto_default so the confirmation display can still flag it as an
+    assumption rather than silently taking a decision away from the user.
+    """
+    from core.uchoice_context import resolve_default_bucket
+
+    fields = session.collected_fields
+    sku_lines = fields.get("sku_lines")
+    if not sku_lines:
+        return
+
+    warehouse_code = fields.get("warehouse_code")
+    changed = False
+    resolved_lines = []
+    for line in sku_lines:
+        if "box_count" in line or line.get("boxes_per_pallet") is not None:
+            resolved_lines.append(line)
+            continue
+        default_bpp = resolve_default_bucket(db, warehouse_code, line.get("sku_code"))
+        if default_bpp is None:
+            resolved_lines.append(line)
+            continue
+        resolved_lines.append({**line, "boxes_per_pallet": default_bpp, "_bpp_auto_default": True})
+        changed = True
+
+    if changed:
+        session_manager.update_collected_fields(db, session, {"sku_lines": resolved_lines})
+        context["collected_fields"] = session.collected_fields
 
 
 def _resolve_target_request(session, db: DBSession):

@@ -106,7 +106,12 @@ class ApplyOutboundStorageHandler(BaseHandler):
                         request_log_id, note=transfer_note, created_by=created_by
                     )
             else:
-                bpp = line["boxes_per_pallet"]
+                bpp = line.get("boxes_per_pallet")
+                if bpp is None:
+                    raise RuntimeError(
+                        f"商品 {sku} 缺少每托箱数（boxes_per_pallet），且该仓库无现有库存可作为默认值，"
+                        f"无法确定发货数量，请明确指定。"
+                    )
                 qty = line["pallet_count"]
                 apply_storage_delta(
                     db, warehouse_code, sku, bpp, -qty, origin_txn_type, request_log_id,

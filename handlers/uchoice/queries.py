@@ -135,7 +135,7 @@ class ComputeInvoiceHandler(BaseHandler):
 
             ComputeInvoiceHandler._try_push_workbook(context, db, data, filename)
 
-            return f"{base_url}/invoices/download/{token}"
+            return f"{base_url}/files/download/{token}"
         except Exception as e:
             # A DB-level failure here (e.g. a bad query) leaves the session
             # in an aborted-transaction state — without rolling back, every
