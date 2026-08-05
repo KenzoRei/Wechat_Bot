@@ -98,9 +98,22 @@ def get_original_fields(db: DBSession, target) -> dict:
     from models.session import ConversationSession
     if target is None:
         return {}
+    # Must also filter by the target's own service_type_id (the original
+    # service, e.g. uchoice_inbound_request) — the completion session itself
+    # (confirm_inbound_completion) gets request_log_id set to this same
+    # target log too (that's how targets_existing_request linking works), so
+    # filtering on request_log_id + wechat_openid alone can match it as well
+    # whenever the submitter and the confirmer share an account. Without this,
+    # order_by(created_at DESC).first() picks the newer completion session —
+    # whose collected_fields is just {"reference_serial": ...} — instead of
+    # the actual original submission.
     original_session = (
         db.query(ConversationSession)
-        .filter_by(request_log_id=target.log_id, wechat_openid=target.wechat_openid)
+        .filter_by(
+            request_log_id=target.log_id,
+            wechat_openid=target.wechat_openid,
+            service_type_id=target.service_type_id,
+        )
         .order_by(ConversationSession.created_at.desc())
         .first()
     )
