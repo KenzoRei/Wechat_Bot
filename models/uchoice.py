@@ -56,6 +56,11 @@ class UchoiceAddress(Base):
     note:           Mapped[str | None]     = mapped_column(Text)
     created_by:     Mapped[str]            = mapped_column(String(128), nullable=False)
     created_at:     Mapped[datetime]       = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+    # Set only on the two seeded inter-warehouse addresses — marks this
+    # address as "one of our own warehouses" and names which one, so an
+    # outbound to it triggers a storage increase there too, not just a
+    # decrease at the origin.
+    destination_warehouse_code: Mapped[str | None] = mapped_column(String(20))
 
 
 class UchoiceStorageFeeLedger(Base):

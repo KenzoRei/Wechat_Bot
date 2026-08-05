@@ -48,27 +48,71 @@ def address_candidates(db: DBSession) -> list[dict]:
     ]
 
 
+def _summarize_sku_lines(lines: list[dict], sku_labels: dict[str, str]) -> str:
+    """Compact human-readable summary for candidate-list display, e.g. 'S2 x11托, T2 x4托'."""
+    from collections import defaultdict
+
+    palletized_totals: dict[str, int] = defaultdict(int)
+    loose_totals: dict[str, int] = defaultdict(int)
+    for line in lines or []:
+        sku = line.get("sku_code", "?")
+        if "box_count" in line:
+            loose_totals[sku] += line["box_count"]
+        elif "pallet_count" in line:
+            palletized_totals[sku] += line["pallet_count"]
+
+    parts = [f"{sku_labels.get(sku, sku)} x{qty}托" for sku, qty in sorted(palletized_totals.items())]
+    parts += [f"{sku_labels.get(sku, sku)} 散箱x{qty}" for sku, qty in sorted(loose_totals.items())]
+    return "，".join(parts) if parts else "（无商品明细）"
+
+
 def pending_request_candidates(db: DBSession, warehouse_code: str | None, service_type_ids: list[str]) -> list[dict]:
     """
     Requests still awaiting warehouse completion (status='processing') for the
-    given service types (inbound or outbound request types), optionally
-    scoped to one warehouse (the confirming warehouseman's own).
+    given service types (inbound or outbound request types), scoped to one
+    warehouse (the confirming warehouseman's own) when provided. Includes
+    enough of the original submission (warehouse, SKU summary, and for
+    outbound the destination) for the AI to actually describe each candidate
+    to the user — a bare serial_number gives them nothing to recognize which
+    request is which.
     """
     if not service_type_ids:
         return []
-    query = db.query(RequestLog).filter(
-        RequestLog.status == "processing",
-        RequestLog.service_type_id.in_(service_type_ids),
-    ).order_by(RequestLog.created_at.asc())
-    rows = query.all()
-    return [
-        {
-            "serial_number": r.serial_number,
-            "wechat_openid": r.wechat_openid,
-            "created_at":    r.created_at.isoformat() if r.created_at else None,
+    rows = (
+        db.query(RequestLog)
+        .filter(
+            RequestLog.status == "processing",
+            RequestLog.service_type_id.in_(service_type_ids),
+        )
+        .order_by(RequestLog.created_at.asc())
+        .all()
+    )
+
+    sku_labels = sku_label_map(db)
+    candidates = []
+    for r in rows:
+        original_fields = get_original_fields(db, r)
+        req_warehouse_code = original_fields.get("warehouse_code")
+        if warehouse_code and req_warehouse_code and req_warehouse_code != warehouse_code:
+            continue
+
+        candidate = {
+            "serial_number":  r.serial_number,
+            "wechat_openid":  r.wechat_openid,
+            "created_at":     r.created_at.isoformat() if r.created_at else None,
+            "warehouse_code": req_warehouse_code,
+            "sku_summary":    _summarize_sku_lines(original_fields.get("sku_lines", []), sku_labels),
         }
-        for r in rows
-    ]
+
+        destination_address_id = original_fields.get("destination_address_id")
+        if destination_address_id:
+            addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
+            if addr:
+                candidate["destination"] = f"{addr.company_name}（{addr.addr}）"
+
+        candidates.append(candidate)
+
+    return candidates
 
 
 def storage_bucket_candidates(db: DBSession, warehouse_code: str | None) -> list[dict]:

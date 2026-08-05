@@ -12,3 +12,11 @@ CHARGE_TYPE_RATES = {
     "delivery": DELIVERY,
     "truck_transfer": TRUCK_TRANSFER,
 }
+
+# Explanatory context surfaced to the AI (see ai/prompt_builder.py) so it can
+# answer "这几种计费类型有什么区别" without guessing — not just the label + rate.
+CHARGE_TYPE_DESCRIPTIONS = {
+    "short_delivery": "短途配送：JFK 仓库范围内，$30/托",
+    "delivery":        "配送：JFK 附近 10 分钟车程内，$45/托",
+    "truck_transfer":  "卡车转仓费：超过 JFK 附近 10 分钟车程（含跨仓库转运），$85/托",
+}

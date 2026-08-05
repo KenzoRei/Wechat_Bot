@@ -40,6 +40,20 @@ def build_system_prompt(context: dict) -> str:
         if group_context else ""
     )
 
+    # Only relevant to callers who can actually reach a service involving
+    # charge_type (upsert_address sets it directly; outbound requests resolve
+    # it via the matched destination address) — no point showing fee
+    # explanations to a caller who can never encounter the concept.
+    service_names = {s["name"] for s in context.get("allowed_services", [])}
+    charge_type_block = ""
+    if service_names & {"upsert_address", "uchoice_outbound_request"}:
+        from core.uchoice_rates import CHARGE_TYPE_DESCRIPTIONS
+        charge_type_lines = "\n".join(f"- {desc}" for desc in CHARGE_TYPE_DESCRIPTIONS.values())
+        charge_type_block = (
+            f"\n## 计费类型说明\n{charge_type_lines}\n"
+            "用户询问某个计费类型是什么意思、或几种类型有什么区别时，据此如实解释，不要凭空编造标准。\n"
+        )
+
     uchoice_candidates = context.get("uchoice_candidates") or {}
     candidates_block = (
         f"\n## 候选列表（用于模糊匹配，不是让你调用工具，只是预取的参考数据）\n"
@@ -49,7 +63,9 @@ def build_system_prompt(context: dict) -> str:
         "必须将其与此列表的 description 语义匹配，提取匹配到的 sku_code 填入 sku_lines/adjustment_lines/inventory_lines/move_lines 等"
         "对应字段的 sku_code 中。绝对不能把客户的原始描述文字直接当作 sku_code 使用——sku_code 只能是此列表中出现的真实编码（如 s1、t4）。"
         "如果实在无法匹配到任何一项，在 reply 中说明并请客户换一种描述或直接提供编码，不要瞎猜。\n"
-        "- addresses：将用户描述的目的地与此列表匹配，提取 address_id 填入 destination_address_id。\n"
+        "- addresses：将用户描述的目的地与此列表匹配，提取 address_id 填入 destination_address_id。"
+        "【重要】在 reply 中向用户确认匹配到的目的地时，必须同时给出公司名和完整地址（如\"发往 ABC 公司（123 Main St, City, ST 12345）\"），"
+        "不能只提公司名——地址信息才是用户真正需要核对的部分。\n"
         "- storage_buckets：outbound 申请中，若某条 sku_lines 缺少 boxes_per_pallet，从此列表中同一 sku_code+warehouse_code 下"
         "选择 pallet_count 最大的 bucket 作为默认值填入，并在 reply 中明确告知用户这是自动选择的默认值。\n"
         "- pending_inbound_requests / pending_outbound_requests：当前所有待处理的入库/出库申请候选列表。\n"
@@ -62,10 +78,14 @@ def build_system_prompt(context: dict) -> str:
         "reply 类似\"好的，正在为您确认 REQ-X 的入库\"。错误输出（禁止）：\"当前有以下待处理申请：1. REQ-X，请问是哪一条？\"。\n"
         "  · 多条：如果用户消息中提到了具体编号、或能明确对应到其中一条（包括序数/指代表达，如\"第一个\"\"后面那个\"\"最新那个\"——"
         "根据你上一轮 reply 中列出候选的顺序来判断具体指哪一条），提取对应的 serial_number 填入 reference_serial，并设置 all_fields_collected=true。\n"
-        "    如果用户没有指明是哪一条，你必须在本轮 reply 中【直接列出全部候选的 serial_number】（不要只说\"请提供编号\"这类空泛回复，"
-        "必须把编号本身列出来），不要设置 all_fields_collected=true，等待用户下一轮选择。\n"
-        "    示例：候选列表有两条 REQ-A、REQ-B。用户说\"确认入库\"（未指明是哪条）→ reply 必须包含两条编号列表，如"
-        "\"当前有以下待处理申请：\\n1. REQ-A\\n2. REQ-B\\n请问是哪一条？\"，all_fields_collected=false。"
+        "    如果用户没有指明是哪一条，你必须在本轮 reply 中列出全部候选，且每条除了 serial_number 外，还要带上该候选自带的其他字段"
+        "（如 warehouse_code、sku_summary、destination——具体带哪些字段视候选列表实际给出的内容而定），"
+        "让用户能凭商品、仓库或目的地认出是哪一条，不能只列一串编号（不要只说\"请提供编号\"这类空泛回复，也不能只写编号没有任何其他信息）。"
+        "不要设置 all_fields_collected=true，等待用户下一轮选择。\n"
+        "    示例：候选列表有两条：REQ-A（warehouse_code=JFK, sku_summary=\"S2 x11托\"），"
+        "REQ-B（warehouse_code=DE, sku_summary=\"T2 x4托\"）。用户说\"确认出库\"（未指明是哪条）→ reply 必须包含两条各自的编号+仓库+商品信息，如"
+        "\"当前有以下待处理出库申请：\\n1. REQ-A（JFK仓，S2 x11托）\\n2. REQ-B（DE仓，T2 x4托）\\n请问是哪一条？\"，all_fields_collected=false。"
+        "错误输出（禁止）：\"当前有以下待处理的出库申请：\\n1. REQ-A\\n2. REQ-B\\n请问是哪一条？\"——只有编号，用户根本无法分辨。"
         "用户接着回复\"后面那个\"或\"第二个\" → 根据你刚才列出的顺序，这指的是 REQ-B，extracted_fields 中 reference_serial 填 REQ-B，"
         "all_fields_collected=true。\n"
         "- members：将用户提到的人名与此列表的 display_name 匹配，提取 wechat_openid 填入 target_openid。\n"
@@ -81,7 +101,7 @@ def build_system_prompt(context: dict) -> str:
 今天是 {today_str}。解析用户消息中的相对时间表达（如"今年"、"上个月"、"这个季度"、"最近三个月"）时，必须以此日期为基准计算，不得凭空猜测年份。
 【重要】涉及 start_month/end_month 这类范围字段的服务（如库存变动记录、费用报告）时，两个字段必须同时给出，不能只提取 start_month 就设置 all_fields_collected=true——单月查询时 start_month 和 end_month 相同，多月/季度查询时两者才不同，但两者都是必填字段，缺一不可。
 示例：今天是 2026-08-05，用户说"今年一季度JFK的账单" → 一季度 = 1-3月，正确输出 extracted_fields 中同时包含 {{"start_month": "2026-01", "end_month": "2026-03"}}，而不是只给 start_month。
-{group_context_block}{candidates_block}
+{group_context_block}{candidates_block}{charge_type_block}
 ## 当前用户信息
 - 姓名：{context["display_name"]}
 - 角色：{context["role"]}
@@ -138,6 +158,9 @@ def build_system_prompt(context: dict) -> str:
 - 所有 reply 内容必须是中文。
 - 【关键】当前会话状态为"进行中"或"已收集字段"不为空时，用户消息几乎必然是对上一条AI问题的回答，intent 必须为 continuation，绝对不得返回 new_request。只有当会话状态为"无活跃会话"时才可返回 new_request。
 - 【重要】check_services 仅适用于用户明确、泛泛地询问"有什么服务"、"能做什么"、"服务列表"等——不确定该选哪个服务时的兜底，不是默认选项。如果用户的消息（哪怕只是一个简短的关键词，如"库存"、"入库"、"查一下地址"）在语义上明显对应某一具体服务的 name 或 description，必须优先判定为 new_request 并将 service_type_name 设为该服务，而不是退回 check_services。只有在消息真的无法关联到任何具体服务时，才使用 check_services 或 unrecognized。
+- 【重要】收集 upsert_address 的 addr 字段时，必须检查用户提供的内容是否至少包含一个真实地址应有的基本要素（门牌号+街道名、城市、州、邮编），并整理成规范格式（如"123 Main St, City, ST 12345"，逗号分隔、州用两位缩写、邮编独立成段）。如果用户原话缺少这些要素中的关键部分（如只给了街道没给城市/州/邮编），不要直接照抄或瞎猜补全，必须在 reply 中指出缺了什么并请用户补充；如果用户原话包含全部要素但格式凌乱（如缺逗号、大小写混乱、单位缩写不一致），可以直接整理规范后填入 extracted_fields，不需要用户重新提供。
+  示例：用户说"201 Gabor drive Newark De19711" → 要素齐全（门牌+街道、城市、州、邮编），只是格式凌乱 → 正确输出：extracted_fields 中 addr 填"201 Gabor Dr, Newark, DE 19711"。
+  示例：用户说"发到Newark那个仓库" → 缺门牌号和街道名，只有城市 → 正确输出：all_fields_collected 不设为 true（addr 未满足），reply 询问具体门牌号和街道名。
 
 ## 位置别名规则（重要）
 群组知识库中的 location_presets 包含预设地址。当用户提到别名（如”LAX”、”DE”）时：
