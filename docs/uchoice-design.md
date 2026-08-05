@@ -541,14 +541,29 @@ AI-facing contracts, one shared mutation implementation.
   the AI is highly confident, gated by whether the action is read-only (safe) vs.
   a write (risky to skip on). Deferred until there's real usage data showing the
   current friction is actually a problem.
-- **Multi-thread / concurrent sessions per user** — the "one active session per
-  user per group" constraint stays for MVP. Noted that referencing an old serial
-  number already gives partial multi-thread-like behavior without a full
-  redesign.
-- **PDF generation library/template** — not chosen yet (a candidate like
-  `reportlab` was mentioned only as an example, not decided).
+- ~~**Multi-thread / concurrent sessions per user**~~ — done 2026-08-05 for
+  `targets_existing_request` completion services specifically (an open
+  confirm_inbound/outbound_completion session for one request no longer blocks
+  starting a fresh completion for a different one — see
+  `workflow_engine._supersede_stale_target_session`). Regular multi-turn
+  submissions still correctly allow only one at a time.
+- ~~**PDF generation library/template**~~ — done: `reportlab`, implemented for
+  `confirm_outbound_completion`'s delivery order (`core/uchoice_delivery_order.py`).
+  `confirm_inbound_completion`'s receiving-confirmation doc_type is still a stub.
 - **Audio/Excel/image message support** — explicitly ruled out even for V2,
   "minor improvement after critical functions and UX getting stable."
+- **Keyword-lookup fast path for simple, high-frequency, zero-argument
+  services** (e.g. `view_storage`, `check_services`) — bypass the AI call
+  entirely via keyword match when there's no active session and the matched
+  service's `input_schema.required` is empty, falling through to the normal
+  AI path on any ambiguity. Saves cost/latency on frequent simple lookups
+  that need no field extraction. Deliberately scoped narrow: not worth
+  attempting for services that need structured field extraction from the
+  message, since the AI call there isn't just routing — a keyword layer can't
+  replace it. Deferred until there's usage data showing these zero-argument
+  lookups are frequent enough to be worth the added maintenance surface (a
+  second routing system to keep in sync with the AI's own service-matching
+  rules).
 - **Secondary approval for `adjust_storage`** — raised as a question (no
   customer-side counterpart to cross-check a warehouseman's correction against),
   left as "warehouseman's own confirm is sufficient for MVU, revisit if it
@@ -556,6 +571,24 @@ AI-facing contracts, one shared mutation implementation.
 - ~~WeChat markdown @-mention verification~~ — **resolved.** Confirmed against
   the official Group Robot Webhook doc: supported via `<@userid>` inline syntax
   or `mentioned_list`, not on `markdown_v2`. See `memory/wecom_api_reference.md`.
+
+## Known limitations (accepted tradeoffs, not bugs)
+
+- **Unmatched-address auto-pivot can create near-duplicate `uchoice_address`
+  rows.** When `uchoice_outbound_request` sees a destination that doesn't
+  match anything in the injected address candidate list, it silently cancels
+  the in-progress outbound request and opens a fresh `upsert_address` session
+  pre-seeded with the AI's best-effort guess (`workflow_engine
+  ._maybe_pivot_to_add_address`) — no explicit "取消" required from the
+  customer. This is deliberately more permissive than before: a genuine
+  fuzzy-match *miss* (typo, abbreviated company name, differently-phrased
+  version of an address already on file) now creates a real duplicate row
+  instead of just failing loudly. Accepted tradeoff, decided 2026-08-05 —
+  no automated dedup exists. Requires periodic manual review of
+  `uchoice_address` to merge duplicates. The abandoned outbound request is
+  not recoverable — the customer must resubmit it from scratch once the
+  address exists (also accepted: WeChat users routinely copy-paste their own
+  earlier message into a new one, so this isn't as much friction as it looks).
 
 ---
 

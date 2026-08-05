@@ -10,6 +10,14 @@ class AIResponse:
     extracted_fields:     dict       # fields pulled from this message turn only
     all_fields_collected: bool       # True → ready to show confirmation template
     service_type_name:    str | None # set when intent == "new_request"
+    # uchoice_outbound_request only: set when the customer described a
+    # delivery destination that matched nothing in the injected address
+    # candidate list — a best-effort {"company_name": ..., "addr": ...}
+    # guess (either key may be absent) for seeding a fresh upsert_address
+    # session, since this is a genuinely different situation from "the
+    # customer hasn't mentioned a destination yet" (which is just a normal
+    # missing-field wait, not this signal).
+    unmatched_new_address: dict | None = None
 
 
 class AIProvider(ABC):

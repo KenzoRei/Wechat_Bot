@@ -39,6 +39,9 @@ def run_and_get_reply(context: dict, ai_response: AIResponse, db: DBSession) -> 
     intent = ai_response.intent
     context["_reply"] = ""  # handlers write reply here
 
+    if _maybe_pivot_to_add_address(context, ai_response, db):
+        return context.get("_reply", "")
+
     if intent == "new_request":
         _handle_new_request(context, ai_response, db)
     elif intent == "continuation":
@@ -58,6 +61,83 @@ def run_and_get_reply(context: dict, ai_response: AIResponse, db: DBSession) -> 
 def run(context: dict, ai_response: AIResponse, db: DBSession) -> None:
     """Legacy sync wrapper — kept for compatibility."""
     run_and_get_reply(context, ai_response, db)
+
+
+def _maybe_pivot_to_add_address(context: dict, ai_response: AIResponse, db: DBSession) -> bool:
+    """
+    uchoice_outbound_request only: the AI sets ai_response.unmatched_new_address
+    when the customer described a delivery destination that matched nothing
+    in the injected address candidate list — a genuinely different situation
+    from "customer hasn't mentioned a destination yet" (which is just a
+    normal missing-field wait and never sets this).
+
+    Rather than blocking and making the customer explicitly say "取消" before
+    an address can be added, silently abandon the in-progress outbound
+    session (closing its own request_log too, since uchoice_outbound_request
+    isn't targets_existing_request and owns one) and open a fresh
+    upsert_address session pre-seeded with the AI's best-effort company_name/
+    addr guess from the same message. Nothing about the abandoned outbound
+    request survives this — the customer has to resubmit it once the address
+    exists (accepted tradeoff, see docs/uchoice-design.md).
+
+    Returns True if it performed the pivot (caller should stop processing
+    this turn normally — the reply is already written), False otherwise.
+    """
+    guess = ai_response.unmatched_new_address
+    if not guess:
+        return False
+
+    session = _get_session(context, db)
+    current_service_name = ai_response.service_type_name
+    if session is not None and session.service_type_id:
+        svc = _find_service_by_type_id(context, session.service_type_id)
+        current_service_name = svc["name"] if svc else current_service_name
+    if current_service_name != "uchoice_outbound_request":
+        return False
+
+    add_address_service = _find_service(context, "upsert_address")
+    if add_address_service is None:
+        # this role can't add addresses — fall through to normal processing;
+        # destination_address_id was never set per the prompt rule, so the
+        # AI's own reply (asking the customer to have an admin add it)
+        # still gets sent as a normal "still collecting fields" turn.
+        return False
+
+    if session is not None:
+        if session.request_log_id:
+            request_logger.mark_cancelled(db, session.request_log_id)
+        session_manager.close_session(db, session, status="cancelled")
+
+    new_session = session_manager.create_session(
+        db,
+        wechat_openid=context["wechat_openid"],
+        group_id=UUID(context["group_id"]),
+        initial_message=context["content"],
+        service_type_id=UUID(add_address_service["service_type_id"])
+    )
+    log = request_logger.create_log(
+        db,
+        wechat_openid=context["wechat_openid"],
+        group_id=UUID(context["group_id"]),
+        service_type_id=UUID(add_address_service["service_type_id"]),
+        raw_message=context["content"],
+        wechat_msg_id=context["msg_id"]
+    )
+    new_session.request_log_id = log.log_id
+    context["serial_number"] = log.serial_number
+    db.commit()
+
+    seed_fields = {k: v for k, v in guess.items() if v and k in ("company_name", "addr")}
+    if seed_fields:
+        session_manager.update_collected_fields(db, new_session, seed_fields)
+
+    context["session_id"] = str(new_session.session_id)
+    context["service_type_id"] = add_address_service["service_type_id"]
+    context["collected_fields"] = new_session.collected_fields
+
+    session_manager.add_message(db, new_session, "assistant", ai_response.reply)
+    send_message(context, ai_response.reply)
+    return True
 
 
 # ── Intent handlers ───────────────────────────────────────────────────────────
