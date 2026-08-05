@@ -201,11 +201,11 @@ def _inbound_sections_builder(collected_fields: dict, db: DBSession) -> list[dic
     for line in sorted_lines:
         label = _sku_label(sku_labels, line.get("sku_code", "?"))
         if "box_count" in line:
-            qty = f'<font color="info">散箱 x{line["box_count"]}</font>'
+            qty = f'散箱 x{line["box_count"]}'
         else:
             pallet_count = line.get("pallet_count", "?")
             bpp = line.get("boxes_per_pallet", "?")
-            qty = f'<font color="info">{pallet_count} 托</font> @ {bpp}/托'
+            qty = f'{pallet_count} 托 @ {bpp}/托'
         formatted.append(f"{label}：{qty}")
 
     warehouse_code = collected_fields.get("warehouse_code", "?")
@@ -215,7 +215,7 @@ def _inbound_sections_builder(collected_fields: dict, db: DBSession) -> list[dic
         sections.append({
             "label": None,
             "type": "list",
-            "items": ['<font color="warning">需要拆包（+$300）</font>'],
+            "items": ['需要拆包（+$300）'],
         })
     return sections
 
@@ -244,7 +244,7 @@ def _outbound_sections_builder(collected_fields: dict, db: DBSession) -> list[di
         sku = line.get("sku_code", "?")
         label = _sku_label(sku_labels, sku)
         if "box_count" in line:
-            formatted.append(f'{label}：<font color="info">散箱 x{line["box_count"]}</font>')
+            formatted.append(f'{label}：散箱 x{line["box_count"]}')
             continue
 
         bpp = line.get("boxes_per_pallet")
@@ -257,9 +257,9 @@ def _outbound_sections_builder(collected_fields: dict, db: DBSession) -> list[di
                 .first()
             )
             bpp = bucket.boxes_per_pallet if bucket else "未知"
-            default_note = '　<font color="warning">（系统自动选择，如有误请更正）</font>'
+            default_note = '　（系统自动选择，如有误请更正）'
         pallet_count = line.get("pallet_count", "?")
-        formatted.append(f'{label}：<font color="info">{pallet_count} 托</font> @ {bpp}/托{default_note}')
+        formatted.append(f'{label}：{pallet_count} 托 @ {bpp}/托{default_note}')
 
     sections = [{"label": f"出库明细（{warehouse_code} 仓）", "type": "list", "items": formatted}]
 
@@ -274,7 +274,7 @@ def _outbound_sections_builder(collected_fields: dict, db: DBSession) -> list[di
         fee = new_pallet_count * PALLETIZATION_PER_PALLET
         sections.append({
             "label": None, "type": "list",
-            "items": [f'需要打托 <font color="info">{new_pallet_count}</font> 托（+${fee}）'],
+            "items": [f'需要打托 {new_pallet_count} 托（+${fee}）'],
         })
 
     return sections
@@ -309,11 +309,11 @@ def _inbound_completion_sections_builder(collected_fields: dict, db: DBSession) 
     for line in sorted_lines:
         label = _sku_label(sku_labels, line.get("sku_code", "?"))
         if "box_count" in line:
-            formatted.append(f'{label}：<font color="info">散箱 x{line["box_count"]}</font>')
+            formatted.append(f'{label}：散箱 x{line["box_count"]}')
         else:
             pallet_count = line.get("pallet_count", "?")
             bpp = line.get("boxes_per_pallet", "?")
-            formatted.append(f'{label}：<font color="info">{pallet_count} 托</font> @ {bpp}/托')
+            formatted.append(f'{label}：{pallet_count} 托 @ {bpp}/托')
 
     warehouse_code = original_fields.get("warehouse_code", "?")
     sections = [{"label": f"关联申请 {reference_serial}（{warehouse_code} 仓）", "type": "list", "items": formatted}]
@@ -345,15 +345,15 @@ def _outbound_completion_sections_builder(collected_fields: dict, db: DBSession)
         label = _sku_label(sku_labels, line.get("sku_code", "?"))
         if "source_boxes_per_pallet" in line and "resulting_boxes_per_pallet" in line:
             formatted.append(
-                f'{label}：<font color="info">散箱调整</font> '
+                f'{label}：散箱调整 '
                 f'{line["source_boxes_per_pallet"]}/托 → {line["resulting_boxes_per_pallet"]}/托'
             )
         elif "box_count" in line:
-            formatted.append(f'{label}：<font color="info">散箱 x{line["box_count"]}</font>')
+            formatted.append(f'{label}：散箱 x{line["box_count"]}')
         else:
             pallet_count = line.get("pallet_count", "?")
             bpp = line.get("boxes_per_pallet", "?")
-            formatted.append(f'{label}：<font color="info">{pallet_count} 托</font> @ {bpp}/托')
+            formatted.append(f'{label}：{pallet_count} 托 @ {bpp}/托')
 
     warehouse_code = original_fields.get("warehouse_code", "?")
     sections = [{"label": f"关联申请 {reference_serial}（{warehouse_code} 仓）", "type": "list", "items": formatted}]
@@ -380,7 +380,7 @@ def _adjust_sections_builder(collected_fields: dict, db: DBSession) -> list[dict
         bpp = line.get("boxes_per_pallet", "?")
         delta = line.get("pallet_delta", 0)
         reason = line.get("reason", "")
-        delta_str = f'<font color="info">{delta:+d}</font>' if isinstance(delta, int) else f'<font color="info">{delta}</font>'
+        delta_str = f'{delta:+d}' if isinstance(delta, int) else f'{delta}'
         line_str = f"{label} @ {bpp}/托：{delta_str} 托"
         if reason:
             line_str += f"（{reason}）"
@@ -402,7 +402,7 @@ def _move_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
         src = line.get("source_boxes_per_pallet", "?")
         tgt = line.get("target_boxes_per_pallet", "?")
         count = line.get("box_count_moved", "?")
-        formatted.append(f'{label}：从 {src}/托 移动 <font color="info">{count}</font> 箱到 {tgt}/托')
+        formatted.append(f'{label}：从 {src}/托 移动 {count} 箱到 {tgt}/托')
 
     return [{"label": f"库存调拨明细（{warehouse_code} 仓）", "type": "list", "items": formatted}]
 
@@ -432,7 +432,7 @@ def _recount_sections_builder(collected_fields: dict, db: DBSession) -> list[dic
         if delta == 0:
             continue
         label = _sku_label(sku_labels, sku)
-        formatted.append(f'{label} @ {bpp}/托：{before} → {after}（<font color="info">{delta:+d}</font>）')
+        formatted.append(f'{label} @ {bpp}/托：{before} → {after}（{delta:+d}）')
 
     if not formatted:
         formatted = ["（无变化）"]

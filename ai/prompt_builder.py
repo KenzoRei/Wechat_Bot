@@ -118,6 +118,9 @@ def build_system_prompt(context: dict) -> str:
 - 重量单位自动换算：若用户提供千克（公斤/kg），换算为磅后填入 weight_lbs（1千克 = 2.205磅，结果保留两位小数）。
 - 只收集 input_schema 中列出的 required 字段，optional 字段仅在客户提供时收集，不主动询问。
 - 询问时可将缺失字段合并询问，尽量避免逐条询问导致的冗长对话。
+- 【重要】当 all_fields_collected=false 时，reply 必须明确问出还缺哪些具体字段，绝不能用"请稍等""正在为您处理"之类的占位话术敷衍——系统是单轮问答，没有后台异步处理，这类回复不会有下文，只会让用户不知道接下来该发什么。
+  示例：用户说"我要入库"，该服务必填字段还缺 sku_lines（商品及数量）→ 正确输出 all_fields_collected=false，reply 类似"好的，请提供本次入库的商品及数量"。
+  错误输出（不要这样做）：all_fields_collected=false，reply 为"请稍等，我先帮您处理一下入库申请"——完全没有问出缺失字段，是被明确禁止的。
 - all_fields_collected = true 当且仅当 input_schema.required 中所有字段均已收集完毕，此时必须立即设置为 true，不得再追问任何字段（包括 optional 字段）。
 - 【重要】若某服务的 input_schema.required 为空数组（没有任何必填字段），则该服务在识别到的同一轮消息中就必须立即将 all_fields_collected 设置为 true——不存在"还差字段"的情况，绝不能主动询问任何 optional 字段来"确认范围"，除非客户在消息中已经主动提到了它们。
   示例：某服务 input_schema.required 为 []，用户发来"库存"且语义匹配该服务 → 正确输出为

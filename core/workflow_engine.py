@@ -87,8 +87,12 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
         service_type_id=UUID(service["service_type_id"])
     )
 
-    # update context with new session id so downstream can use it
+    # update context with new session id + service type so downstream (esp.
+    # reply_wechat's service-specific title/sections dispatch) can use them —
+    # build_context() only had session=None to work with, so service_type_id
+    # was never set there.
     context["session_id"] = str(session.session_id)
+    context["service_type_id"] = service["service_type_id"]
 
     # Log every resolved request immediately, regardless of eventual outcome —
     # EXCEPT for targets_existing_request services, which never own a log of
@@ -276,6 +280,18 @@ def _execute_workflow_and_finish(context: dict, session, db: DBSession) -> None:
     skipped here and happens later, on the target log, when that completion
     service's own _execute_workflow_and_finish runs.
     """
+    # context["serial_number"] may not have been set yet on this call path —
+    # e.g. a requires_confirmation=false service executed straight from
+    # _handle_continuation, which never sets it (unlike _handle_new_request/
+    # _trigger_confirmation/_handle_confirm). Without this, reply_wechat.py's
+    # `context.get("serial_number", "")` returns the existing None value
+    # (the key is present, just unset) and prints the literal string "None".
+    if not context.get("serial_number") and session.request_log_id:
+        from models.request_log import RequestLog
+        log = db.query(RequestLog).filter_by(log_id=session.request_log_id).first()
+        if log:
+            context["serial_number"] = log.serial_number
+
     if session.request_log_id:
         request_logger.mark_processing(db, session.request_log_id)
 
