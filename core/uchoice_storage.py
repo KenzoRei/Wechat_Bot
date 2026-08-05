@@ -67,3 +67,54 @@ def apply_storage_delta(
     ))
     db.commit()
     return bucket
+
+
+def apply_loose_pick(
+    db: DBSession,
+    warehouse_code: str,
+    sku_code: str,
+    source_boxes_per_pallet: int,
+    box_count: int,
+    request_log_id,
+    created_by: str,
+    origin_txn_type: str = "outbound",
+    destination_warehouse_code: str | None = None,
+    transfer_note: str | None = None,
+) -> None:
+    """
+    Ships box_count boxes of sku_code from a specific (warehouse_code,
+    source_boxes_per_pallet) bucket. Whole pallets are decremented directly;
+    a partial pallet is repackaged in place — the taken pallet is removed
+    from the source bucket and the leftover boxes become a new, smaller
+    bucket (boxes_per_pallet = source_boxes_per_pallet - remainder). The
+    remainder is arithmetic, not something that needs to be separately
+    reported by whoever picked the boxes.
+    """
+    full_pallets, remainder = divmod(box_count, source_boxes_per_pallet)
+
+    if full_pallets:
+        apply_storage_delta(
+            db, warehouse_code, sku_code, source_boxes_per_pallet, -full_pallets,
+            origin_txn_type, request_log_id, note=transfer_note, created_by=created_by
+        )
+        if destination_warehouse_code:
+            apply_storage_delta(
+                db, destination_warehouse_code, sku_code, source_boxes_per_pallet, full_pallets,
+                "transfer_in", request_log_id, note=transfer_note, created_by=created_by
+            )
+
+    if remainder:
+        apply_storage_delta(
+            db, warehouse_code, sku_code, source_boxes_per_pallet, -1, "convert_out",
+            request_log_id, note="loose-box pick", created_by=created_by
+        )
+        resulting_bpp = source_boxes_per_pallet - remainder
+        apply_storage_delta(
+            db, warehouse_code, sku_code, resulting_bpp, 1, "convert_in",
+            request_log_id, note="loose-box pick", created_by=created_by
+        )
+        if destination_warehouse_code:
+            apply_storage_delta(
+                db, destination_warehouse_code, sku_code, remainder, 1, "transfer_in",
+                request_log_id, note=transfer_note, created_by=created_by
+            )

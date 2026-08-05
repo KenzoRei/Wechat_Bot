@@ -4,8 +4,6 @@ template would be built, so a request that was always going to fail doesn't
 get shown a confirmation prompt at all. Registry-with-default-fallback,
 mirroring handlers/registry.py's idiom; most services never need an entry.
 """
-from functools import partial
-
 from sqlalchemy.orm import Session as DBSession
 from models.group import GroupMember
 from models.role import Role
@@ -46,32 +44,16 @@ def _last_admin_protection(context: dict, collected_fields: dict, db: DBSession)
     return None
 
 
-_COMPLETION_LINE_FIELDS = {
-    "confirm_outbound_completion": ("fulfillment_lines", "发货"),
-    "confirm_inbound_completion":  ("received_lines", "收货"),
-}
-
-
-def _loose_line_restatement_required(
-    service_name: str, context: dict, collected_fields: dict, db: DBSession
-) -> str | None:
+def _loose_outbound_pick_required(context: dict, collected_fields: dict, db: DBSession) -> str | None:
     """
-    confirm_inbound_completion / confirm_outbound_completion: if the
-    original request had a loose (box_count) line, it has no sensible
-    default and MUST be restated as a source/resulting boxes_per_pallet
-    conversion pair before this can proceed — see
-    ApplyInboundStorageHandler/ApplyOutboundStorageHandler's identical
-    guards. This can't be left to the AI to reliably ask about on its own
-    (observed live: it didn't, 0/4 trials) — and the deterministic
-    single-candidate auto-resolve in workflow_engine.py forces
-    all_fields_collected=true regardless of what the AI decided, so
-    without this check a loose line sails straight through to execution,
-    crashes, and permanently fails the original request (a completion
-    target must be status='processing' to be resolved again — there is no
-    retry once it's failed).
+    confirm_outbound_completion: a loose (box_count) original line gets an
+    automatic pick resolved by workflow_engine._resolve_outbound_loose_pick_defaults
+    (smallest-boxes_per_pallet buckets first) before this validator runs.
+    This only needs to block the rare case where that resolution failed —
+    total available stock across every bucket for that sku+warehouse can't
+    even cover the requested amount — so a request that was always going to
+    crash on insufficient stock doesn't get shown a confirmation prompt at all.
     """
-    restated_key, verb = _COMPLETION_LINE_FIELDS[service_name]
-
     reference_serial = collected_fields.get("reference_serial")
     if not reference_serial:
         return None
@@ -86,28 +68,64 @@ def _loose_line_restatement_required(
     if not loose_skus:
         return None
 
-    restated_lines = collected_fields.get(restated_key) or []
-    converted_skus = {
-        l["sku_code"] for l in restated_lines
-        if "source_boxes_per_pallet" in l and "resulting_boxes_per_pallet" in l
-    }
-
-    missing = loose_skus - converted_skus
+    restated_lines = collected_fields.get("fulfillment_lines") or []
+    by_sku = {l["sku_code"]: l for l in restated_lines}
+    missing = [sku for sku in loose_skus if not (by_sku.get(sku) or {}).get("picks")]
     if not missing:
         return None
 
     sku_labels = sku_label_map(db)
     missing_labels = "、".join(sku_labels.get(s, s) for s in sorted(missing))
     return (
-        f"商品 {missing_labels} 是散箱{verb}，系统没有默认值可用，"
-        f"请说明是从多少箱/托的托盘取货的、取货后该托盘还剩多少箱（例如\"64箱的托盘，剩44箱\"）。"
+        f"商品 {missing_labels} 是散箱发货，当前库存不足以自动分配所需数量，"
+        f"请检查库存，或手动说明从哪些托盘规格各取多少箱。"
     )
+
+
+def _loose_inbound_restatement_required(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """
+    confirm_inbound_completion: a loose (box_count) original line has no
+    default — nothing exists yet to default from, since inbound creates new
+    storage rather than drawing from existing buckets. The warehouseman must
+    state how the received loose boxes were packed: boxes_per_pallet +
+    pallet_count, matching exactly what ApplyInboundStorageHandler writes —
+    this must stay in sync with that handler's expected shape (a source/
+    resulting conversion-pair shape was tried here previously and would have
+    crashed with a raw KeyError even after "restatement", since the handler
+    never looked for those field names at all).
+    """
+    reference_serial = collected_fields.get("reference_serial")
+    if not reference_serial:
+        return None
+
+    from core.uchoice_context import resolve_completion_target, sku_label_map
+
+    target, original_fields = resolve_completion_target(db, reference_serial)
+    if target is None:
+        return None
+
+    loose_skus = {l["sku_code"] for l in (original_fields.get("sku_lines") or []) if "box_count" in l}
+    if not loose_skus:
+        return None
+
+    restated_lines = collected_fields.get("received_lines") or []
+    by_sku = {l["sku_code"]: l for l in restated_lines}
+    missing = [
+        sku for sku in loose_skus
+        if not ({"boxes_per_pallet", "pallet_count"} <= set((by_sku.get(sku) or {}).keys()))
+    ]
+    if not missing:
+        return None
+
+    sku_labels = sku_label_map(db)
+    missing_labels = "、".join(sku_labels.get(s, s) for s in sorted(missing))
+    return f"商品 {missing_labels} 是散箱入库，请说明打包成了多少箱/托、共多少托。"
 
 
 PRE_CONFIRM_VALIDATORS = {
     "role_change": _last_admin_protection,
-    "confirm_outbound_completion": partial(_loose_line_restatement_required, "confirm_outbound_completion"),
-    "confirm_inbound_completion": partial(_loose_line_restatement_required, "confirm_inbound_completion"),
+    "confirm_outbound_completion": _loose_outbound_pick_required,
+    "confirm_inbound_completion": _loose_inbound_restatement_required,
 }
 
 

@@ -321,8 +321,9 @@ def _inbound_completion_sections_builder(collected_fields: dict, db: DBSession) 
 
 
 def _outbound_completion_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
-    """confirm_outbound_completion — same treatment, plus loose-box convert-pair lines."""
+    """confirm_outbound_completion — same treatment, plus loose-box picks."""
     from core.uchoice_context import resolve_completion_target
+    from models.uchoice import UchoiceStorage
 
     reference_serial = collected_fields.get("reference_serial")
     target, original_fields = resolve_completion_target(db, reference_serial)
@@ -335,17 +336,31 @@ def _outbound_completion_sections_builder(collected_fields: dict, db: DBSession)
     effective_lines = restated or original_fields.get("sku_lines", [])
     sorted_lines = sorted(
         effective_lines,
-        key=lambda l: (l.get("sku_code", ""), l.get("boxes_per_pallet", l.get("box_count", l.get("source_boxes_per_pallet", 0)))),
+        key=lambda l: (l.get("sku_code", ""), l.get("boxes_per_pallet", l.get("box_count", 0))),
     )
+    warehouse_code = original_fields.get("warehouse_code", "?")
 
     formatted = []
     for line in sorted_lines:
-        label = _sku_label(sku_labels, line.get("sku_code", "?"))
-        if "source_boxes_per_pallet" in line and "resulting_boxes_per_pallet" in line:
-            formatted.append(
-                f'{label}：散箱调整 '
-                f'{line["source_boxes_per_pallet"]}/托 → {line["resulting_boxes_per_pallet"]}/托'
+        sku = line.get("sku_code", "?")
+        label = _sku_label(sku_labels, sku)
+        if "picks" in line:
+            pick_strs = []
+            for p in line["picks"]:
+                note = "（系统自动选择）" if p.get("_auto_default") else ""
+                pick_strs.append(f'{p["box_count"]}箱@{p["source_boxes_per_pallet"]}/托{note}')
+            formatted.append(f'{label}：散箱发货 ' + "，".join(pick_strs))
+
+            buckets = (
+                db.query(UchoiceStorage)
+                .filter_by(warehouse_code=warehouse_code, sku_code=sku)
+                .filter(UchoiceStorage.pallet_count > 0)
+                .order_by(UchoiceStorage.boxes_per_pallet.asc())
+                .all()
             )
+            if buckets:
+                stock_str = "，".join(f'{b.boxes_per_pallet}/托 x{b.pallet_count}' for b in buckets)
+                formatted.append(f'　当前库存：{stock_str}')
         elif "box_count" in line:
             formatted.append(f'{label}：散箱 x{line["box_count"]}')
         else:
@@ -353,7 +368,6 @@ def _outbound_completion_sections_builder(collected_fields: dict, db: DBSession)
             bpp = line.get("boxes_per_pallet", "?")
             formatted.append(f'{label}：{pallet_count} 托 @ {bpp}/托')
 
-    warehouse_code = original_fields.get("warehouse_code", "?")
     sections = [{"label": f"关联申请 {reference_serial}（{warehouse_code} 仓）", "type": "list", "items": formatted}]
     if not restated:
         sections.append({"label": None, "type": "list", "items": ["（按原申请数量发货，如实发数量有出入请重新说明）"]})
