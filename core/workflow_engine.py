@@ -157,7 +157,18 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
     # find the matching service in the group's allowed list
     service = _find_service(context, ai_response.service_type_name)
     if service is None:
-        send_message(context, "抱歉，您的群组暂不支持该服务。如有疑问请联系管理员。")
+        if ai_response.service_type_name:
+            # the AI named a real service, it's just not granted to this
+            # group/role — "unsupported" is accurate feedback here.
+            send_message(context, "抱歉，您的群组暂不支持该服务。如有疑问请联系管理员。")
+        else:
+            # service_type_name came back empty/null — the AI couldn't tell
+            # what was being asked, often because a message landed as a
+            # dangling fragment right after a previous session auto-closed
+            # (e.g. the new stock backstop cancelling a request). "抱歉，
+            # 您的群组暂不支持该服务" would wrongly imply something
+            # structural/permanent; the real ask is just "please restate."
+            send_message(context, "抱歉，没能理解您需要哪项服务，请重新描述一下您的需求。")
         return
 
     # create session
