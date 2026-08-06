@@ -20,6 +20,7 @@ class OpenAIProvider(AIProvider):
                 *build_messages(context),
             ],
             response_format={"type": "json_object"},  # forces valid JSON output
-            max_tokens=1024,
+            max_completion_tokens=4096,
+            reasoning_effort="low",
         )
         return parse_response(response.choices[0].message.content)
