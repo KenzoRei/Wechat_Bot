@@ -208,7 +208,12 @@ def _build_uchoice_candidates(
 
     if "uchoice_outbound_request" in names:
         candidates["addresses"] = uchoice_context.address_candidates(db)
-        candidates["storage_buckets"] = uchoice_context.storage_bucket_candidates(db, scope_warehouse)
+        # boxes_per_pallet resolution (default-fill, ambiguity-clarification,
+        # stock-sufficiency check) is entirely code-level now — see
+        # workflow_engine._resolve_outbound_pallet_defaults — so the AI no
+        # longer needs real bucket numbers in context at all. Not injecting
+        # them removes the exact material that kept tempting it to self-fill
+        # a plausible-looking value despite being told not to.
 
     if "confirm_inbound_completion" in names and "uchoice_inbound_request" in by_name:
         candidates["pending_inbound_requests"] = uchoice_context.pending_request_candidates(
