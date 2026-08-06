@@ -149,9 +149,20 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
     """
     if context.get("session_id"):
         if not _supersede_stale_target_session(context, db):
-            # session already open, and it's not a supersedable stale
-            # targets_existing_request session — reject and notify
-            send_message(context, "你有一个未完成的申请，请先完成或取消后再提交新请求。")
+            # Session already open, and it's not a supersedable stale
+            # targets_existing_request session. The prompt already asserts
+            # (ai/prompt_builder.py) that a message arriving mid-session is
+            # "almost certainly" an answer to the last question, not a fresh
+            # request — but that classification has proven unreliable live:
+            # a customer's answer to a color-clarification question got read
+            # as intent=new_request because its wording didn't echo the
+            # pending question, which used to hard-block with "你有一个未完成
+            # 的申请" instead of just continuing the session. Rather than
+            # reject the user for an AI misclassification, deterministically
+            # route this turn through the existing session as a continuation
+            # — same pattern as the other AI-intent overrides in this file
+            # (_outbound_required_fields_present, _autoresolve_single_candidate).
+            _handle_continuation(context, ai_response, db)
             return
 
     # find the matching service in the group's allowed list
@@ -351,6 +362,15 @@ def _on_all_fields_collected(
     if service.get("targets_existing_request", False):
         target, error = _resolve_target_request(session, db)
         if error:
+            # Unlike _close_if_no_pending_candidates (which only fires when
+            # reference_serial is still missing), this is reached once the
+            # AI already believed it had a reference_serial and it still
+            # doesn't resolve to a real, matching request. Leaving the
+            # session open here left it stuck 'active' indefinitely — the
+            # customer's next, unrelated message then got blocked as "你有
+            # 一个未完成的申请" instead of starting cleanly. Nothing commits
+            # to real data on this path, so it's always safe to abandon.
+            session_manager.close_session(db, session, status="cancelled")
             send_message(context, error)
             return
         session.request_log_id = target.log_id
