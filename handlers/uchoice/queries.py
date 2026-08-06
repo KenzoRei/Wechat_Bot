@@ -2,18 +2,18 @@ from handlers.base import BaseHandler
 
 
 class QueryStorageHandler(BaseHandler):
-    """view_storage — requires_confirmation=false, executes immediately."""
+    """
+    view_storage — requires_confirmation=false, executes immediately.
+    Deliberately zero-argument: always shows every warehouse's full
+    inventory, no filtering by warehouse/SKU — input_schema has no fields
+    left to collect, and this handler doesn't read collected_fields at all,
+    so there's nothing for a stray field to accidentally filter on.
+    """
 
     def handle(self, context: dict, config: dict, db) -> dict:
         from models.uchoice import UchoiceStorage
 
-        fields = context.get("collected_fields", {})
-        query = db.query(UchoiceStorage)
-        if fields.get("warehouse_code"):
-            query = query.filter_by(warehouse_code=fields["warehouse_code"])
-        if fields.get("sku_code"):
-            query = query.filter_by(sku_code=fields["sku_code"])
-        rows = query.order_by(
+        rows = db.query(UchoiceStorage).order_by(
             UchoiceStorage.warehouse_code, UchoiceStorage.sku_code, UchoiceStorage.boxes_per_pallet
         ).all()
 

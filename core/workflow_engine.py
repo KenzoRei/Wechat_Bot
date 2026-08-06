@@ -327,6 +327,8 @@ def _on_all_fields_collected(
     if service["name"] == "uchoice_outbound_request":
         _resolve_outbound_warehouse_default(context, session, db)
         _resolve_outbound_pallet_defaults(context, session, db)
+        if _reject_invalid_outbound_stock(context, session, db):
+            return
 
     if service["name"] == "confirm_outbound_completion":
         _resolve_outbound_loose_pick_defaults(context, session, db)
@@ -403,6 +405,66 @@ def _resolve_outbound_pallet_defaults(context: dict, session, db: DBSession) -> 
     if changed:
         session_manager.update_collected_fields(db, session, {"sku_lines": resolved_lines})
         context["collected_fields"] = session.collected_fields
+
+
+def _reject_invalid_outbound_stock(context: dict, session, db: DBSession) -> bool:
+    """
+    A palletized outbound line's boxes_per_pallet — whether stated by the
+    customer or filled in by _resolve_outbound_pallet_defaults just above —
+    must correspond to real, sufficient stock. There's no fallback question
+    worth asking here: if the bucket doesn't exist at all (or doesn't have
+    enough pallets), no answer the customer gives makes stock materialize,
+    and a palletized order can't span multiple bucket sizes the way a loose
+    pick can (see _resolve_outbound_loose_pick_defaults for that case).
+    Cancels the request outright (session + its own request_log — this
+    service isn't targets_existing_request, so it owns one) rather than
+    leaving a request open that can only ever fail later, at completion
+    time — the exact failure mode this replaces (a fabricated
+    boxes_per_pallet baked into a 'processing' request, crashing when the
+    warehouseman eventually confirmed it).
+
+    Returns True if it rejected the request (caller should stop processing
+    this turn), False if every palletized line checks out.
+    """
+    from models.uchoice import UchoiceStorage
+    from core.uchoice_context import sku_label_map
+
+    fields = session.collected_fields
+    warehouse_code = fields.get("warehouse_code")
+    sku_lines = fields.get("sku_lines") or []
+
+    problems = []
+    for line in sku_lines:
+        if "box_count" in line:
+            continue  # loose lines aren't checked here
+        bpp = line.get("boxes_per_pallet")
+        pallet_count = line.get("pallet_count")
+        if bpp is None or pallet_count is None:
+            continue  # not yet fully specified — normal field collection handles this
+        bucket = (
+            db.query(UchoiceStorage)
+            .filter_by(warehouse_code=warehouse_code, sku_code=line.get("sku_code"), boxes_per_pallet=bpp)
+            .first()
+        )
+        available = bucket.pallet_count if bucket else 0
+        if available < pallet_count:
+            problems.append((line.get("sku_code"), bpp, available, pallet_count))
+
+    if not problems:
+        return False
+
+    sku_labels = sku_label_map(db)
+    lines_text = "；".join(
+        f"{sku_labels.get(sku, sku)}@{bpp}/托 现有 {available} 托，申请 {requested} 托"
+        for sku, bpp, available, requested in problems
+    )
+    message = f"申请已取消：{warehouse_code} 仓库没有足够库存可满足此次出库——{lines_text}。请核实商品规格或数量后重新提交。"
+
+    if session.request_log_id:
+        request_logger.mark_cancelled(db, session.request_log_id)
+    session_manager.close_session(db, session, status="cancelled")
+    send_message(context, message)
+    return True
 
 
 def _resolve_outbound_loose_pick_defaults(context: dict, session, db: DBSession) -> None:
