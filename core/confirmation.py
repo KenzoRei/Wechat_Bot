@@ -274,7 +274,7 @@ def _outbound_sections_builder(collected_fields: dict, db: DBSession) -> list[di
         fee = new_pallet_count * PALLETIZATION_PER_PALLET
         sections.append({
             "label": None, "type": "list",
-            "items": [f'需要打托 {new_pallet_count} 托（+${fee}）'],
+            "items": [f'打板数量：{new_pallet_count} 托（+${fee}）'],
         })
 
     return sections
