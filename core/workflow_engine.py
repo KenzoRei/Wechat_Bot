@@ -221,7 +221,7 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
     auto_resolved = _autoresolve_single_candidate(context, service, session, db)
 
     # Q3 fix: if AI already has all fields from the first message, go straight to confirmation
-    if ai_response.all_fields_collected or auto_resolved:
+    if ai_response.all_fields_collected or auto_resolved or _outbound_required_fields_present(service, session):
         _on_all_fields_collected(context, ai_response, service, session, db)
     else:
         session_manager.add_message(db, session, "assistant", ai_response.reply)
@@ -286,6 +286,28 @@ def _autoresolve_single_candidate(context: dict, service: dict, session, db: DBS
     return True
 
 
+def _outbound_required_fields_present(service: dict, session) -> bool:
+    """
+    Deterministic override for uchoice_outbound_request: its only genuinely
+    required top-level fields are sku_lines and destination_address_id —
+    boxes_per_pallet is just a sub-field inside a sku_lines entry, never
+    declared in input_schema.required/optional at all, and has no
+    independent completion signal of its own. The AI has repeatedly (even
+    after several rounds of prompt tightening) treated a missing
+    boxes_per_pallet as blocking anyway and stalled asking about it, live-
+    tested at a nonzero failure rate no amount of rewording fully closed.
+    Once the two real required fields are present, force progression to
+    _on_all_fields_collected regardless of what the AI's own
+    all_fields_collected flag says — _resolve_outbound_pallet_defaults
+    (called from there) is what actually resolves or asks about
+    boxes_per_pallet now, deterministically.
+    """
+    if service["name"] != "uchoice_outbound_request":
+        return False
+    fields = session.collected_fields
+    return bool(fields.get("sku_lines")) and bool(fields.get("destination_address_id"))
+
+
 def _close_if_no_pending_candidates(service: dict, session, context: dict, db: DBSession) -> bool:
     """
     A targets_existing_request session that still lacks reference_serial and
@@ -337,7 +359,10 @@ def _on_all_fields_collected(
 
     if service["name"] == "uchoice_outbound_request":
         _resolve_outbound_warehouse_default(context, session, db)
-        _resolve_outbound_pallet_defaults(context, session, db)
+        clarification = _resolve_outbound_pallet_defaults(context, session, db)
+        if clarification:
+            send_message(context, clarification)
+            return
         if _reject_invalid_outbound_stock(context, session, db):
             return
 
@@ -377,45 +402,98 @@ def _resolve_outbound_warehouse_default(context: dict, session, db: DBSession) -
     context["collected_fields"] = session.collected_fields
 
 
-def _resolve_outbound_pallet_defaults(context: dict, session, db: DBSession) -> None:
+def _resolve_outbound_pallet_defaults(context: dict, session, db: DBSession) -> str | None:
     """
-    A palletized outbound line missing boxes_per_pallet is meant to default
-    to the largest available storage bucket — but that resolution previously
-    only happened inside the confirmation *display* (core/confirmation.py's
-    _outbound_sections_builder), computed transiently and never written back.
-    session.collected_fields kept the line without boxes_per_pallet, so
-    execution (ApplyOutboundStorageHandler) crashed with a bare KeyError the
-    moment a customer actually relied on the documented default-bucket
-    behavior instead of specifying it explicitly. Resolve and persist here,
-    once, before the confirmation is even built, so what's shown is what's
-    stored is what's executed — marks each defaulted line with
-    _bpp_auto_default so the confirmation display can still flag it as an
-    assumption rather than silently taking a decision away from the user.
+    Resolves boxes_per_pallet for every palletized outbound line entirely
+    from real, current uchoice_storage state — never from whatever the AI
+    put in the field. A present boxes_per_pallet is only ever treated as
+    "the customer said so" if it actually matches a real bucket with enough
+    pallets; anything else (missing, hallucinated, matches nothing,
+    insufficient quantity) is re-derived identically, as if it had never
+    been given. This is the fix for the actual recurring bug: earlier
+    versions only resolved a MISSING value and blindly trusted a present
+    one, which is exactly how a fabricated or self-selected-but-thin value
+    kept slipping through despite repeated prompt tightening telling the AI
+    not to fill this in.
+
+    - zero real buckets for that sku+warehouse: line is left as-is:
+      unresolvable here, so _reject_invalid_outbound_stock (called right
+      after this returns None) cancels the whole request — no bucket size
+      exists, so there's no question worth asking.
+    - exactly one real bucket: unambiguous, silently auto-applied and
+      persisted (marked _bpp_auto_default for the confirmation display).
+    - 2+ real buckets: genuine ambiguity only a human should resolve.
+      Returns a deterministic, Python-formatted clarification message
+      listing every real option — never AI-authored text, so its phrasing
+      can't drift or go blind the way repeated prompt attempts did.
+
+    Returns the clarification message to send (caller should send it and
+    stop processing this turn, leaving the session open) if any line needs
+    one, else None (every line is now resolved or left for the stock
+    backstop to reject).
     """
-    from core.uchoice_context import resolve_default_bucket
+    from models.uchoice import UchoiceStorage
+    from core.uchoice_context import sku_label_map
 
     fields = session.collected_fields
     sku_lines = fields.get("sku_lines")
     if not sku_lines:
-        return
+        return None
 
     warehouse_code = fields.get("warehouse_code")
+    sku_labels = None
     changed = False
     resolved_lines = []
+    clarifications = []
+
     for line in sku_lines:
-        if "box_count" in line or line.get("boxes_per_pallet") is not None:
+        if "box_count" in line:
             resolved_lines.append(line)
             continue
-        default_bpp = resolve_default_bucket(db, warehouse_code, line.get("sku_code"))
-        if default_bpp is None:
+
+        buckets = (
+            db.query(UchoiceStorage)
+            .filter_by(warehouse_code=warehouse_code, sku_code=line.get("sku_code"))
+            .filter(UchoiceStorage.pallet_count > 0)
+            .order_by(UchoiceStorage.boxes_per_pallet.asc())
+            .all()
+        )
+
+        pallet_count = line.get("pallet_count")
+        stated_bpp = line.get("boxes_per_pallet")
+        stated_bucket = next((b for b in buckets if b.boxes_per_pallet == stated_bpp), None) if stated_bpp is not None else None
+        if stated_bucket is not None and pallet_count is not None and stated_bucket.pallet_count >= pallet_count:
+            # genuinely real and sufficient — trust it as a real customer statement
             resolved_lines.append(line)
             continue
-        resolved_lines.append({**line, "boxes_per_pallet": default_bpp, "_bpp_auto_default": True})
-        changed = True
+
+        if not buckets:
+            # nothing to resolve to at all — leave untouched, the stock
+            # backstop right after this function cancels the request
+            resolved_lines.append(line)
+            continue
+
+        if len(buckets) == 1:
+            b = buckets[0]
+            resolved_lines.append({**line, "boxes_per_pallet": b.boxes_per_pallet, "_bpp_auto_default": True})
+            changed = True
+            continue
+
+        if sku_labels is None:
+            sku_labels = sku_label_map(db)
+        label = sku_labels.get(line.get("sku_code"), line.get("sku_code"))
+        options = "、".join(f"{b.boxes_per_pallet}箱/托（现有{b.pallet_count}托）" for b in buckets)
+        clarifications.append(f"{label}：{options}")
+        resolved_lines.append(line)
+
+    if clarifications:
+        return f"请确认托盘规格——{'；'.join(clarifications)}。请告知您要哪一种。"
 
     if changed:
         session_manager.update_collected_fields(db, session, {"sku_lines": resolved_lines})
         context["collected_fields"] = session.collected_fields
+
+    return None
 
 
 def _reject_invalid_outbound_stock(context: dict, session, db: DBSession) -> bool:
@@ -618,8 +696,9 @@ def _handle_continuation(context: dict, ai_response: AIResponse, db: DBSession) 
     context["collected_fields"] = session.collected_fields
 
     auto_resolved = service is not None and _autoresolve_single_candidate(context, service, session, db)
+    force_complete = service is not None and _outbound_required_fields_present(service, session)
 
-    if (ai_response.all_fields_collected or auto_resolved) and service is not None:
+    if (ai_response.all_fields_collected or auto_resolved or force_complete) and service is not None:
         _on_all_fields_collected(context, ai_response, service, session, db)
     else:
         session_manager.add_message(db, session, "assistant", ai_response.reply)
