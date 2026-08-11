@@ -24,7 +24,9 @@ class ApplyInboundStorageHandler(BaseHandler):
 
         applied = []
         for line in received_lines:
-            sku = line["sku_code"]
+            sku = line.get("sku_code")
+            if not sku:
+                raise RuntimeError("入库明细缺少商品编号（sku_code），无法执行入库。")
             if "box_count" in line:
                 # No sensible default exists for loose-type lines — the design
                 # doc requires explicit restatement of how they were received.
@@ -75,7 +77,9 @@ class ApplyOutboundStorageHandler(BaseHandler):
 
         applied = []
         for line in fulfillment_lines:
-            sku = line["sku_code"]
+            sku = line.get("sku_code")
+            if not sku:
+                raise RuntimeError("出库明细缺少商品编号（sku_code），无法执行出库。")
             if "picks" in line:
                 # Loose-box fulfillment — each pick draws box_count boxes
                 # from a specific source bucket (either stated explicitly by

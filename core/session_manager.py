@@ -107,11 +107,20 @@ def update_collected_fields(
 def close_session(
     db: DBSession,
     session: ConversationSession,
-    status: str  # "completed" | "cancelled" | "rejected" | "failed" | "timed_out"
+    status: str,  # "completed" | "cancelled" | "rejected" | "failed" | "timed_out"
+    commit: bool = True
 ) -> None:
+    """
+    commit=False lets a caller (core.workflow_engine's atomic DB phase) fold
+    this status change into the same transaction as the storage deltas and
+    mark_success/mark_failed call that surround it, so the whole unit commits
+    or rolls back together (systemic-validation-addendum.md Sec 3b/Codex
+    round-28 finding 1).
+    """
     session.status = status
     session.updated_at = datetime.now(timezone.utc)
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def build_context(

@@ -65,7 +65,16 @@ def apply_storage_delta(
         note=note,
         created_by=created_by,
     ))
-    db.commit()
+    # No db.commit() here (Phase 2 atomicity fix, systemic-validation-addendum.md
+    # Sec 3b) -- a multi-delta operation (move_storage's 4 calls/line, any
+    # multi-line adjust/recount/completion) must succeed or fail as one unit.
+    # Committing per-call let an earlier delta survive a later one's failure,
+    # a real partial-write/inventory-loss risk. flush() still surfaces this
+    # delta's own errors (e.g. the negative-balance check above) immediately,
+    # without prematurely ending the caller's transaction -- the caller
+    # (core/workflow_engine.py's DB phase) commits once, after every delta in
+    # the operation has succeeded.
+    db.flush()
     return bucket
 
 

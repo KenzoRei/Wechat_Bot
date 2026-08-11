@@ -42,11 +42,19 @@ def create_log(
 def mark_success(
     db: DBSession,
     log_id: UUID,
-    result: dict
+    result: dict,
+    commit: bool = True
 ) -> None:
     """
     Called by workflow_engine after all workflow steps complete successfully.
     Records the result payload (e.g. tracking number, label URL).
+
+    commit=False lets a caller (core.workflow_engine's atomic DB phase) fold
+    this status change into the same transaction as the storage deltas that
+    preceded it, so a failure between this call and the caller's own commit
+    rolls back both together instead of leaving mark_success's change
+    already durable on its own (systemic-validation-addendum.md Sec 3b/
+    Codex round-28 finding 1).
     """
     log = db.query(RequestLog).filter_by(log_id=log_id).first()
     if log is None:
@@ -54,17 +62,21 @@ def mark_success(
     log.status       = "success"
     log.result       = result
     log.completed_at = datetime.now(timezone.utc)
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def mark_failed(
     db: DBSession,
     log_id: UUID,
-    error_detail: str
+    error_detail: str,
+    commit: bool = True
 ) -> None:
     """
     Called by workflow_engine when any workflow step raises an exception.
     Records the error message for admin debugging via GET /admin/request-logs.
+
+    commit=False -- see mark_success's docstring for why this exists.
     """
     log = db.query(RequestLog).filter_by(log_id=log_id).first()
     if log is None:
@@ -72,7 +84,8 @@ def mark_failed(
     log.status       = "failed"
     log.error_detail = error_detail
     log.completed_at = datetime.now(timezone.utc)
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def mark_processing(db: DBSession, log_id: UUID) -> None:

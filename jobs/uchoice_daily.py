@@ -22,10 +22,11 @@ from models.service import ServiceType
 from models.uchoice import UchoiceStorage, UchoiceStorageFeeLedger
 from core import request_logger
 from core.uchoice_rates import STORAGE_PER_PALLET_PER_DAY
+from core.uchoice_constants import VALID_WAREHOUSE_CODES
 from clients.wechat_client import send_group_webhook_message
 
 STALE_THRESHOLD_DAYS = 7
-WAREHOUSES = ["JFK", "DE"]
+WAREHOUSES = sorted(VALID_WAREHOUSE_CODES)
 
 
 def run_uchoice_daily(db: DBSession) -> None:
