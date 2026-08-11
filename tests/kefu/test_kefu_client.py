@@ -5,6 +5,7 @@ from clients.kefu_client import (
     KefuClient,
     KefuQuotaExceeded,
     KefuWindowClosed,
+    provider_msgid,
 )
 
 
@@ -139,3 +140,32 @@ def test_send_text_rejects_oversize_utf8_without_http_call():
         )
     assert http.get_calls == []
     assert http.request_calls == []
+
+
+def test_provider_msgid_hashes_long_logical_keys_deterministically():
+    logical = "kefu-denied:A1cudurde2uNTnezv1gvhMmBNn"
+    first = provider_msgid(logical)
+    second = provider_msgid(logical)
+
+    assert first == second
+    assert len(first.encode("utf-8")) == 32
+    assert provider_msgid("delivery-1") == "delivery-1"
+
+
+def test_send_text_uses_bounded_provider_msgid():
+    http = FakeHTTP(
+        [{"access_token": "token", "expires_in": 7200}],
+        [{"errcode": 0}],
+    )
+    logical = "kefu-denied:A1cudurde2uNTnezv1gvhMmBNn"
+
+    returned = client(http).send_text(
+        open_kfid="kf1",
+        external_userid="customer1",
+        text="register first",
+        msgid=logical,
+    )
+
+    sent = http.request_calls[0][2]["json"]["msgid"]
+    assert sent == provider_msgid(logical)
+    assert returned == sent

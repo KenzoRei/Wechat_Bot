@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
 from dataclasses import dataclass
@@ -14,6 +15,14 @@ API_BASE = "https://qyapi.weixin.qq.com"
 TOKEN_ERROR_CODES = {40014, 42001, 42007}
 QUOTA_ERROR_CODES = {95001}
 WINDOW_ERROR_CODES = {95002, 95018}
+
+
+def provider_msgid(logical_id: str) -> str:
+    """Return a stable WeCom msgid within the provider's 32-byte limit."""
+    value = str(logical_id)
+    if len(value.encode("utf-8")) <= 32:
+        return value
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:32]
 
 
 class KefuAPIError(RuntimeError):
@@ -173,18 +182,19 @@ class KefuClient:
     def send_text(self, *, open_kfid: str, external_userid: str, text: str, msgid: str) -> str:
         if len(text.encode("utf-8")) > 2048:
             raise ValueError("Kefu text payload exceeds 2048 UTF-8 bytes")
+        outbound_msgid = provider_msgid(msgid)
         data = self._request(
             "POST",
             "/cgi-bin/kf/send_msg",
             json={
                 "touser": external_userid,
                 "open_kfid": open_kfid,
-                "msgid": msgid,
+                "msgid": outbound_msgid,
                 "msgtype": "text",
                 "text": {"content": text},
             },
         )
-        return str(data.get("msgid") or msgid)
+        return str(data.get("msgid") or outbound_msgid)
 
     def upload_file(self, *, filename: str, content: bytes, content_type: str) -> str:
         data = self._request(
@@ -199,15 +209,16 @@ class KefuClient:
         return str(media_id)
 
     def send_file(self, *, open_kfid: str, external_userid: str, media_id: str, msgid: str) -> str:
+        outbound_msgid = provider_msgid(msgid)
         data = self._request(
             "POST",
             "/cgi-bin/kf/send_msg",
             json={
                 "touser": external_userid,
                 "open_kfid": open_kfid,
-                "msgid": msgid,
+                "msgid": outbound_msgid,
                 "msgtype": "file",
                 "file": {"media_id": media_id},
             },
         )
-        return str(data.get("msgid") or msgid)
+        return str(data.get("msgid") or outbound_msgid)
