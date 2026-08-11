@@ -6,6 +6,7 @@ from clients.kefu_client import SyncPage
 from core.kefu_sync import (
     CLAIM_SQL,
     extract_case_number_hint,
+    is_customer_message,
     normalize_message,
     sync_available_messages,
 )
@@ -18,6 +19,39 @@ def test_normalize_requires_transport_identity_and_message_type():
     assert message["msgid"] == "1"
     with pytest.raises(ValueError, match="external_userid"):
         normalize_message({"msgid": "1", "open_kfid": "kf", "msgtype": "text"})
+
+
+def test_only_customer_origin_messages_reach_business_processing():
+    assert is_customer_message(
+        {
+            "msgid": "customer-1",
+            "open_kfid": "kf",
+            "external_userid": "external",
+            "origin": 3,
+            "msgtype": "text",
+        }
+    ) is True
+    assert is_customer_message(
+        {
+            "msgid": "event-1",
+            "origin": 4,
+            "msgtype": "event",
+            "event": {
+                "event_type": "enter_session",
+                "open_kfid": "kf",
+                "external_userid": "external",
+            },
+        }
+    ) is False
+    assert is_customer_message(
+        {
+            "msgid": "servicer-1",
+            "open_kfid": "kf",
+            "external_userid": "external",
+            "origin": 5,
+            "msgtype": "text",
+        }
+    ) is False
 
 
 @pytest.mark.parametrize(
