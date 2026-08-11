@@ -50,7 +50,7 @@ from sqlalchemy.orm import Session as DBSession
 from ai.chain import AIProviderChain
 from ai.claude_provider import ClaudeProvider
 from ai.openai_provider import OpenAIProvider
-from clients.kefu_client import KefuClient
+from clients.kefu_client import KefuAPIError, KefuClient
 from core import access_control, kefu_completion_notice, kefu_registration, kefu_turn_apply, session_manager
 from core.kefu_contracts import (
     CaseTurnDenied,
@@ -252,15 +252,24 @@ def _direct_send(client: KefuClient, identity: KefuIdentity, delivery_key: str, 
     conversation_session/request_log machinery. Accepts the same
     documented at-least-once risk as every other Kefu send (plan Sec 2.5).
     """
-    state = client.get_service_state(
-        open_kfid=identity.open_kfid,
-        external_userid=identity.external_userid,
-    )
-    if state.state not in (0, 1):
-        raise RuntimeError(
-            f"direct Kefu reply blocked by service_state={state.state}"
-            + (f" servicer_userid={state.servicer_userid}" if state.servicer_userid else "")
+    try:
+        state = client.get_service_state(
+            open_kfid=identity.open_kfid,
+            external_userid=identity.external_userid,
         )
+    except KefuAPIError as exc:
+        if exc.errcode != 48002:
+            raise
+        # Some current enterprise-internal Kefu configurations allow
+        # sync_msg/send_msg but not the optional conversation-state API.
+        # send_msg is authoritative and must not be blocked by this preflight.
+        print("[kefu_case_adapter] service-state preflight unavailable (48002); attempting send", flush=True)
+    else:
+        if state.state not in (0, 1):
+            raise RuntimeError(
+                f"direct Kefu reply blocked by service_state={state.state}"
+                + (f" servicer_userid={state.servicer_userid}" if state.servicer_userid else "")
+            )
     result = send_reply(client, recipient=identity, delivery_key=delivery_key, payload=TextPayload(text))
     if isinstance(result, Sent):
         return
