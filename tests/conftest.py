@@ -15,6 +15,15 @@ import os
 import pytest
 
 
+# The production callback is always mounted. Tests use deterministic callback
+# crypto so importing config never depends on developer or deployment secrets.
+os.environ.setdefault("WECHAT_KEFU_TOKEN", "test-kefu-callback-token")
+os.environ.setdefault(
+    "WECHAT_KEFU_ENCODING_AES_KEY",
+    "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
+)
+
+
 _EXPECTED_DB_HOST_FRAGMENT = "dpg-d9p26h7lk1mc73a841d0-a.virginia-postgres.render.com"
 
 

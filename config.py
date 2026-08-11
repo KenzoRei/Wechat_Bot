@@ -18,7 +18,7 @@ def _require(name: str) -> str:
 # of failing fast. SMART_ROBOT_ENABLED defaults true (matches every
 # existing deployment's actual behavior before this flag existed --
 # nothing regresses for a deployment that never sets it). KEFU_ENABLED
-# defaults false until rollout begins.
+# controls business processing; callback verification stays available.
 SMART_ROBOT_ENABLED = os.getenv("SMART_ROBOT_ENABLED", "true").lower() == "true"
 KEFU_ENABLED         = os.getenv("KEFU_ENABLED", "false").lower() == "true"
 
@@ -27,10 +27,7 @@ KEFU_ENABLED         = os.getenv("KEFU_ENABLED", "false").lower() == "true"
 # gettoken corpid= param -- clients/kefu_client.py needs it too, it is not
 # Smart-Robot-specific despite living under the same historical "company
 # credentials" heading). Required whenever EITHER channel is enabled.
-if SMART_ROBOT_ENABLED or KEFU_ENABLED:
-    WECHAT_CORP_ID = _require("WECHAT_CORP_ID")
-else:
-    WECHAT_CORP_ID = os.getenv("WECHAT_CORP_ID")
+WECHAT_CORP_ID = _require("WECHAT_CORP_ID")
 
 # WeChat Work — Smart Robot credentials (智能机器人, used for webhook + message
 # sending), plus WECHAT_SECRET/WECHAT_AGENT_ID (legacy 自建应用 credentials,
@@ -56,12 +53,13 @@ else:
     WECHAT_BOT_SECRET       = os.getenv("WECHAT_BOT_SECRET")
 
 # WeChat Kefu credentials (微信客服) -- Sec 6.1's config list; consumed by
-# Codex's Kefu transport (client/callback/sync worker) and by
-# core/kefu_case_adapter.py's application wiring in main.py.
+# Callback crypto is required before full processing because WeCom verifies
+# the URL before it reveals the Kefu API Secret.
+WECHAT_KEFU_TOKEN            = _require("WECHAT_KEFU_TOKEN")
+WECHAT_KEFU_ENCODING_AES_KEY = _require("WECHAT_KEFU_ENCODING_AES_KEY")
+
 if KEFU_ENABLED:
     WECHAT_KEFU_SECRET            = _require("WECHAT_KEFU_SECRET")
-    WECHAT_KEFU_TOKEN             = _require("WECHAT_KEFU_TOKEN")
-    WECHAT_KEFU_ENCODING_AES_KEY  = _require("WECHAT_KEFU_ENCODING_AES_KEY")
     WECHAT_KEFU_OPEN_KFID         = _require("WECHAT_KEFU_OPEN_KFID")
     # kefu-migration-plan.md Sec 2.3: "one open_kfid maps to exactly one
     # group_id (the single U-Choice tenant), fixed at deployment
@@ -71,8 +69,6 @@ if KEFU_ENABLED:
     KEFU_GROUP_ID                 = _require("KEFU_GROUP_ID")
 else:
     WECHAT_KEFU_SECRET            = os.getenv("WECHAT_KEFU_SECRET")
-    WECHAT_KEFU_TOKEN             = os.getenv("WECHAT_KEFU_TOKEN")
-    WECHAT_KEFU_ENCODING_AES_KEY  = os.getenv("WECHAT_KEFU_ENCODING_AES_KEY")
     WECHAT_KEFU_OPEN_KFID         = os.getenv("WECHAT_KEFU_OPEN_KFID")
     KEFU_GROUP_ID                 = os.getenv("KEFU_GROUP_ID")
 
