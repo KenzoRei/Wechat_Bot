@@ -64,7 +64,15 @@ from core.kefu_contracts import (
 # which the current KefuInboundTurn/case_number_hint contract (a bare
 # string, no expected-revision field) can't express yet. Unknown/closed/
 # unauthorized cases all return CaseTurnDenied instead.
-from core.kefu_delivery import TextPayload, send_reply
+from core.kefu_delivery import (
+    Failed,
+    QuotaExceeded,
+    Retryable,
+    Sent,
+    TextPayload,
+    WindowClosed,
+    send_reply,
+)
 
 _ai_chain = AIProviderChain(providers=[
     OpenAIProvider(),
@@ -244,10 +252,27 @@ def _direct_send(client: KefuClient, identity: KefuIdentity, delivery_key: str, 
     conversation_session/request_log machinery. Accepts the same
     documented at-least-once risk as every other Kefu send (plan Sec 2.5).
     """
-    try:
-        send_reply(client, recipient=identity, delivery_key=delivery_key, payload=TextPayload(text))
-    except Exception as e:
-        print(f"[kefu_case_adapter] direct send failed (non-fatal): {e}", flush=True)
+    state = client.get_service_state(
+        open_kfid=identity.open_kfid,
+        external_userid=identity.external_userid,
+    )
+    if state.state not in (0, 1):
+        raise RuntimeError(
+            f"direct Kefu reply blocked by service_state={state.state}"
+            + (f" servicer_userid={state.servicer_userid}" if state.servicer_userid else "")
+        )
+    result = send_reply(client, recipient=identity, delivery_key=delivery_key, payload=TextPayload(text))
+    if isinstance(result, Sent):
+        return
+    if isinstance(result, WindowClosed):
+        error = "window_closed"
+    elif isinstance(result, QuotaExceeded):
+        error = "quota_exceeded"
+    elif isinstance(result, (Retryable, Failed)):
+        error = result.error
+    else:
+        error = type(result).__name__
+    raise RuntimeError(f"direct Kefu reply failed: {error}")
 
 
 def _load_replay_artifacts(session, artifact_keys) -> tuple:

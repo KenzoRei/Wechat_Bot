@@ -89,11 +89,25 @@ def is_customer_message(message: dict) -> bool:
     return str(origin) == "3"
 
 
+def log_provider_event(message: dict) -> None:
+    event = message.get("event") or {}
+    if not isinstance(event, dict):
+        return
+    if event.get("event_type") == "msg_send_fail":
+        print(
+            "[kefu_sync] provider send failure "
+            f"fail_msgid={event.get('fail_msgid') or 'unknown'} "
+            f"fail_type={event.get('fail_type') or 'unknown'}",
+            flush=True,
+        )
+
+
 def ingest_sync_page(db: Session, *, open_kfid: str, page: SyncPage) -> int:
     """Insert one page and advance its cursor in the caller's transaction."""
     inserted = 0
     for raw in page.messages:
         if not is_customer_message(raw):
+            log_provider_event(raw)
             continue
         message = normalize_message(raw)
         statement = (
@@ -330,6 +344,10 @@ def run_worker_once(
                     case_number_hint=turn.case_number_hint,
                 )
         except Exception as exc:
+            print(
+                f"[kefu_sync] worker failed msgid={turn.msgid}: {exc}",
+                flush=True,
+            )
             result_db = db_factory()
             try:
                 mark_failed(result_db, turn.msgid, str(exc))

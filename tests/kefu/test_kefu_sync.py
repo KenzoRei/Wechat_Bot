@@ -7,6 +7,7 @@ from core.kefu_sync import (
     CLAIM_SQL,
     extract_case_number_hint,
     is_customer_message,
+    log_provider_event,
     normalize_message,
     sync_available_messages,
 )
@@ -52,6 +53,22 @@ def test_only_customer_origin_messages_reach_business_processing():
             "msgtype": "text",
         }
     ) is False
+
+
+def test_send_failure_event_is_visible_in_logs(capsys):
+    log_provider_event(
+        {
+            "msgtype": "event",
+            "event": {
+                "event_type": "msg_send_fail",
+                "fail_msgid": "outbound-1",
+                "fail_type": 2,
+            },
+        }
+    )
+    output = capsys.readouterr().out
+    assert "fail_msgid=outbound-1" in output
+    assert "fail_type=2" in output
 
 
 @pytest.mark.parametrize(
