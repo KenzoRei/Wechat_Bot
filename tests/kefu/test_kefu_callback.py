@@ -13,6 +13,7 @@ RECEIVE_ID = "corp-id"
 def test_parse_sync_event_contract():
     event = parse_sync_event(
         "<xml><ToUserName>corp</ToUserName><CreateTime>123</CreateTime>"
+        "<MsgType>event</MsgType>"
         "<Event>kf_msg_or_event</Event><Token>sync-1</Token>"
         "<OpenKfId>kf-1</OpenKfId></xml>"
     )
@@ -41,7 +42,8 @@ def test_encrypted_callback_acknowledges_and_schedules_sync():
     app.include_router(create_kefu_callback_router(crypt, events.append))
     client = TestClient(app)
     plain = (
-        "<xml><CreateTime>123</CreateTime><Event>kf_msg_or_event</Event>"
+        "<xml><ToUserName>corp-id</ToUserName><CreateTime>123</CreateTime>"
+        "<MsgType>event</MsgType><Event>kf_msg_or_event</Event>"
         "<Token>sync-1</Token><OpenKfId>kf-1</OpenKfId></xml>"
     )
     encrypted = encrypt_payload(plain, RECEIVE_ID, crypt.key)
