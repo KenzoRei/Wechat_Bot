@@ -66,6 +66,22 @@ def test_sync_uses_cached_token_and_preserves_cursor_contract():
     }
 
 
+def test_get_service_state_uses_customer_identity():
+    http = FakeHTTP(
+        [{"access_token": "token", "expires_in": 7200}],
+        [{"errcode": 0, "service_state": 3, "servicer_userid": "human-1"}],
+    )
+
+    state = client(http).get_service_state(open_kfid="kf1", external_userid="customer1")
+
+    assert state.state == 3
+    assert state.servicer_userid == "human-1"
+    assert http.request_calls[0][2]["json"] == {
+        "open_kfid": "kf1",
+        "external_userid": "customer1",
+    }
+
+
 def test_invalid_token_refreshes_once_and_replays_original_upload_params():
     http = FakeHTTP(
         [

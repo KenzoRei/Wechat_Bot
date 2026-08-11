@@ -42,6 +42,12 @@ class SyncPage:
     has_more: bool
 
 
+@dataclass(frozen=True)
+class ServiceState:
+    state: int
+    servicer_userid: str | None
+
+
 class KefuClient:
     def __init__(
         self,
@@ -151,6 +157,17 @@ class KefuClient:
             messages=messages,
             next_cursor=str(data.get("next_cursor") or cursor),
             has_more=bool(data.get("has_more")),
+        )
+
+    def get_service_state(self, *, open_kfid: str, external_userid: str) -> ServiceState:
+        data = self._request(
+            "POST",
+            "/cgi-bin/kf/service_state/get",
+            json={"open_kfid": open_kfid, "external_userid": external_userid},
+        )
+        return ServiceState(
+            state=int(data.get("service_state", -1)),
+            servicer_userid=str(data["servicer_userid"]) if data.get("servicer_userid") else None,
         )
 
     def send_text(self, *, open_kfid: str, external_userid: str, text: str, msgid: str) -> str:
