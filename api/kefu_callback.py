@@ -32,10 +32,12 @@ def parse_sync_event(plain_xml: str | bytes) -> KefuSyncEvent:
         raise ValueError("malformed callback XML") from exc
     if root.tag != "xml":
         raise ValueError("unexpected callback XML root")
-    allowed = {"ToUserName", "CreateTime", "Event", "Token", "OpenKfId"}
+    allowed = {"ToUserName", "CreateTime", "MsgType", "Event", "Token", "OpenKfId"}
     if any(child.tag not in allowed for child in root):
         raise ValueError("unexpected callback XML field")
     fields = {child.tag: (child.text or "").strip() for child in root}
+    if fields.get("MsgType", "").lower() != "event":
+        raise ValueError("unexpected Kefu callback message type")
     if fields.get("Event", "").lower() != "kf_msg_or_event":
         raise ValueError("unexpected Kefu callback event")
     sync_token = fields.get("Token")
