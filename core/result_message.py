@@ -389,11 +389,32 @@ def _explain_service_sections_builder(context: dict, db: DBSession) -> list[dict
     return [{"label": None, "type": "raw", "items": items}]
 
 
+def _pending_digest_sections_builder(context: dict, db: DBSession) -> list[dict]:
+    """
+    view_pending_digest (kefu-migration-plan.md Sec 7) -- the same content
+    jobs/uchoice_daily.py pushes on a schedule, rendered on demand. A ⚠️
+    marker on anything within a day of the retirement threshold mirrors the
+    scheduled digest's own marker exactly, so the two surfaces never
+    disagree about which requests are close to going stale.
+    """
+    result = context.get("result", {})
+    rows = result.get("pending_rows") or []
+    if not rows:
+        return [{"label": None, "type": "list", "items": ["（无待处理申请）"]}]
+
+    lines = [
+        f"{r['serial_number']}（{r['days_pending']}天前）" + (" ⚠️" if r["past_threshold"] else "")
+        for r in rows
+    ]
+    return [{"label": "待处理申请", "type": "list", "items": lines}]
+
+
 RESULT_BUILDERS: dict[str, Callable[[dict, DBSession], list[dict]]] = {
     "fedex_label":                 _label_sections_builder,
     "ups_label":                   _label_sections_builder,
     "view_storage":                _storage_sections_builder,
     "view_storage_history":        _storage_history_sections_builder,
+    "view_pending_digest":         _pending_digest_sections_builder,
     "view_invoice":                _invoice_sections_builder,
     "uchoice_inbound_request":     _empty_sections_builder,
     "uchoice_outbound_request":    _empty_sections_builder,
@@ -410,7 +431,7 @@ RESULT_BUILDERS: dict[str, Callable[[dict, DBSession], list[dict]]] = {
 
 def _default_sections_builder(context: dict, db: DBSession) -> list[dict]:
     result = context.get("result", {})
-    skip_keys = {"pdf_url", "pdf_status", "warehouse_code"}
+    skip_keys = {"pdf_url", "pdf_status", "pdf_artifact_key", "warehouse_code"}
     items = {k: v for k, v in result.items() if k not in skip_keys and v not in (None, [], {})}
     if not items:
         return []

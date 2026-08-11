@@ -22,10 +22,9 @@ from models.service import ServiceType
 from models.uchoice import UchoiceStorage, UchoiceStorageFeeLedger
 from core import request_logger
 from core.uchoice_rates import STORAGE_PER_PALLET_PER_DAY
-from core.uchoice_constants import VALID_WAREHOUSE_CODES
+from core.uchoice_constants import VALID_WAREHOUSE_CODES, STALE_THRESHOLD_DAYS
 from clients.wechat_client import send_group_webhook_message
 
-STALE_THRESHOLD_DAYS = 7
 WAREHOUSES = sorted(VALID_WAREHOUSE_CODES)
 
 
@@ -46,7 +45,15 @@ def _run_digest_and_retirement(db: DBSession) -> None:
 
     rows = (
         db.query(RequestLog)
-        .filter(RequestLog.status == "processing", RequestLog.service_type_id.in_(service_type_ids))
+        .filter(
+            RequestLog.status == "processing",
+            RequestLog.service_type_id.in_(service_type_ids),
+            # kefu-migration-plan.md Sec 7: this job stays fully live for
+            # Smart Robot as long as SMART_ROBOT_ENABLED -- scoped to its
+            # own channel so a Kefu-originated request never appears in a
+            # digest pushed to a WeCom group Kefu never touches.
+            RequestLog.source_channel == "smart_robot",
+        )
         .order_by(RequestLog.created_at.asc())
         .all()
     )

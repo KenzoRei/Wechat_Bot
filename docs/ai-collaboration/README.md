@@ -14,6 +14,16 @@ separately signed, separately user-approved document; approving one does
 not imply approval of another. Later phases build on, and must not silently
 contradict, what was already agreed in earlier ones.
 
+Phases 1-4 (validation systemics, storage atomicity, PDF timing,
+self-registration) are complete, signed, and shipped (`7374037` on `main`).
+Round 54 opened a new, unrelated-in-scope thread: migrating the
+customer-facing side of the bot from Smart Robot to WeChat Kefu, after the
+user discovered Smart Robot cannot function in groups containing external
+contacts. See `kefu-migration-context.md` for the shared research context
+and `status.md` for current handoff state. Same file-based process, same
+two-stage authorization rule (plan first, implementation only after
+explicit user approval of a signed document).
+
 ## File ownership
 
 - `proposal-to-claude.md` — Codex owns this charter.

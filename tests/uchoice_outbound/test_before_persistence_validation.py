@@ -30,10 +30,10 @@ _created_log_ids: list = []
 @pytest.fixture(autouse=True)
 def cleanup(db):
     yield
-    for sid in _created_session_ids:
-        db.execute(text("delete from conversation_session where session_id = :sid"), {"sid": sid})
     for lid in _created_log_ids:
         db.execute(text("delete from request_log where log_id = :lid"), {"lid": lid})
+    for sid in _created_session_ids:
+        db.execute(text("delete from conversation_session where session_id = :sid"), {"sid": sid})
     _created_session_ids.clear()
     _created_log_ids.clear()
     db.commit()

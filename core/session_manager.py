@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session as DBSession
 from models.session import ConversationSession
 from models.request_log import RequestLog
 from core.access_control import AccessResult
-from core import uchoice_context
+from core import uchoice_context, uchoice_constants
 import config
 
 SERIAL_PATTERN = re.compile(r'REQ-\d{8}-\d{6}')
@@ -63,8 +63,13 @@ def create_session(
     wechat_openid: str,
     group_id: UUID,
     initial_message: str,
-    service_type_id: UUID | None = None
+    service_type_id: UUID | None = None,
+    source_channel: str = "smart_robot",
+    opened_by_staff_id: UUID | None = None,
 ) -> ConversationSession:
+    # kefu-migration-plan.md Sec 2.4 / Codex round-90 finding 4: set at
+    # creation, not patched in by a later, separate transaction -- see
+    # request_logger.create_log()'s identical note.
     session = ConversationSession(
         wechat_openid=wechat_openid,
         group_id=group_id,
@@ -72,7 +77,9 @@ def create_session(
         status="active",
         conversation_history=[{"role": "user", "content": initial_message}],
         collected_fields={},
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=config.SESSION_EXPIRY_MINUTES)
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=config.SESSION_EXPIRY_MINUTES),
+        source_channel=source_channel,
+        opened_by_staff_id=opened_by_staff_id,
     )
     db.add(session)
     db.commit()
@@ -140,6 +147,12 @@ def build_context(
         "allowed_services":  access.allowed_services,
         "group_context":     access.group_context,
         "group_description": access.group_description,
+        # kefu-migration-plan.md Sec 2.4 / Codex round-90 finding 4 --
+        # carried through so create_session/create_log can set the right
+        # provenance at creation time instead of defaulting to
+        # 'smart_robot' and needing a later patch-up.
+        "source_channel":        access.source_channel,
+        "submitted_by_staff_id": str(access.staff_id) if access.staff_id else None,
 
         # from session (None if not yet created)
         "session_id":           str(session.session_id) if session else None,
@@ -148,6 +161,11 @@ def build_context(
         "service_type_id":      str(session.service_type_id) if session and session.service_type_id else None,
         "conversation_history": session.conversation_history if session else [],
         "collected_fields":     session.collected_fields if session else {},
+        # kefu-migration-plan.md Sec 6.2: the case's own locked customer
+        # (None until resolved -- see core/uchoice_customer.py). Read by
+        # handlers/uchoice/address.py; unaffected for Smart Robot, which has
+        # no customer_id concept and never sets session.customer_id at all.
+        "customer_id": str(session.customer_id) if session and session.customer_id else None,
 
         # candidate-list context injection (addresses, pending requests,
         # storage buckets, member list) — scoped to whichever services this
@@ -215,8 +233,25 @@ def _build_uchoice_candidates(
         # will actually end up defaulting to.
         candidates["skus"] = uchoice_context.sku_catalog(db, scope_warehouse or "JFK")
 
-    if "uchoice_outbound_request" in names:
-        candidates["addresses"] = uchoice_context.address_candidates(db)
+    # kefu-migration-plan.md Sec 6.2: customer selection only exists for
+    # Kefu-originated cases -- Smart Robot has no customer-selection concept
+    # (one WeChat group implicitly IS one customer, unaffected by this).
+    is_kefu = access.source_channel == "kefu"
+    locked_customer_id = str(session.customer_id) if session and session.customer_id else None
+    if is_kefu and names & uchoice_constants.CUSTOMER_SCOPED_KEFU_SERVICES:
+        if locked_customer_id is None:
+            candidates["customers"] = uchoice_context.customer_candidates(db)
+
+    if "uchoice_outbound_request" in names and (not is_kefu or locked_customer_id is not None):
+        # Smart Robot keeps its pre-migration, unfiltered behavior exactly
+        # as before (locked_customer_id is always None there, and
+        # is_kefu is False, so the "not is_kefu" arm always applies). For a
+        # Kefu case, addresses are withheld entirely until the customer is
+        # locked -- otherwise every OTHER customer's addresses would leak
+        # into the AI's prompt context before the case even knows who it's
+        # for (plan Sec 2.2: no request may see or offer another customer's
+        # address). Once locked, scoped to that customer only.
+        candidates["addresses"] = uchoice_context.address_candidates(db, customer_id=locked_customer_id)
         # boxes_per_pallet resolution (default-fill, ambiguity-clarification,
         # stock-sufficiency check) is entirely code-level now — see
         # workflow_engine._resolve_outbound_pallet_defaults — so the AI no

@@ -43,6 +43,10 @@ def run_uchoice_invoice(db: DBSession, target_month: str | None = None) -> None:
             RequestLog.status == "success",
             RequestLog.completed_at >= start,
             RequestLog.completed_at < end_exclusive,
+            # kefu-migration-plan.md Sec 7: same channel scoping as
+            # jobs/uchoice_daily.py -- this push is Smart Robot's own group
+            # notification, unaffected by Kefu-originated activity.
+            RequestLog.source_channel == "smart_robot",
         )
         .all()
     )

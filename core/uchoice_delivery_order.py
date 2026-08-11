@@ -184,7 +184,11 @@ def build_delivery_order_pdf(
     Paginates at MAX_ROWS_PER_PAGE; zero lines still produces one page.
     """
     buf = io.BytesIO()
-    c = pdf_canvas.Canvas(buf, pagesize=letter)
+    # ``invariant=1`` removes wall-clock metadata and random document IDs.
+    # Durable Kefu delivery stores only a stable artifact reference + hash,
+    # then regenerates bytes after a closed-window deferral; regeneration
+    # therefore must be byte-identical, not merely visually identical.
+    c = pdf_canvas.Canvas(buf, pagesize=letter, invariant=1)
 
     consignee_text = consignee_company.strip()
     if consignee_addr.strip():

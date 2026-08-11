@@ -14,7 +14,13 @@ from handlers.uchoice.storage_txns import (
 )
 from handlers.uchoice.pdf_stub import GeneratePdfStubHandler
 from handlers.uchoice.complete_request import CompleteExistingRequestHandler
-from handlers.uchoice.queries import QueryStorageHandler, QueryStorageHistoryHandler, ComputeInvoiceHandler, ExplainServiceHandler
+from handlers.uchoice.queries import (
+    QueryStorageHandler,
+    QueryStorageHistoryHandler,
+    ComputeInvoiceHandler,
+    ExplainServiceHandler,
+    QueryPendingDigestHandler,
+)
 from handlers.uchoice.address import UpsertAddressHandler
 from handlers.uchoice.role_change import RoleChangeHandler
 
@@ -39,6 +45,7 @@ HANDLER_REGISTRY: dict[str, type] = {
     "complete_existing_request":      CompleteExistingRequestHandler,
     "query_storage":                  QueryStorageHandler,
     "query_storage_history":          QueryStorageHistoryHandler,
+    "query_pending_digest":           QueryPendingDigestHandler,
     "upsert_address":                 UpsertAddressHandler,
     "apply_role_change":              RoleChangeHandler,
     "compute_invoice_handler":        ComputeInvoiceHandler,

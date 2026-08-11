@@ -8,7 +8,7 @@ from models.role import Role
 
 @dataclass
 class AccessResult:
-    wechat_openid:     str
+    wechat_openid:     str | None
     group_id:          UUID
     role:              str            # role name, e.g. "admin" — resolved from role_id
     role_id:           UUID
@@ -17,6 +17,10 @@ class AccessResult:
     allowed_services:  list[dict]
     group_context:     dict | None    # location presets, aliases — passed to AI
     group_description: str | None     # human label for the group — used in keHuDanHao
+    # kefu-migration-plan.md Sec 2.3 -- default preserves Smart Robot's
+    # existing shape exactly; only check_kefu_access sets these.
+    source_channel:    str = "smart_robot"
+    staff_id:          UUID | None = None
 
 
 @dataclass
@@ -121,4 +125,97 @@ def check_access(
         allowed_services=allowed_services,
         group_context=group.context,
         group_description=group.description,
+    )
+
+
+def check_kefu_access(
+    db: DBSession,
+    open_kfid: str,
+    external_userid: str,
+) -> AccessResult | AccessDenied:
+    """
+    kefu-migration-plan.md Sec 2.3: the Kefu-side equivalent of
+    check_access(), reached via kefu_staff instead of GroupMember.
+    (open_kfid, external_userid) -> kefu_staff row -> kefu_staff.group_id
+    + role_id -> the same group_service_role grant table Smart Robot
+    already uses -- no new grant table, same deny-by-default mechanism.
+    """
+    from models.kefu import KefuStaff
+
+    row = (
+        db.query(KefuStaff, Role)
+        .join(Role, KefuStaff.role_id == Role.role_id)
+        .filter(
+            KefuStaff.open_kfid == open_kfid,
+            KefuStaff.external_userid == external_userid,
+        )
+        .first()
+    )
+
+    if row is None:
+        return AccessDenied(
+            reason="staff_not_registered",
+            notify_user=True,
+            message=(
+                "您尚未注册为员工账号。\n"
+                "请发送“注册成员”完成注册，注册后需管理员分配角色。"
+            ),
+        )
+
+    staff, role = row
+
+    if not staff.is_active:
+        return AccessDenied(
+            reason="staff_suspended",
+            notify_user=True,
+            message="您的账号已被暂停，请联系管理员。",
+        )
+
+    group = db.query(GroupConfig).filter_by(group_id=staff.group_id, is_active=True).first()
+    if group is None:
+        return AccessDenied(reason="group_not_found_or_inactive", notify_user=False, message="")
+
+    rows = (
+        db.query(GroupService, ServiceType)
+        .join(ServiceType, GroupService.service_type_id == ServiceType.service_type_id)
+        .join(GroupServiceRole, (
+            (GroupServiceRole.group_id == GroupService.group_id) &
+            (GroupServiceRole.service_type_id == GroupService.service_type_id) &
+            (GroupServiceRole.role_id == staff.role_id)
+        ))
+        .filter(
+            GroupService.group_id == staff.group_id,
+            ServiceType.is_active == True
+        )
+        .all()
+    )
+
+    allowed_services = [
+        {
+            "service_type_id": str(gs.service_type_id),
+            "name":            st.name,
+            "description":     st.description,
+            "keywords":        st.keywords or [],
+            "workflow_id":     str(gs.workflow_id),
+            "input_schema":    st.input_schema,
+            "group_config":    gs.config,
+            "requires_confirmation":    st.requires_confirmation,
+            "targets_existing_request": st.targets_existing_request,
+            "awaits_completion":        st.awaits_completion,
+        }
+        for gs, st in rows
+    ]
+
+    return AccessResult(
+        wechat_openid=None,
+        group_id=staff.group_id,
+        role=role.name,
+        role_id=staff.role_id,
+        display_name=staff.display_name,
+        warehouse_code=staff.warehouse_code,
+        allowed_services=allowed_services,
+        group_context=group.context,
+        group_description=group.description,
+        source_channel="kefu",
+        staff_id=staff.staff_id,
     )

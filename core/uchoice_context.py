@@ -63,8 +63,24 @@ def sku_label_map(db: DBSession) -> dict[str, str]:
     return {s.sku_code: s.description for s in db.query(UchoiceSku).all()}
 
 
-def address_candidates(db: DBSession) -> list[dict]:
-    rows = db.query(UchoiceAddress).all()
+def address_candidates(db: DBSession, customer_id=None) -> list[dict]:
+    """
+    kefu-migration-plan.md Sec 2.2: every address belongs to exactly one
+    customer (round 62/63, no global/unscoped category). When customer_id
+    is given (the Kefu case flow, where a customer is always locked before
+    this is called), results are filtered to that customer only -- a
+    request for customer A must never see or offer customer B's address.
+
+    customer_id=None preserves this function's pre-migration behavior
+    (every address, unfiltered) -- the only remaining caller of that shape
+    is Smart Robot's own uchoice_outbound_request path
+    (core/session_manager.py), which predates the customer concept
+    entirely and is explicitly unaffected by this migration (plan Sec 1).
+    """
+    query = db.query(UchoiceAddress)
+    if customer_id is not None:
+        query = query.filter_by(customer_id=customer_id)
+    rows = query.all()
     return [
         {
             "address_id":     str(a.address_id),
@@ -75,6 +91,28 @@ def address_candidates(db: DBSession) -> list[dict]:
             "note":           a.note,
         }
         for a in rows
+    ]
+
+
+def customer_candidates(db: DBSession) -> list[dict]:
+    """
+    kefu-migration-plan.md Sec 6.2: the full active customer directory, for
+    the AI to fuzzy-match a Kefu staff member's free-text customer
+    description against -- same pattern as sku_catalog()/address_candidates()
+    above. Cheap, full-table query (the directory is small); no scoping
+    needed since this IS the thing being scoped by (nothing to filter it by
+    yet -- that's exactly what resolving this candidate produces).
+    """
+    from models.kefu import UchoiceCustomer
+    rows = db.query(UchoiceCustomer).filter_by(is_active=True).all()
+    return [
+        {
+            "customer_id":    str(c.customer_id),
+            "customer_code":  c.customer_code,
+            "canonical_name": c.canonical_name,
+            "aliases":        c.aliases,
+        }
+        for c in rows
     ]
 
 
@@ -184,29 +222,24 @@ def get_original_fields(db: DBSession, target) -> dict:
     ConversationSession. Shared by LookupAndValidateCompletionHandler
     (execution-time) and core/confirmation.py's completion builders
     (confirm-time display) so both resolve the original request identically.
+
+    kefu-migration-plan.md Sec 2.4: resolves via request_log.origin_session_id
+    directly -- a stable FK set once, at request-creation time, instead of
+    disambiguating by matching wechat_openid (which correctly identified
+    the original session over a same-account completion session for Smart
+    Robot, but is null/unused for Kefu-originated requests, so that match
+    silently returned nothing). The FK approach is channel-agnostic and
+    simpler for Smart Robot rows too -- no disambiguation heuristic needed
+    at all once the real link exists.
     """
-    from models.session import ConversationSession
     if target is None:
         return {}
-    # Must also filter by the target's own service_type_id (the original
-    # service, e.g. uchoice_inbound_request) — the completion session itself
-    # (confirm_inbound_completion) gets request_log_id set to this same
-    # target log too (that's how targets_existing_request linking works), so
-    # filtering on request_log_id + wechat_openid alone can match it as well
-    # whenever the submitter and the confirmer share an account. Without this,
-    # order_by(created_at DESC).first() picks the newer completion session —
-    # whose collected_fields is just {"reference_serial": ...} — instead of
-    # the actual original submission.
-    original_session = (
-        db.query(ConversationSession)
-        .filter_by(
-            request_log_id=target.log_id,
-            wechat_openid=target.wechat_openid,
-            service_type_id=target.service_type_id,
-        )
-        .order_by(ConversationSession.created_at.desc())
-        .first()
-    )
+    if target.origin_session_id is None:
+        return {}
+    from models.session import ConversationSession
+    original_session = db.query(ConversationSession).filter_by(
+        session_id=target.origin_session_id
+    ).first()
     return original_session.collected_fields if original_session else {}
 
 
@@ -225,17 +258,46 @@ def resolve_completion_target(db: DBSession, reference_serial: str | None):
 
 
 def member_candidates(db: DBSession, group_id) -> list[dict]:
-    rows = (
+    """
+    kefu-migration-plan.md Sec 2.3: includes both GroupMember and
+    kefu_staff rows for the same group, so an admin can see and promote a
+    pending Kefu staff member the same way they promote a pending group
+    member today. target_identity is the tagged string role_change's
+    three boundaries dispatch on (core/role_identity.py) -- a bare
+    wechat_openid for Smart Robot rows (identical to pre-Kefu behavior),
+    "kefu:<staff_id>" for kefu_staff rows.
+    """
+    from models.kefu import KefuStaff
+    from core.role_identity import tag_kefu_identity
+
+    smart_robot_rows = (
         db.query(GroupMember, Role)
         .join(Role, GroupMember.role_id == Role.role_id)
         .filter(GroupMember.group_id == group_id)
         .all()
     )
+    kefu_rows = (
+        db.query(KefuStaff, Role)
+        .join(Role, KefuStaff.role_id == Role.role_id)
+        .filter(KefuStaff.group_id == group_id)
+        .all()
+    )
     return [
         {
-            "wechat_openid": m.wechat_openid,
-            "display_name":  m.display_name,
-            "role":          r.name,
+            "target_identity": m.wechat_openid,
+            "wechat_openid":   m.wechat_openid,
+            "display_name":    m.display_name,
+            "role":            r.name,
+            "channel":         "smart_robot",
         }
-        for m, r in rows
+        for m, r in smart_robot_rows
+    ] + [
+        {
+            "target_identity": tag_kefu_identity(s.staff_id),
+            "wechat_openid":   None,
+            "display_name":    s.display_name,
+            "role":            r.name,
+            "channel":         "kefu",
+        }
+        for s, r in kefu_rows
     ]

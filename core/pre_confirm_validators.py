@@ -237,13 +237,21 @@ def _valid_role_change_target_and_role(context: dict, collected_fields: dict, db
     the execution-time check in handlers/uchoice/role_change.py.
     """
     from core.uchoice_constants import ASSIGNABLE_ROLE_NAMES, VALID_WAREHOUSE_CODES
+    from core.role_identity import parse_target_identity
 
     target_openid = collected_fields.get("target_openid")
     if target_openid:
-        target_member = db.query(GroupMember).filter_by(
-            wechat_openid=target_openid, group_id=context["group_id"]
-        ).first()
-        if not target_member:
+        identity = parse_target_identity(target_openid)
+        if identity.kind == "kefu":
+            from models.kefu import KefuStaff
+            target_exists = db.query(KefuStaff).filter_by(
+                staff_id=identity.key, group_id=context["group_id"]
+            ).first() is not None
+        else:
+            target_exists = db.query(GroupMember).filter_by(
+                wechat_openid=identity.key, group_id=context["group_id"]
+            ).first() is not None
+        if not target_exists:
             return "该成员不在本群组中，无法调整角色。"
 
     new_role = collected_fields.get("new_role")
@@ -262,7 +270,17 @@ def _last_admin_protection(context: dict, collected_fields: dict, db: DBSession)
     """
     role_change: reject demoting the group's only remaining active admin.
     Promotions (new_role == 'admin') never trip this check.
+
+    kefu-migration-plan.md Sec 2.3: admin is an ASSIGNABLE_ROLE_NAMES role
+    reachable by either channel, so both the target lookup and the "how
+    many admins remain" count must span GroupMember and kefu_staff
+    together -- counting only one table would let the last real admin be
+    demoted as long as an admin existed in the other table, or the
+    reverse.
     """
+    from core.role_identity import parse_target_identity
+    from models.kefu import KefuStaff
+
     if collected_fields.get("new_role") == "admin":
         return None
 
@@ -271,13 +289,24 @@ def _last_admin_protection(context: dict, collected_fields: dict, db: DBSession)
         return None
 
     group_id = context["group_id"]
-    target_member = db.query(GroupMember).filter_by(
-        wechat_openid=target_openid, group_id=group_id
-    ).first()
-    if not target_member:
+    identity = parse_target_identity(target_openid)
+    if identity is None:
         return None
 
-    target_role = db.query(Role).filter_by(role_id=target_member.role_id).first()
+    if identity.kind == "kefu":
+        target_role_id = getattr(
+            db.query(KefuStaff).filter_by(staff_id=identity.key, group_id=group_id).first(),
+            "role_id", None,
+        )
+    else:
+        target_role_id = getattr(
+            db.query(GroupMember).filter_by(wechat_openid=identity.key, group_id=group_id).first(),
+            "role_id", None,
+        )
+    if target_role_id is None:
+        return None
+
+    target_role = db.query(Role).filter_by(role_id=target_role_id).first()
     if not target_role or target_role.name != "admin":
         return None  # target isn't currently an admin — nothing to protect
 
@@ -285,10 +314,13 @@ def _last_admin_protection(context: dict, collected_fields: dict, db: DBSession)
     if not admin_role:
         return None
 
-    active_admin_count = db.query(GroupMember).filter_by(
+    smart_robot_admin_count = db.query(GroupMember).filter_by(
         group_id=group_id, role_id=admin_role.role_id, is_active=True
     ).count()
-    if active_admin_count <= 1:
+    kefu_admin_count = db.query(KefuStaff).filter_by(
+        group_id=group_id, role_id=admin_role.role_id, is_active=True
+    ).count()
+    if (smart_robot_admin_count + kefu_admin_count) <= 1:
         return "无法将该成员的角色改为非管理员——该群组当前仅剩一名管理员。"
     return None
 
