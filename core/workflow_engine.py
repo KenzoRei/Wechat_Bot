@@ -216,7 +216,8 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
 
     # save any extracted fields from the first message
     if ai_response.extracted_fields:
-        session_manager.update_collected_fields(db, session, ai_response.extracted_fields)
+        extracted = _sanitize_extracted_fields_before_persistence(service["name"], ai_response.extracted_fields, db, context.get("group_id"))
+        session_manager.update_collected_fields(db, session, extracted)
 
     # context["collected_fields"] was set from session.collected_fields at
     # build_context() time, when session was still None (still {}).
@@ -297,6 +298,122 @@ def _autoresolve_single_candidate(context: dict, service: dict, session, db: DBS
     return True
 
 
+_SKU_LINES_FIELD_BY_SERVICE = {
+    # Phase 1 (agreed-plan.md): uchoice_outbound_request.
+    # Phase 2 (systemic-validation-addendum.md): all six additional services
+    # now share the same catalog boundary before model output can merge into
+    # persisted collected_fields. Their service-specific pre-confirm checks
+    # remain as defense in depth.
+    "uchoice_outbound_request": "sku_lines",
+    "uchoice_inbound_request": "sku_lines",
+    "confirm_inbound_completion": "received_lines",
+    "confirm_outbound_completion": "fulfillment_lines",
+    "adjust_storage": "adjustment_lines",
+    "move_storage": "move_lines",
+    "recount_storage": "inventory_lines",
+}
+
+
+def _sanitize_extracted_fields_before_persistence(service_name: str, extracted_fields: dict, db: DBSession, group_id: str | None = None) -> dict:
+    """
+    Codex round-28 finding 3: the pre-confirm validators (_valid_outbound_sku_lines
+    etc.) are real, but they only run right before a confirmation is shown --
+    agreed-plan.md's actual design calls for the primary boundary to sit
+    before model output ever merges into persisted collected_fields, since
+    otherwise invalid state is still stored and can be re-serialized into a
+    later turn's prompt. This is that boundary for the one field class this
+    session's incidents were actually about: sku_lines.
+
+    Drops (does not persist) individual line items that fail
+    core.uchoice_validation.validate_sku_lines -- missing/invalid sku_code,
+    or a non-dict line -- rather than rejecting the whole merge, so a
+    message with one valid line and one fabricated one still saves the
+    valid one (matches the T10a "preserve valid progress" pattern already
+    established for Phase 2's mixed-line handling). The pre-confirm
+    validators remain as defense in depth for anything this doesn't cover.
+    """
+    if service_name == "role_change":
+        return _sanitize_role_change_fields_before_persistence(extracted_fields, db, group_id)
+
+    field_name = _SKU_LINES_FIELD_BY_SERVICE.get(service_name)
+    if not field_name or field_name not in (extracted_fields or {}):
+        return extracted_fields
+
+    from core.uchoice_validation import validate_sku_lines
+
+    lines = extracted_fields[field_name]
+    if not isinstance(lines, list):
+        # Codex round-30 finding 3: a malformed non-list shape (a string,
+        # dict, null, etc.) used to fall through this check unchanged and
+        # get persisted as-is. Omit the whole field instead of merging
+        # garbage -- collected_fields simply won't have field_name at all
+        # this turn, which _outbound_required_fields_present and the
+        # pre-confirm validators already correctly treat as "not yet
+        # collected," rather than letting a non-list value sit in state and
+        # potentially crash something that assumes it's iterable.
+        print(f"[workflow] dropped malformed {field_name!r} (not a list: {type(lines).__name__}) "
+              f"before persistence for {service_name!r}", flush=True)
+        return {k: v for k, v in extracted_fields.items() if k != field_name}
+
+    bad_indices = set()
+    for issue in validate_sku_lines(lines, field_name=field_name, db=db):
+        # issue.path looks like "sku_lines[2]" or "sku_lines[2].sku_code"
+        prefix = f"{field_name}["
+        if issue.path.startswith(prefix):
+            try:
+                bad_indices.add(int(issue.path[len(prefix):].split("]", 1)[0]))
+            except ValueError:
+                continue
+
+    if not bad_indices:
+        return extracted_fields
+
+    cleaned = [line for i, line in enumerate(lines) if i not in bad_indices]
+    print(f"[workflow] dropped {len(bad_indices)} invalid sku_lines entr{'y' if len(bad_indices)==1 else 'ies'} "
+          f"before persistence for {service_name!r} (missing/unknown sku_code or malformed line)", flush=True)
+    return {**extracted_fields, field_name: cleaned}
+
+
+def _sanitize_role_change_fields_before_persistence(extracted_fields: dict, db: DBSession, group_id: str | None) -> dict:
+    """
+    phase4-self-registration.md Sec 4 boundary 1 (Codex round-37/round-41):
+    target_openid is a candidate-backed identifier exactly like sku_code --
+    accept it only if it names a current group_member of this group. Accept
+    new_role only if it's in the server allowlist (core.uchoice_constants
+    .ASSIGNABLE_ROLE_NAMES -- an explicit allowlist, not "anything but
+    pending", so a future internal role can't be exposed by omission).
+    Invalid values are omitted individually, not merged, so an otherwise
+    valid turn's other fields still persist (same "preserve valid progress"
+    pattern as the sku_lines sanitizer above).
+    """
+    if not extracted_fields:
+        return extracted_fields
+
+    from models.group import GroupMember
+    from core.uchoice_constants import ASSIGNABLE_ROLE_NAMES
+
+    result = dict(extracted_fields)
+
+    target_openid = result.get("target_openid")
+    if target_openid is not None:
+        member = None
+        if group_id:
+            member = db.query(GroupMember).filter_by(
+                wechat_openid=target_openid, group_id=group_id
+            ).first()
+        if member is None:
+            print(f"[workflow] dropped fabricated role_change.target_openid "
+                  f"before persistence: {target_openid!r} is not a member of this group", flush=True)
+            result.pop("target_openid", None)
+
+    new_role = result.get("new_role")
+    if new_role is not None and new_role not in ASSIGNABLE_ROLE_NAMES:
+        print(f"[workflow] dropped invalid role_change.new_role before persistence: {new_role!r}", flush=True)
+        result.pop("new_role", None)
+
+    return result
+
+
 def _outbound_required_fields_present(service: dict, session) -> bool:
     """
     Deterministic override for uchoice_outbound_request: its only genuinely
@@ -316,7 +433,18 @@ def _outbound_required_fields_present(service: dict, session) -> bool:
     if service["name"] != "uchoice_outbound_request":
         return False
     fields = session.collected_fields
-    return bool(fields.get("sku_lines")) and bool(fields.get("destination_address_id"))
+    sku_lines = fields.get("sku_lines")
+    if not isinstance(sku_lines, list) or not sku_lines:
+        return False
+    # Sev 2: a non-empty list isn't enough -- every line must actually name
+    # a real product. A line with a missing/blank sku_code (e.g. the AI
+    # extracted a quantity but never resolved what it was for) must not
+    # count as "collected," or it reaches confirmation as "?". A malformed
+    # non-dict line (Codex round-28 finding 3) must be treated as
+    # not-yet-collected too, not crash this check via .get() on a non-dict.
+    if any(not isinstance(line, dict) or not (line.get("sku_code") or "").strip() for line in sku_lines):
+        return False
+    return bool(fields.get("destination_address_id"))
 
 
 def _close_if_no_pending_candidates(service: dict, session, context: dict, db: DBSession) -> bool:
@@ -546,10 +674,27 @@ def _reject_invalid_outbound_stock(context: dict, session, db: DBSession) -> boo
     for line in sku_lines:
         if "box_count" in line:
             continue  # loose lines aren't checked here
-        bpp = line.get("boxes_per_pallet")
         pallet_count = line.get("pallet_count")
-        if bpp is None or pallet_count is None:
+        bpp = line.get("boxes_per_pallet")
+
+        if pallet_count is None:
             continue  # not yet fully specified — normal field collection handles this
+
+        if bpp is None:
+            # _resolve_outbound_pallet_defaults already tried and gave up --
+            # this is the zero-real-bucket case (Sev 1), not "not yet
+            # specified." No answer can materialize a bucket size that
+            # doesn't exist, so this is unconditionally terminal.
+            sku_exists_at_all = (
+                db.query(UchoiceStorage)
+                .filter_by(warehouse_code=warehouse_code, sku_code=line.get("sku_code"))
+                .filter(UchoiceStorage.pallet_count > 0)
+                .first()
+            )
+            if sku_exists_at_all is None:
+                problems.append((line.get("sku_code"), "任意规格", 0, pallet_count))
+            continue
+
         bucket = (
             db.query(UchoiceStorage)
             .filter_by(warehouse_code=warehouse_code, sku_code=line.get("sku_code"), boxes_per_pallet=bpp)
@@ -707,7 +852,10 @@ def _handle_continuation(context: dict, ai_response: AIResponse, db: DBSession) 
     service = _find_service_by_type_id(context, session.service_type_id)
 
     session_manager.add_message(db, session, "user", context["content"])
-    session_manager.update_collected_fields(db, session, ai_response.extracted_fields)
+    extracted = ai_response.extracted_fields
+    if service is not None:
+        extracted = _sanitize_extracted_fields_before_persistence(service["name"], extracted, db, context.get("group_id"))
+    session_manager.update_collected_fields(db, session, extracted)
 
     # see the matching comment in _handle_new_request — same staleness bug,
     # this is the path that actually surfaced it live (the last required
@@ -779,22 +927,96 @@ def _execute_workflow_and_finish(context: dict, session, db: DBSession) -> None:
     if session.request_log_id:
         request_logger.mark_processing(db, session.request_log_id)
 
+    service_for_split_check = _find_service_by_type_id(context, session.service_type_id)
+    service_name_for_split_check = service_for_split_check["name"] if service_for_split_check else None
+
+    # Phase 2 atomicity fix (systemic-validation-addendum.md Sec 3b) only
+    # applies to the named U-Choice services it actually covers. Every other
+    # service -- FedEx, UPS, OMS, upsert_address, anything else -- runs
+    # through the single-phase path below unchanged, exactly as before
+    # Phase 2. Deliberately an explicit service-name allowlist, not
+    # step-type inference: the first version of this fix inferred
+    # eligibility from step *types* present in the workflow (Codex round-28
+    # finding 2 -- create_fedex_label/create_ups_label/oms_create_workorder
+    # got misclassified as side effects that way, marking FedEx/UPS/OMS
+    # requests successful before the label/work order ever ran). An
+    # allowlist by service name can't accidentally net an unrelated service
+    # the same way a step-type-presence check can. Extended (Codex round 30)
+    # to adjust_storage/move_storage/recount_storage, which the signed
+    # addendum's Sec 3b/exposure table also names but the original
+    # step-type-based check missed entirely (their workflows are just
+    # {*_storage_txn -> reply_wechat}, with no generate_pdf_stub/
+    # complete_existing_request step to trigger on) -- without this, a
+    # reply_wechat failure for these three services would roll back an
+    # already-valid, already-computed inventory change purely because the
+    # final WeChat message failed to send.
+    _UCHOICE_SPLIT_ELIGIBLE_SERVICES = {
+        "uchoice_outbound_request",
+        "uchoice_inbound_request",
+        "confirm_inbound_completion",
+        "confirm_outbound_completion",
+        "adjust_storage",
+        "move_storage",
+        "recount_storage",
+    }
+    uses_uchoice_split = service_name_for_split_check in _UCHOICE_SPLIT_ELIGIBLE_SERVICES
+
+    if not uses_uchoice_split:
+        try:
+            _run_workflow_steps(context, session, db, phase="all")
+            service = _find_service_by_type_id(context, session.service_type_id)
+            awaits_completion = bool(service.get("awaits_completion", False)) if service else False
+            if not awaits_completion:
+                request_logger.mark_success(db, session.request_log_id, context.get("result", {}), commit=False)
+            session_manager.close_session(db, session, status="completed", commit=False)
+            db.commit()
+        except Exception as e:
+            import traceback
+            print(f"[workflow] STEP FAILED: {e}", flush=True)
+            traceback.print_exc()
+            db.rollback()
+            request_logger.mark_failed(db, session.request_log_id, error_detail=str(e))
+            session_manager.close_session(db, session, status="failed")
+            send_message(context, "申请处理失败，请稍后重试或联系管理员。")
+        return
+
+    # DB-only steps (storage deltas, business-state transitions) commit as
+    # one real transaction, together with the success/failure status change
+    # and the session close -- commit=False on every call below defers all
+    # of them to the single db.commit() (or db.rollback()) at the end of
+    # this block, closing Codex round-28 finding 1 (mark_success/
+    # close_session used to commit independently, so a failure between them
+    # could leave storage changes durable but the session/log inconsistent).
     try:
-        _run_workflow_steps(context, session, db)
+        _run_workflow_steps(context, session, db, phase="db")
         service = _find_service_by_type_id(context, session.service_type_id)
         awaits_completion = bool(service.get("awaits_completion", False)) if service else False
         if not awaits_completion:
-            # success — workflow's reply_wechat step sends the success message
-            request_logger.mark_success(db, session.request_log_id, context.get("result", {}))
-        session_manager.close_session(db, session, status="completed")
+            request_logger.mark_success(db, session.request_log_id, context.get("result", {}), commit=False)
+        session_manager.close_session(db, session, status="completed", commit=False)
+        db.commit()
 
     except Exception as e:
         import traceback
-        print(f"[workflow] STEP FAILED: {e}", flush=True)
+        print(f"[workflow] STEP FAILED (db phase): {e}", flush=True)
         traceback.print_exc()
+        db.rollback()
         request_logger.mark_failed(db, session.request_log_id, error_detail=str(e))
         session_manager.close_session(db, session, status="failed")
         send_message(context, "申请处理失败，请稍后重试或联系管理员。")
+        return
+
+    try:
+        _run_workflow_steps(context, session, db, phase="side_effect")
+        db.commit()
+    except Exception as e:
+        import traceback
+        print(f"[workflow] STEP FAILED (post-commit side effect, inventory/business state already committed): {e}", flush=True)
+        traceback.print_exc()
+        db.rollback()
+        # Deliberately NOT mark_failed / NOT close_session(status="failed") --
+        # the operation itself already succeeded and committed. A PDF/webhook/
+        # reply failure here is a delivery problem, not an operation failure.
 
 
 def _handle_cancel(context: dict, db: DBSession) -> None:
@@ -830,25 +1052,67 @@ def _handle_unrecognized(context: dict, ai_response: AIResponse) -> None:
 
 # ── Workflow step runner ──────────────────────────────────────────────────────
 
-def _run_workflow_steps(context: dict, session, db: DBSession) -> None:
+# Step types the Phase 2 DB-phase/post-commit-side-effect split actually
+# targets (systemic-validation-addendum.md Sec 3b, Phase 3's PDF timing).
+# Deliberately narrow: create_fedex_label/create_ups_label/oms_create_workorder
+# are NOT here even though they're real external calls too, because for
+# those services the label/work order IS the required operational work, not
+# a best-effort delivery-notification concern -- treating them as
+# non-fatal "side effects" would mark a request successful before the label
+# was ever created (Codex round-28 finding 2, a real regression the first
+# version of this fix introduced). _execute_workflow_and_finish only invokes
+# this split at all for workflows that contain one of these two step types;
+# every other workflow (FedEx, UPS, OMS, everything else) runs unaffected
+# through the single-phase path, unchanged from before Phase 2.
+_SIDE_EFFECT_STEP_TYPES = {
+    "generate_pdf_stub",
+    "complete_existing_request",   # cross-group webhook
+    "reply_wechat",                # final WeChat send
+}
+
+
+def _run_workflow_steps(context: dict, session, db: DBSession, phase: str) -> None:
     """
-    Loads and executes all steps for the session's workflow in order.
+    Loads and executes this workflow's steps of one phase, in step_order.
     Each step handler receives the full context dict and its step config.
     Results are accumulated in context["result"] for subsequent steps to read.
+
+    phase="all": every step, in order -- the original, single-phase
+    behavior, used for every workflow the Sec 3b split doesn't apply to.
+    phase="db": every step NOT in _SIDE_EFFECT_STEP_TYPES -- pure DB reads/
+    writes, safe to run inside one transaction with row locks held.
+    phase="side_effect": only steps in _SIDE_EFFECT_STEP_TYPES -- run after
+    the DB phase's transaction has already committed, per Sec 3b's rule that
+    a delivery failure here must never roll back or relabel already-committed
+    inventory/business state.
+
+    Called twice per confirm (once per phase, "db" then "side_effect") by
+    _execute_workflow_and_finish for workflows the split applies to, sharing
+    context["result"] across both calls -- the "db"/"all" call resetting it
+    once per operation is what the first call owns.
     """
     workflow_id = _get_workflow_id(context, session)
     if workflow_id is None:
         raise RuntimeError("No workflow found for this session's service type.")
 
-    steps = (
+    all_steps = (
         db.query(WorkflowStep)
         .filter_by(workflow_id=workflow_id)
         .order_by(WorkflowStep.step_order)
         .all()
     )
-
-    context["result"] = {}
-    context["request_log_id"] = str(session.request_log_id) if session.request_log_id else None
+    if phase == "all":
+        steps = all_steps
+        context["result"] = {}
+        context["request_log_id"] = str(session.request_log_id) if session.request_log_id else None
+    elif phase == "db":
+        steps = [s for s in all_steps if s.step_type not in _SIDE_EFFECT_STEP_TYPES]
+        context["result"] = {}
+        context["request_log_id"] = str(session.request_log_id) if session.request_log_id else None
+    elif phase == "side_effect":
+        steps = [s for s in all_steps if s.step_type in _SIDE_EFFECT_STEP_TYPES]
+    else:
+        raise ValueError(f"unknown phase: {phase!r}")
 
     # load group-level config for this service (ydd_cust_id, ydd_channel_id, etc.)
     group_config = _get_group_config(context, session)

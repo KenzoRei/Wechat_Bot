@@ -7,6 +7,255 @@ mirroring handlers/registry.py's idiom; most services never need an entry.
 from sqlalchemy.orm import Session as DBSession
 from models.group import GroupMember
 from models.role import Role
+from core.uchoice_validation import format_validation_issues, validate_sku_lines
+
+
+def _compose(*validators):
+    """Run validators in order and return the first blocking message."""
+
+    def composed(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+        for validator in validators:
+            error = validator(context, collected_fields, db)
+            if error:
+                return error
+        return None
+
+    return composed
+
+
+def _valid_inbound_sku_lines(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """uchoice_inbound_request: reject missing or uncataloged line SKUs."""
+
+    del context
+    issues = validate_sku_lines(
+        collected_fields.get("sku_lines"),
+        field_name="sku_lines",
+        db=db,
+    )
+    return format_validation_issues(issues)
+
+
+def _positive_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _nonnegative_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _typed_line_issues(lines, checker) -> list[str]:
+    """
+    Run a per-line `checker(line) -> str | None` (a human-readable problem
+    description, or None if the line is fine) over an already-list-shaped
+    `lines`, returning one message per problem found. Does not duplicate
+    validate_sku_lines's own shape/SKU checks -- callers compose this after
+    that, only inspecting a line here if it's already a dict (a non-dict
+    line already produced its own issue from validate_sku_lines).
+    """
+    messages = []
+    for index, line in enumerate(lines or []):
+        if not isinstance(line, dict):
+            continue
+        problem = checker(line)
+        if problem:
+            messages.append(f"第 {index + 1} 项：{problem}")
+    return messages
+
+
+def _valid_adjust_storage_lines(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """
+    adjust_storage's typed contract (systemic-validation-addendum.md Sec 3a):
+    valid positive bucket dimensions, non-zero integer delta. "No negative
+    resulting balance" is authoritative-state-dependent -- already enforced
+    at execution time by core.uchoice_storage.apply_storage_delta's own
+    balance check against live data, not duplicated here (duplicating it
+    pre-confirm would use possibly-stale state anyway).
+    """
+    del context
+    field_name = "adjustment_lines"
+    lines = collected_fields.get(field_name)
+    sku_issues = validate_sku_lines(lines, field_name=field_name, db=db)
+    if sku_issues:
+        return format_validation_issues(sku_issues)
+    if not isinstance(lines, list):
+        return None
+
+    def check(line: dict) -> str | None:
+        if not _positive_int(line.get("boxes_per_pallet")):
+            return "每托箱数（boxes_per_pallet）必须是正整数。"
+        delta = line.get("pallet_delta")
+        if not isinstance(delta, int) or isinstance(delta, bool) or delta == 0:
+            return "调整数量（pallet_delta）必须是非零整数。"
+        return None
+
+    messages = _typed_line_issues(lines, check)
+    return "请修正以下调整明细：" + "；".join(messages) if messages else None
+
+
+def _valid_recount_storage_lines(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """
+    recount_storage's typed contract: positive bucket dimensions,
+    non-negative integer counts (zero is a legitimate reported count --
+    recount_storage's own semantics treat an omitted bucket as zero, so an
+    explicit zero must be just as valid), and unique (sku_code,
+    boxes_per_pallet) bucket keys within one submission -- confirmed by
+    direct read that handlers.uchoice.storage_txns.RecountStorageHandler
+    builds `reported` via a dict comprehension keyed on exactly that pair,
+    which silently keeps only the last of any duplicates and discards the
+    rest of the customer's actual input (Codex round-32 finding).
+    """
+    del context
+    field_name = "inventory_lines"
+    lines = collected_fields.get(field_name)
+    sku_issues = validate_sku_lines(
+        lines, field_name=field_name, db=db,
+        duplicate_key_fields=("sku_code", "boxes_per_pallet"),
+    )
+    if sku_issues:
+        return format_validation_issues(sku_issues)
+    if not isinstance(lines, list):
+        return None
+
+    def check(line: dict) -> str | None:
+        if not _positive_int(line.get("boxes_per_pallet")):
+            return "每托箱数（boxes_per_pallet）必须是正整数。"
+        if not _nonnegative_int(line.get("pallet_count")):
+            return "托数（pallet_count）必须是非负整数。"
+        return None
+
+    messages = _typed_line_issues(lines, check)
+    return "请修正以下盘点明细：" + "；".join(messages) if messages else None
+
+
+def _valid_move_storage_lines(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """
+    move_storage's typed contract: positive/in-range quantities for both
+    the source and target bucket dimensions, and box_count_moved must be
+    strictly less than source_boxes_per_pallet (moving boxes_per_pallet or
+    more would drive the new source bucket's dimension to zero or negative,
+    which isn't a valid boxes_per_pallet). Box conservation -- nothing
+    enters or leaves the warehouse -- is structurally guaranteed by
+    MoveStorageHandler always applying the same box_count_moved to both
+    sides, not something a separate check needs to re-derive. Authoritative
+    source-bucket existence/sufficiency is enforced at execution time by
+    apply_storage_delta's own balance check, same reasoning as adjust_storage.
+    """
+    del context
+    field_name = "move_lines"
+    lines = collected_fields.get(field_name)
+    sku_issues = validate_sku_lines(lines, field_name=field_name, db=db)
+    if sku_issues:
+        return format_validation_issues(sku_issues)
+    if not isinstance(lines, list):
+        return None
+
+    def check(line: dict) -> str | None:
+        source_bpp = line.get("source_boxes_per_pallet")
+        target_bpp = line.get("target_boxes_per_pallet")
+        box_count_moved = line.get("box_count_moved")
+        if not _positive_int(source_bpp):
+            return "源托盘规格（source_boxes_per_pallet）必须是正整数。"
+        if not _positive_int(target_bpp):
+            return "目标托盘规格（target_boxes_per_pallet）必须是正整数。"
+        if not _positive_int(box_count_moved):
+            return "移动箱数（box_count_moved）必须是正整数。"
+        if isinstance(source_bpp, int) and isinstance(box_count_moved, int) and box_count_moved >= source_bpp:
+            return f"移动箱数（{box_count_moved}）不能大于或等于源托盘规格（{source_bpp}）。"
+        return None
+
+    messages = _typed_line_issues(lines, check)
+    return "请修正以下调拨明细：" + "；".join(messages) if messages else None
+
+
+def _valid_completion_sku_lines(
+    override_field: str,
+):
+    """Build a completion validator for effective lines and no substitution."""
+
+    def validator(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+        del context
+        reference_serial = collected_fields.get("reference_serial")
+        if not reference_serial:
+            return None
+
+        from core.uchoice_context import resolve_completion_target
+
+        target, original_fields = resolve_completion_target(db, reference_serial)
+        if target is None:
+            return None
+
+        original_lines = original_fields.get("sku_lines") or []
+        original_issues = validate_sku_lines(
+            original_lines,
+            field_name="original_request.sku_lines",
+            db=db,
+        )
+        if original_issues:
+            return format_validation_issues(original_issues)
+
+        # Match the execution handlers' effective-line semantics exactly:
+        # missing or empty overrides fall back to the original request lines.
+        effective_lines = collected_fields.get(override_field) or original_lines
+        effective_issues = validate_sku_lines(
+            effective_lines,
+            field_name=override_field,
+            db=db,
+        )
+        if effective_issues:
+            return format_validation_issues(effective_issues)
+
+        original_skus = {line["sku_code"] for line in original_lines}
+        substitutions = [
+            index
+            for index, line in enumerate(effective_lines)
+            if line["sku_code"] not in original_skus
+        ]
+        if substitutions:
+            positions = "、".join(str(index + 1) for index in substitutions)
+            return (
+                f"完成明细第 {positions} 项使用了原申请中没有的商品。"
+                "仓库完成确认只能调整原商品的数量或包装方式，不能替换商品。"
+            )
+        return None
+
+    return validator
+
+
+_valid_inbound_completion_skus = _valid_completion_sku_lines("received_lines")
+_valid_outbound_completion_skus = _valid_completion_sku_lines("fulfillment_lines")
+
+
+def _valid_role_change_target_and_role(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """
+    role_change pre-confirm boundary 2 (phase4-self-registration.md Sec 4,
+    Codex round-37/round-41): recheck target membership, recheck new_role is
+    in the server allowlist (pending excluded per Sec 5), and require a
+    valid non-blank warehouse_code when promoting to warehouseman. Backstops
+    the before-persistence boundary in core/workflow_engine.py -- this runs
+    again here since pre-confirm can be reached via a continuation turn that
+    didn't go through the same sanitizer call, and is itself backstopped by
+    the execution-time check in handlers/uchoice/role_change.py.
+    """
+    from core.uchoice_constants import ASSIGNABLE_ROLE_NAMES, VALID_WAREHOUSE_CODES
+
+    target_openid = collected_fields.get("target_openid")
+    if target_openid:
+        target_member = db.query(GroupMember).filter_by(
+            wechat_openid=target_openid, group_id=context["group_id"]
+        ).first()
+        if not target_member:
+            return "该成员不在本群组中，无法调整角色。"
+
+    new_role = collected_fields.get("new_role")
+    if new_role and new_role not in ASSIGNABLE_ROLE_NAMES:
+        return f"未知角色：{new_role}"
+
+    if new_role == "warehouseman":
+        warehouse_code = collected_fields.get("warehouse_code")
+        if not warehouse_code or warehouse_code not in VALID_WAREHOUSE_CODES:
+            return "指派为仓库管理员需要提供有效的仓库代码（JFK 或 DE）。"
+
+    return None
 
 
 def _last_admin_protection(context: dict, collected_fields: dict, db: DBSession) -> str | None:
@@ -122,6 +371,24 @@ def _loose_inbound_restatement_required(context: dict, collected_fields: dict, d
     return f"商品 {missing_labels} 是散箱入库，请说明打包成了多少箱/托、共多少托。"
 
 
+def _valid_outbound_sku_lines(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """uchoice_outbound_request: reject missing or uncataloged line SKUs (Sev 2).
+
+    Reuses the same shared primitive Codex's Phase 2 validators use, applied
+    here for Phase 1 -- a fabricated/missing sku_code on an outbound line
+    (e.g. {"box_count": 30} with no product identified at all) must not
+    reach confirmation as "?", the same way a bad destination_address_id
+    must not reach it either.
+    """
+    del context
+    issues = validate_sku_lines(
+        collected_fields.get("sku_lines"),
+        field_name="sku_lines",
+        db=db,
+    )
+    return format_validation_issues(issues)
+
+
 def _valid_destination_address_required(context: dict, collected_fields: dict, db: DBSession) -> str | None:
     """
     uchoice_outbound_request: destination_address_id must be a real
@@ -162,10 +429,26 @@ def _valid_destination_address_required(context: dict, collected_fields: dict, d
 
 
 PRE_CONFIRM_VALIDATORS = {
-    "role_change": _last_admin_protection,
-    "uchoice_outbound_request": _valid_destination_address_required,
-    "confirm_outbound_completion": _loose_outbound_pick_required,
-    "confirm_inbound_completion": _loose_inbound_restatement_required,
+    "role_change": _compose(
+        _valid_role_change_target_and_role,
+        _last_admin_protection,
+    ),
+    "uchoice_outbound_request": _compose(
+        _valid_outbound_sku_lines,
+        _valid_destination_address_required,
+    ),
+    "uchoice_inbound_request": _valid_inbound_sku_lines,
+    "adjust_storage": _valid_adjust_storage_lines,
+    "move_storage": _valid_move_storage_lines,
+    "recount_storage": _valid_recount_storage_lines,
+    "confirm_outbound_completion": _compose(
+        _valid_outbound_completion_skus,
+        _loose_outbound_pick_required,
+    ),
+    "confirm_inbound_completion": _compose(
+        _valid_inbound_completion_skus,
+        _loose_inbound_restatement_required,
+    ),
 }
 
 

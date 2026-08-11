@@ -4,7 +4,7 @@ from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session as DBSession
 
 from database import SessionLocal
-from core import webhook_receiver, access_control, session_manager, workflow_engine
+from core import webhook_receiver, access_control, session_manager, workflow_engine, self_registration
 from clients.wechat_client import send_message
 from ai.chain import AIProviderChain
 from ai.claude_provider import ClaudeProvider
@@ -112,6 +112,17 @@ def _process_message(message: dict) -> None:
 
     db: DBSession = SessionLocal()
     try:
+        # Phase 4 self-registration: the exact command is recognized here,
+        # before check_access, since the population this serves -- a sender
+        # with no group_member row -- would otherwise get AccessDenied and
+        # never reach anything gated behind a successful access resolution.
+        # Also handles retries by already-registered (pending or
+        # operational) senders via its own membership lookup.
+        registration_reply = self_registration.try_handle_registration_command(db, message)
+        if registration_reply is not None:
+            send_message(message["from_user"], registration_reply, response_url=response_url)
+            return
+
         print(f"[pipeline] response_url present: {bool(response_url)}", flush=True)
         print("[pipeline] access control...", flush=True)
         result = access_control.check_access(
@@ -124,6 +135,15 @@ def _process_message(message: dict) -> None:
         if isinstance(result, access_control.AccessDenied):
             if result.notify_user:
                 send_message(message["from_user"], result.message, response_url=response_url)
+            return
+
+        # Pending-member short circuit: any non-command message from a
+        # zero-grant pending member is intercepted here, before session/
+        # context construction or an AI call -- keeps the role genuinely
+        # inert rather than merely harmless.
+        pending_reply = self_registration.pending_short_circuit_reply(result.role)
+        if pending_reply is not None:
+            send_message(message["from_user"], pending_reply, response_url=response_url)
             return
 
         session = session_manager.resolve_session(db, result, message["content"])

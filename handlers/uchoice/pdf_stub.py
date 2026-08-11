@@ -12,11 +12,101 @@ class GeneratePdfStubHandler(BaseHandler):
 
     def handle(self, context: dict, config: dict, db=None) -> dict:
         doc_type = config.get("doc_type", "confirmation")
+        if doc_type == "outbound_instruction":
+            return self._generate_outbound_instruction(context, db)
         if doc_type == "delivery_confirmation":
+            # Legacy completion-time path -- retained only in case an old
+            # deployed workflow_step row still references it; Phase 3's
+            # migration removes this step from confirm_outbound_completion
+            # going forward. New requests use "outbound_instruction" above.
             return self._generate_delivery_order(context, db)
 
         print(f"[uchoice] PDF generation stubbed (doc_type={doc_type}) — not yet implemented", flush=True)
         return {"pdf_url": None, "pdf_status": "pending"}
+
+    @staticmethod
+    def _generate_outbound_instruction(context: dict, db) -> dict:
+        """
+        Phase 3 (phase3-outbound-pdf-timing.md): the pickup/delivery
+        instruction PDF, generated once at outbound-request creation time --
+        not at warehouse completion. Runs in the post-commit side-effect
+        phase (core/workflow_engine.py's _SIDE_EFFECT_STEP_TYPES), so a
+        failure here must never roll back or relabel the already-successful
+        request; every path below returns cleanly rather than raising.
+
+        Data source is the request's OWN validated collected_fields (what
+        was requested), never a completion-time structure like
+        fulfillment_lines (what was actually shipped) -- those don't exist
+        yet at this point in the lifecycle.
+
+        Logical idempotency: delivery_date is read from the persisted
+        RequestLog.created_at (never datetime.now()), so calling this
+        handler again for the same request -- e.g. a retry -- produces
+        content-identical output regardless of when the retry happens,
+        even though create_token() mints a fresh token/link each time. See
+        phase3-outbound-pdf-timing.md Sec 3.5 for why a fresh token isn't a
+        second logical document.
+        """
+        try:
+            import config as app_config
+            from models.request_log import RequestLog
+            from models.uchoice import UchoiceAddress
+            from core.uchoice_context import sku_label_map
+            from core.uchoice_delivery_order import build_delivery_order_pdf
+            from core.download_tokens import create_token
+
+            fields = context.get("collected_fields", {})
+            serial_number = context.get("serial_number", "")
+            request_log_id = context.get("request_log_id")
+
+            log = db.query(RequestLog).filter_by(log_id=request_log_id).first() if request_log_id else None
+            delivery_date = (log.created_at if log else None)
+            if delivery_date is None:
+                # No persisted timestamp available -- do not fall back to
+                # datetime.now() (that's exactly the non-idempotent behavior
+                # this phase removes). Fail this step cleanly instead.
+                print(f"[uchoice] outbound instruction PDF skipped: no RequestLog.created_at for {serial_number}", flush=True)
+                return {"pdf_url": None, "pdf_status": "failed"}
+            delivery_date = delivery_date.date()
+
+            consignee_company, consignee_addr = "", ""
+            destination_address_id = fields.get("destination_address_id")
+            if destination_address_id:
+                addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
+                if addr:
+                    consignee_company, consignee_addr = addr.company_name or "", addr.addr
+
+            sku_labels = sku_label_map(db)
+            product_lines = []
+            for line in fields.get("sku_lines", []) or []:
+                label = sku_labels.get(line.get("sku_code"), line.get("sku_code", "?"))
+                if "box_count" in line:
+                    qty = line["box_count"]
+                    product_lines.append({"description": label, "quantity_text": f"Quantity: {qty:,}"})
+                else:
+                    bpp = line.get("boxes_per_pallet", 0) or 0
+                    pallets = line.get("pallet_count", 0) or 0
+                    qty = bpp * pallets
+                    product_lines.append({
+                        "description": label,
+                        "quantity_text": f"{bpp:,} Units per Plt x {pallets:,} Plts = {qty:,}",
+                    })
+
+            pdf_bytes = build_delivery_order_pdf(
+                consignee_company=consignee_company,
+                consignee_addr=consignee_addr,
+                delivery_date=delivery_date,
+                product_lines=product_lines,
+                outbound_order_no=serial_number,
+            )
+            filename = f"Delivery_Order_{serial_number}.pdf"
+            token = create_token(pdf_bytes, filename, content_type="application/pdf")
+            base_url = getattr(app_config, "SERVER_BASE_URL", "https://wechat-bot-atse.onrender.com")
+
+            return {"pdf_url": f"{base_url}/files/download/{token}", "pdf_status": "ready"}
+        except Exception as e:
+            print(f"[uchoice] outbound instruction PDF generation failed (non-fatal): {e}", flush=True)
+            return {"pdf_url": None, "pdf_status": "failed"}
 
     @staticmethod
     def _generate_delivery_order(context: dict, db) -> dict:
