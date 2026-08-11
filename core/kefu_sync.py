@@ -72,10 +72,29 @@ def normalize_message(message: dict) -> dict:
     return normalized
 
 
+def is_customer_message(message: dict) -> bool:
+    """Return whether a sync_msg item is an inbound customer message.
+
+    WeCom uses origin=3 for customer messages, 4 for system events, and 5
+    for receptionist messages. Event identity is nested under ``event`` and
+    must not be sent through the customer business-turn processor.
+    """
+    if str(message.get("msgtype") or "").lower() == "event":
+        return False
+    origin = message.get("origin")
+    if origin is None:
+        # Preserve compatibility with recorded/legacy fixtures; live WeCom
+        # payloads carry origin and are filtered by the branch below.
+        return True
+    return str(origin) == "3"
+
+
 def ingest_sync_page(db: Session, *, open_kfid: str, page: SyncPage) -> int:
     """Insert one page and advance its cursor in the caller's transaction."""
     inserted = 0
     for raw in page.messages:
+        if not is_customer_message(raw):
+            continue
         message = normalize_message(raw)
         statement = (
             insert(KefuInboundMessage)
