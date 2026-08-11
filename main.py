@@ -50,26 +50,25 @@ if config.SMART_ROBOT_ENABLED:
 
 
 # ── Kefu wiring (feature-gated, Codex round-88's "application wiring") ────────
-# Imports, credential-bound objects, and scheduled jobs stay entirely inside
-# this block -- per Sec 6.4, a disabled channel must import/wire nothing at
-# all, so an unconfigured KEFU_ENABLED=false deployment can never fail
-# startup on account of Kefu-only code paths.
-_kefu_router = None
+# Callback crypto stays wired so WeCom can verify the URL before issuing the
+# API Secret. KEFU_ENABLED gates clients, processing, and scheduled work.
+from core.WXBizXmlMsgCrypt import WXBizXmlMsgCrypt
+from api.kefu_callback import create_kefu_callback_router
+
+_kefu_crypt = WXBizXmlMsgCrypt(
+    config.WECHAT_KEFU_TOKEN, config.WECHAT_KEFU_ENCODING_AES_KEY, config.WECHAT_CORP_ID
+)
+
+
+def _on_kefu_sync_event(event):
+    """Acknowledge verified callbacks while business processing is disabled."""
+    print("[main] Kefu callback verified; processing is disabled", flush=True)
+
+
 if config.KEFU_ENABLED:
-    from core.WXBizXmlMsgCrypt import WXBizXmlMsgCrypt
-    from api.kefu_callback import create_kefu_callback_router
     from clients.kefu_client import KefuClient
     from core import kefu_artifact_loader, kefu_case_adapter, kefu_delivery_worker, kefu_sync
 
-    # Per WeChat Work's documented Kefu callback contract, receive_id is the
-    # CorpID (not the empty-string special case Smart Robot's own callback
-    # uses -- core/webhook_receiver.py's _RECEIVE_ID -- Kefu is a company-
-    # level integration, Smart Robot's callback is bot-scoped). Unverified
-    # against the live API; flagged to Codex to confirm before this URL is
-    # actually registered with WeChat.
-    _kefu_crypt = WXBizXmlMsgCrypt(
-        config.WECHAT_KEFU_TOKEN, config.WECHAT_KEFU_ENCODING_AES_KEY, config.WECHAT_CORP_ID
-    )
     _kefu_client = KefuClient(config.WECHAT_CORP_ID, config.WECHAT_KEFU_SECRET)
     _kefu_processor = kefu_case_adapter.make_case_turn_processor(_kefu_client, SessionLocal)
 
@@ -86,8 +85,6 @@ if config.KEFU_ENABLED:
         except Exception as e:
             print(f"[main] Kefu sync failed: {e}", flush=True)
 
-    _kefu_router = create_kefu_callback_router(_kefu_crypt, _on_kefu_sync_event)
-
     def _run_kefu_worker_job():
         kefu_sync.run_worker_once(SessionLocal, _kefu_processor, worker_id="kefu-worker-1")
 
@@ -99,6 +96,8 @@ if config.KEFU_ENABLED:
     # claim -> process -> enqueue -> deliver pipeline moving promptly.
     scheduler.add_job(_run_kefu_worker_job, "interval", seconds=15, id="kefu_worker")
     scheduler.add_job(_run_kefu_delivery_job, "interval", seconds=20, id="kefu_delivery")
+
+_kefu_router = create_kefu_callback_router(_kefu_crypt, _on_kefu_sync_event)
 
 
 # ── App lifecycle ─────────────────────────────────────────────────────────────
@@ -124,8 +123,7 @@ app.include_router(webhook.router)
 app.include_router(labels.router)
 app.include_router(file_download.router)
 app.include_router(admin_panel.router)  # public route — the page itself prompts for the admin key client-side
-if _kefu_router is not None:
-    app.include_router(_kefu_router)
+app.include_router(_kefu_router)
 
 # admin routes
 app.include_router(groups.router)
