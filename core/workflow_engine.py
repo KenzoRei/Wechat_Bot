@@ -29,6 +29,29 @@ from models.workflow import WorkflowStep
 from models.service import ServiceType
 
 
+def _session_provenance_kwargs(context: dict) -> dict:
+    """
+    kefu-migration-plan.md Sec 2.4 / Codex round-90 finding 4: explicit at
+    session-creation time -- context["source_channel"]/["submitted_by_staff_id"]
+    come from session_manager.build_context() (from AccessResult), defaulting
+    to Smart Robot's existing shape when absent (offline tests build context
+    dicts by hand without these keys).
+    """
+    staff_id = context.get("submitted_by_staff_id")
+    return {
+        "source_channel": context.get("source_channel") or "smart_robot",
+        "opened_by_staff_id": UUID(staff_id) if staff_id else None,
+    }
+
+
+def _log_provenance_kwargs(context: dict) -> dict:
+    staff_id = context.get("submitted_by_staff_id")
+    return {
+        "source_channel": context.get("source_channel") or "smart_robot",
+        "submitted_by_staff_id": UUID(staff_id) if staff_id else None,
+    }
+
+
 def run_and_get_reply(context: dict, ai_response: AIResponse, db: DBSession) -> str:
     """
     Main orchestrator — synchronous version.
@@ -113,7 +136,8 @@ def _maybe_pivot_to_add_address(context: dict, ai_response: AIResponse, db: DBSe
         wechat_openid=context["wechat_openid"],
         group_id=UUID(context["group_id"]),
         initial_message=context["content"],
-        service_type_id=UUID(add_address_service["service_type_id"])
+        service_type_id=UUID(add_address_service["service_type_id"]),
+        **_session_provenance_kwargs(context),
     )
     log = request_logger.create_log(
         db,
@@ -121,7 +145,8 @@ def _maybe_pivot_to_add_address(context: dict, ai_response: AIResponse, db: DBSe
         group_id=UUID(context["group_id"]),
         service_type_id=UUID(add_address_service["service_type_id"]),
         raw_message=context["content"],
-        wechat_msg_id=context["msg_id"]
+        wechat_msg_id=context["msg_id"],
+        **_log_provenance_kwargs(context),
     )
     new_session.request_log_id = log.log_id
     context["serial_number"] = log.serial_number
@@ -188,7 +213,8 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
         wechat_openid=context["wechat_openid"],
         group_id=UUID(context["group_id"]),
         initial_message=context["content"],
-        service_type_id=UUID(service["service_type_id"])
+        service_type_id=UUID(service["service_type_id"]),
+        **_session_provenance_kwargs(context),
     )
 
     # update context with new session id + service type so downstream (esp.
@@ -208,9 +234,15 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
             group_id=UUID(context["group_id"]),
             service_type_id=UUID(service["service_type_id"]),
             raw_message=context["content"],
-            wechat_msg_id=context["msg_id"]
+            wechat_msg_id=context["msg_id"],
+            **_log_provenance_kwargs(context),
         )
         session.request_log_id = log.log_id
+        # kefu-migration-plan.md Sec 2.4: the one durable link
+        # get_original_fields() now uses to find this request's own
+        # originating session -- channel-agnostic, set once, here, at
+        # creation, never inferred from actor identity afterward.
+        log.origin_session_id = session.session_id
         context["serial_number"] = log.serial_number
         db.commit()
 
@@ -390,18 +422,30 @@ def _sanitize_role_change_fields_before_persistence(extracted_fields: dict, db: 
         return extracted_fields
 
     from models.group import GroupMember
+    from models.kefu import KefuStaff
     from core.uchoice_constants import ASSIGNABLE_ROLE_NAMES
+    from core.role_identity import parse_target_identity
 
     result = dict(extracted_fields)
 
+    # kefu-migration-plan.md Sec 2.3: dispatch on the tagged identity kind,
+    # never by probing which table happens to contain a matching raw
+    # string (Codex round-68 finding 4 -- identifiers can collide across
+    # GroupMember and kefu_staff).
     target_openid = result.get("target_openid")
     if target_openid is not None:
-        member = None
-        if group_id:
-            member = db.query(GroupMember).filter_by(
-                wechat_openid=target_openid, group_id=group_id
-            ).first()
-        if member is None:
+        identity = parse_target_identity(target_openid)
+        target_exists = False
+        if identity is not None and group_id:
+            if identity.kind == "kefu":
+                target_exists = db.query(KefuStaff).filter_by(
+                    staff_id=identity.key, group_id=group_id
+                ).first() is not None
+            else:
+                target_exists = db.query(GroupMember).filter_by(
+                    wechat_openid=identity.key, group_id=group_id
+                ).first() is not None
+        if not target_exists:
             print(f"[workflow] dropped fabricated role_change.target_openid "
                   f"before persistence: {target_openid!r} is not a member of this group", flush=True)
             result.pop("target_openid", None)
@@ -514,6 +558,9 @@ def _on_all_fields_collected(
         if _reject_invalid_outbound_stock(context, session, db):
             return
 
+    if service["name"] == "uchoice_inbound_request":
+        _resolve_inbound_warehouse_default(context, session, db)
+
     if service["name"] == "confirm_outbound_completion":
         _resolve_outbound_loose_pick_defaults(context, session, db)
 
@@ -539,6 +586,29 @@ def _resolve_outbound_warehouse_default(context: dict, session, db: DBSession) -
     bucket lookup needs the real warehouse_code to find the right buckets)
     — marked with _warehouse_auto_default so the confirmation display can
     flag it as an assumption the customer can still correct.
+    """
+    fields = session.collected_fields
+    if fields.get("warehouse_code"):
+        return
+    session_manager.update_collected_fields(db, session, {
+        "warehouse_code": "JFK",
+        "_warehouse_auto_default": True,
+    })
+    context["collected_fields"] = session.collected_fields
+
+
+def _resolve_inbound_warehouse_default(context: dict, session, db: DBSession) -> None:
+    """
+    kefu-migration-plan.md Sec 3 (round 64 -- the user's final answer):
+    inbound also defaults warehouse_code to JFK when unstated, same
+    two-tier rule as outbound's _resolve_outbound_warehouse_default above
+    (explicit when stated, JFK otherwise, no third tier). This is new
+    code, not a reuse of the outbound resolver -- Codex round-62 finding
+    3 confirmed the outbound one is outbound-specific by name and
+    confirmation-flow position; inbound previously had no such default at
+    all (warehouse_code was a hard-required schema field). The
+    corresponding service_type.input_schema migration moves
+    warehouse_code from required to optional to match.
     """
     fields = session.collected_fields
     if fields.get("warehouse_code"):

@@ -18,3 +18,5 @@ WXBizMsgCrypt_IllegalBuffer = -40008
 WXBizMsgCrypt_EncodeBase64_Error = -40009
 WXBizMsgCrypt_DecodeBase64_Error = -40010
 WXBizMsgCrypt_GenReturnJson_Error = -40011
+WXBizMsgCrypt_ParseXml_Error = -40012
+WXBizMsgCrypt_GenReturnXml_Error = -40013

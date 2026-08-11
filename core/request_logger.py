@@ -10,7 +10,10 @@ def create_log(
     group_id: UUID,
     service_type_id: UUID,
     raw_message: str,
-    wechat_msg_id: str | None = None
+    wechat_msg_id: str | None = None,
+    source_channel: str = "smart_robot",
+    submitted_by_staff_id: UUID | None = None,
+    customer_id: UUID | None = None,
 ) -> RequestLog:
     """
     Creates a request_log row as soon as a service resolves at new_request
@@ -24,6 +27,13 @@ def create_log(
     Status starts as 'pending' (awaiting customer confirm/cancel) —
     transitions to 'processing' on confirm, then 'success'/'failed' once the
     workflow finishes, or 'cancelled'/'timed_out'/'stale' if abandoned.
+
+    kefu-migration-plan.md Sec 2.4 / Codex round-90 finding 4: source_channel/
+    submitted_by_staff_id must be explicit at creation time, not defaulted
+    and patched in later -- a Kefu-originated request that briefly carried
+    source_channel='smart_robot' would already be wrong for the window
+    between creation and any later fix-up (included in Smart Robot's own
+    scheduled jobs, excluded from the Kefu completion-notice query).
     """
     log = RequestLog(
         wechat_openid=wechat_openid,
@@ -31,7 +41,10 @@ def create_log(
         service_type_id=service_type_id,
         status="pending",
         raw_message=raw_message,
-        wechat_msg_id=wechat_msg_id
+        wechat_msg_id=wechat_msg_id,
+        source_channel=source_channel,
+        submitted_by_staff_id=submitted_by_staff_id,
+        customer_id=customer_id,
     )
     db.add(log)
     db.commit()

@@ -1,0 +1,59 @@
+Context: We are a small/median size logistic company with 3 warehouses and less than 100 employees. More than half of our customers are from China and in lots of scenarios, they just ask for services/communicate with us by Wechat, which could be very casual and hard to track/record.
+
+Purpose of this project:
+	- receive and record info/order in wechat group
+	- organize/categorize casual conversations/orders into structured data by LLM
+	- respond by wechat bot according to structured data
+	- store data
+
+Applying scenarios(expected):
+	- receive inbound/outbound orders from customer, recording warehouse handling and generate storage(would detail this scenario in later customer discuss)
+	- receive orders from customer and generate shipment labels(small package carriers like UPS and FedEx, and later freight carriers like Forwardair) by ydd's or directly by carrier's api endpoint
+	- monitor conversations in wechat group, extract and summarize business points, then generate report regularly
+	- more in later version
+
+Project structure
+	- generally very similar to previous wechat bot at E:\Project\Wechat_Bot
+	- setup a backup in server, a WeCom bot, and an optional frontend for dev panel
+	- modulized pipeline for each customer/scenario
+
+Typical workflow(a scenario need to implement in mvp)
+	- build a WeCom group, setup group settings in backend:
+		- company info
+		- pipeline applied
+		- roles for different permissions, including customer, warehouseman, accoutant, admin, ane etc.
+	- @bot to initialize a thread
+	- LLM receive and process the order
+	- respond according to role and permission:
+		- reject due to role permission or unclear order
+		- verify service type with the member who initialize this thread due to low confidence
+		- ask for more info required for this service type if type is already verified
+	- Confirm structured order info with requester
+	- LLM generate a structured data and send to backend
+	- process request by preset pipeline
+	- record and report to requestor
+
+MVP requests:
+	- WeCom/WeChat bot setup
+	- backup setup on server
+	- high level workflow design
+	- a pipeline for a specific customer: U-Choice
+
+Setup/Pipeline for U-Choice
+	- a customer asking for inbound/outbound/storage service
+	- very simple business with only 5-8 skus
+	- cargo is not listed simply by sku, but by sku(pty per pallet), for example: s1-80 box per plt *2, s1-120 box per plt *3
+	- service type:
+		- ask for inbound/outbound(role=customer)
+		- confirm completion of inbound/outbound(role=warehouseman)
+		- upsert an addr(role=customer/warehouseman)
+		- view storage(role=all)
+		- adjust storage(role=warehouseman)
+		- generate invoice(automatic generation by month)
+		- role change(role=admin)
+	- inbound/outbound workflow:
+		- customer initialize a thread
+		- confirm required fields, send data to backend for processing, and remind warehouseman at the same time(optional, maybe a confirmation is sufficient)
+		- wait for warehouseman finish the job, update thread status, and generate pickup/delivery order in pdf in WeCom group
+		- Storage adjust
+	- other services have very few steps and are easier to build pipelines

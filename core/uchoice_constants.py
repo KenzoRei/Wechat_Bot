@@ -19,3 +19,18 @@ VALID_WAREHOUSE_CODES = frozenset({"JFK", "DE"})
 # expose any future internal/system role the moment it's added. pending is
 # deliberately absent -- system-assigned only, via self-registration.
 ASSIGNABLE_ROLE_NAMES = frozenset({"admin", "customer", "warehouseman", "accountant"})
+
+# Shared between jobs/uchoice_daily.py's push digest and the on-demand
+# view_pending_digest service (handlers/uchoice/queries.py) so both agree on
+# exactly when a pending request is flagged/retired -- same reasoning as the
+# warehouse set above, one source of truth instead of two copies drifting.
+STALE_THRESHOLD_DAYS = 7
+
+# kefu-migration-plan.md Sec 6.2: services that require and lock a
+# customer_id, since a shared Kefu account works cases on behalf of many
+# different customers in the same conversation channel (unlike Smart Robot,
+# where one WeChat group implicitly IS one customer). Every other service
+# is staff/business-scope only and never forces a customer selection.
+CUSTOMER_SCOPED_KEFU_SERVICES = frozenset({
+    "uchoice_inbound_request", "uchoice_outbound_request", "upsert_address",
+})

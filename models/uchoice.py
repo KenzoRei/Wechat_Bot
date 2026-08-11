@@ -49,7 +49,7 @@ class UchoiceAddress(Base):
     __tablename__ = "uchoice_address"
 
     address_id:     Mapped[uuid.UUID]      = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
-    company_name:   Mapped[str]            = mapped_column(String(200), nullable=False)
+    company_name:   Mapped[str | None]     = mapped_column(String(200))
     charge_type:    Mapped[str]            = mapped_column(String(20), nullable=False)
     addr:           Mapped[str]            = mapped_column(Text, nullable=False)
     warehouse_code: Mapped[str | None]     = mapped_column(String(20))
@@ -61,6 +61,12 @@ class UchoiceAddress(Base):
     # outbound to it triggers a storage increase there too, not just a
     # decrease at the origin.
     destination_warehouse_code: Mapped[str | None] = mapped_column(String(20))
+    # WeChat Kefu migration (kefu-migration-plan.md Sec 2.2) -- nullable
+    # during migration; the 5 rows with company_name IS NULL are excluded
+    # from automatic backfill and block the eventual NOT NULL tightening
+    # until manually classified. Every row belongs to exactly one customer
+    # -- there is no global/unscoped address (round 62/63, final).
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("uchoice_customer.customer_id"))
 
 
 class UchoiceStorageFeeLedger(Base):

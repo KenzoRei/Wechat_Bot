@@ -163,6 +163,61 @@ class ComputeInvoiceHandler(BaseHandler):
             print(f"[uchoice] invoice workbook group push failed (non-fatal): {e}", flush=True)
 
 
+class QueryPendingDigestHandler(BaseHandler):
+    """
+    view_pending_digest — requires_confirmation=false, executes immediately.
+
+    kefu-migration-plan.md Sec 7: "pull, not push" -- the same pending-
+    request digest content jobs/uchoice_daily.py already pushes on a
+    schedule, but on-demand, for whoever asks. Scoped to the caller's own
+    group_id (context["group_id"]) so it never leaks another tenant's
+    pending requests; this naturally also scopes it correctly once Kefu is
+    wired in, since a Kefu-originated request's group_id is the same
+    customer group concept, not a separate identity space. Deliberately
+    read-only -- unlike the scheduled job, this does not retire anything to
+    status='stale' (a read query shouldn't have a side effect a customer/
+    staff member didn't ask for).
+    """
+
+    def handle(self, context: dict, config: dict, db) -> dict:
+        from datetime import datetime, timezone
+        from models.request_log import RequestLog
+        from models.service import ServiceType
+        from core.uchoice_constants import STALE_THRESHOLD_DAYS
+
+        group_id = context.get("group_id")
+        service_type_ids = [
+            st.service_type_id for st in
+            db.query(ServiceType).filter(
+                ServiceType.name.in_(["uchoice_inbound_request", "uchoice_outbound_request"])
+            ).all()
+        ]
+        if not service_type_ids or not group_id:
+            return {"pending_rows": []}
+
+        rows = (
+            db.query(RequestLog)
+            .filter(
+                RequestLog.status == "processing",
+                RequestLog.service_type_id.in_(service_type_ids),
+                RequestLog.group_id == group_id,
+            )
+            .order_by(RequestLog.created_at.asc())
+            .all()
+        )
+
+        now = datetime.now(timezone.utc)
+        pending_rows = []
+        for log in rows:
+            days = (now - log.created_at).days
+            pending_rows.append({
+                "serial_number": log.serial_number,
+                "days_pending": days,
+                "past_threshold": days >= STALE_THRESHOLD_DAYS - 1,
+            })
+        return {"pending_rows": pending_rows}
+
+
 class ExplainServiceHandler(BaseHandler):
     """
     explain_service — requires_confirmation=false, executes immediately.
