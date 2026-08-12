@@ -6,8 +6,87 @@ apply one delta) is written once here; each caller only differs in what
 deltas it computes.
 """
 from datetime import datetime, timezone
+from collections.abc import Iterable
+from dataclasses import dataclass
+from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session as DBSession
 from models.uchoice import UchoiceStorage, UchoiceStorageTxn
+
+
+@dataclass(frozen=True, order=True)
+class StorageScope:
+    warehouse_code: str
+    sku_code: str
+
+
+def _is_postgres(db: DBSession) -> bool:
+    get_bind = getattr(db, "get_bind", None)
+    if get_bind is None:
+        return False
+    bind = get_bind()
+    return bool(bind is not None and bind.dialect.name == "postgresql")
+
+
+def acquire_storage_scopes(db: DBSession, scopes: Iterable[tuple[str, str] | StorageScope]) -> list[UchoiceStorage]:
+    """Lock complete warehouse/SKU scopes in one global order.
+
+    The transaction advisory lock serializes both existing rows and creation
+    of a previously absent pallet bucket.  Callers touching more than one
+    scope must declare the complete set up front; applying origin and then
+    destination locks incrementally can deadlock opposing transfers.
+    """
+    normalized: set[StorageScope] = set()
+    for scope in scopes:
+        item = scope if isinstance(scope, StorageScope) else StorageScope(*scope)
+        if item.warehouse_code and item.sku_code:
+            normalized.add(item)
+    ordered = sorted(normalized)
+    if _is_postgres(db):
+        for scope in ordered:
+            key = f"uchoice-storage:{scope.warehouse_code}:{scope.sku_code}"
+            db.execute(sql_text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": key})
+
+    rows: list[UchoiceStorage] = []
+    for scope in ordered:
+        rows.extend(
+            db.query(UchoiceStorage)
+            .filter_by(warehouse_code=scope.warehouse_code, sku_code=scope.sku_code)
+            .order_by(UchoiceStorage.boxes_per_pallet.asc())
+            .with_for_update()
+            .all()
+        )
+    return rows
+
+
+def available_box_count(db: DBSession, warehouse_code: str, sku_code: str, *, lock: bool = False) -> int:
+    if lock:
+        rows = acquire_storage_scopes(db, [(warehouse_code, sku_code)])
+    else:
+        rows = (
+            db.query(UchoiceStorage)
+            .filter_by(warehouse_code=warehouse_code, sku_code=sku_code)
+            .filter(UchoiceStorage.pallet_count > 0)
+            .all()
+        )
+    return sum(max(0, row.pallet_count) * row.boxes_per_pallet for row in rows)
+
+
+def allocate_box_picks(rows: Iterable[UchoiceStorage], box_count: int) -> list[dict] | None:
+    """Allocate boxes from smallest pallet buckets first, without mutation."""
+    if not isinstance(box_count, int) or isinstance(box_count, bool) or box_count <= 0:
+        raise ValueError("box_count must be a positive integer")
+    remaining = box_count
+    picks: list[dict] = []
+    for row in sorted(rows, key=lambda item: item.boxes_per_pallet):
+        available = max(0, row.pallet_count) * row.boxes_per_pallet
+        if not available:
+            continue
+        take = min(available, remaining)
+        picks.append({"source_boxes_per_pallet": row.boxes_per_pallet, "box_count": take})
+        remaining -= take
+        if remaining == 0:
+            return picks
+    return None
 
 
 def apply_storage_delta(
@@ -26,6 +105,9 @@ def apply_storage_delta(
     one audit txn row. Raises RuntimeError with a clean message (not a raw DB
     constraint error) if the decrement would take the balance negative.
     """
+    # Single-scope callers participate in the same protocol as multi-scope
+    # handlers. Re-acquiring an already-held xact advisory lock is harmless.
+    acquire_storage_scopes(db, [(warehouse_code, sku_code)])
     bucket = (
         db.query(UchoiceStorage)
         .filter_by(warehouse_code=warehouse_code, sku_code=sku_code, boxes_per_pallet=boxes_per_pallet)

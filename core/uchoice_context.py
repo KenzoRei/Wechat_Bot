@@ -65,17 +65,21 @@ def sku_label_map(db: DBSession) -> dict[str, str]:
 
 def address_candidates(db: DBSession, customer_id=None) -> list[dict]:
     """
-    kefu-migration-plan.md Sec 2.2: every address belongs to exactly one
-    customer (round 62/63, no global/unscoped category). When customer_id
-    is given (the Kefu case flow, where a customer is always locked before
-    this is called), results are filtered to that customer only -- a
-    request for customer A must never see or offer customer B's address.
+    kefu-deterministic-response-plan.md Sec 5: the U-Choice address book is
+    shared across every authorized U-Choice service -- `customer_id` is
+    provenance/reporting metadata only, never an address visibility ACL.
+    Neither current caller (Smart Robot's own uchoice_outbound_request path,
+    or Kefu's session_manager._build_uchoice_candidates) passes a
+    customer_id filter.
 
-    customer_id=None preserves this function's pre-migration behavior
-    (every address, unfiltered) -- the only remaining caller of that shape
-    is Smart Robot's own uchoice_outbound_request path
-    (core/session_manager.py), which predates the customer concept
-    entirely and is explicitly unaffected by this migration (plan Sec 1).
+    The optional customer_id filter itself is kept, not removed, for any
+    future legacy/reporting caller that genuinely wants a customer-scoped
+    subset -- it is no longer how visibility/matching is gated for any
+    request-submission path (round-99's opposite design -- withhold until a
+    customer is locked, then filter to it -- was reverted after a live
+    incident showed it contradicted the actual business rule; see
+    docs/ai-collaboration/decisions.md's "Superseded or challenged
+    assumptions").
     """
     query = db.query(UchoiceAddress)
     if customer_id is not None:

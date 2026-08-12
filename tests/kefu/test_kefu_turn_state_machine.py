@@ -41,17 +41,21 @@ def _service(**overrides):
 
 
 def test_ready_customer_request_stops_at_pending_confirmation(monkeypatch):
+    # kefu-deterministic-response-plan.md correction: uchoice_inbound_request/
+    # uchoice_outbound_request no longer require or resolve a customer_id --
+    # every current U-Choice service is performed on behalf of U-Choice
+    # itself, the sole platform tenant today (see decisions.md's
+    # "Superseded or challenged assumptions").
     session = _session()
     log = SimpleNamespace(serial_number="REQ-1", customer_id=None, status="pending")
     db = _DB(log)
     ai = SimpleNamespace(extracted_fields={}, all_fields_collected=True, reply="ready")
-    monkeypatch.setattr(kefu_turn_apply, "resolve_and_lock_customer", lambda *args: "00000000-0000-0000-0000-000000000001")
     monkeypatch.setattr(kefu_turn_apply.pre_confirm_validators, "run", lambda *args: None)
     monkeypatch.setattr(kefu_turn_apply, "_render_confirmation", lambda *args: "CONFIRM THIS")
 
     reply = kefu_turn_apply.apply_kefu_turn(
         db,
-        {"group_id": "group-1", "content": "request", "uchoice_candidates": {"customers": []}},
+        {"group_id": "group-1", "content": "request", "uchoice_candidates": {}},
         ai,
         _service(),
         session,
@@ -79,7 +83,7 @@ def test_confirm_transitions_processing_before_business_execution(monkeypatch):
         _DB(log), {"content": "确认"}, _service(), session
     )
     assert reply == "done"
-    assert seen == {"session_status": "processing", "log_status": "processing"}
+    assert seen == {"session_status": "active", "log_status": "processing"}
 
 
 def test_duplicate_confirm_never_runs_business_execution(monkeypatch):

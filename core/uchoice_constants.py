@@ -25,12 +25,3 @@ ASSIGNABLE_ROLE_NAMES = frozenset({"admin", "customer", "warehouseman", "account
 # exactly when a pending request is flagged/retired -- same reasoning as the
 # warehouse set above, one source of truth instead of two copies drifting.
 STALE_THRESHOLD_DAYS = 7
-
-# kefu-migration-plan.md Sec 6.2: services that require and lock a
-# customer_id, since a shared Kefu account works cases on behalf of many
-# different customers in the same conversation channel (unlike Smart Robot,
-# where one WeChat group implicitly IS one customer). Every other service
-# is staff/business-scope only and never forces a customer selection.
-CUSTOMER_SCOPED_KEFU_SERVICES = frozenset({
-    "uchoice_inbound_request", "uchoice_outbound_request", "upsert_address",
-})

@@ -4,9 +4,52 @@ Extracting here avoids duplicating the system prompt across Claude and OpenAI.
 """
 import json
 from datetime import datetime, timezone
-from ai.base import AIResponse
+from ai.base import AddressMatch, AIResponse, SemanticIssue
 
 _WEEKDAY_CN = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+
+
+def _address_matching_instructions(is_kefu: bool) -> str:
+    """
+    kefu-deterministic-response-plan.md Sec 3/5: Kefu gets a structured-only
+    contract (AddressMatch), never writing destination_address_id/
+    unmatched_new_address directly and never narrating a pivot/cancellation
+    that only the backend can know actually happened. Smart Robot keeps its
+    exact pre-existing legacy instruction, unchanged, per the plan's explicit
+    compatibility rule (Sec 2) -- Smart Robot's own reply/pivot path is a
+    documented non-goal of this phase.
+    """
+    if is_kefu:
+        return (
+            "- addresses：将用户描述的目的地与此列表语义匹配。【重要】不要把结果直接写入 "
+            "extracted_fields 的 destination_address_id 或 unmatched_new_address——改为在顶层字段 "
+            "address_match 中返回结构化证据，四种状态之一：\n"
+            "  · 客户尚未提及目的地：{{\"status\": \"not_provided\", \"candidate_ids\": []}}\n"
+            "  · 明确匹配唯一一项：{{\"status\": \"matched\", \"candidate_ids\": [\"<该项真实的 address_id>\"]}}\n"
+            "  · 可能匹配多项（歧义）：{{\"status\": \"ambiguous\", \"candidate_ids\": [\"<候选1的address_id>\", "
+            "\"<候选2的address_id>\", ...]}}（至少两项）\n"
+            "  · 客户已明确说出目的地，但列表中没有任何一项匹配：{{\"status\": \"unmatched\", \"new_address\": "
+            "{{\"company_name\": \"<尽力提取，提取不到则省略此键>\", \"addr\": \"<地址，按下方地址整理规则处理，"
+            "要素不全就只填齐全的部分，不要瞎猜补全，提取不到则省略此键>\"}}}}\n"
+            "  【重要】candidate_ids 只能填此列表中真实存在的 address_id（UUID），绝不能编造，也不能把公司名/地址"
+            "原文当作 ID 使用。\n"
+            "  【重要】reply 字段不得对地址匹配结果、是否触发新增地址流程、原申请是否被取消等系统状态做任何论断——"
+            "这些一律由后端根据 address_match 的处理结果决定并生成实际发送给客服人员的消息，你在 reply 中提及会"
+            "造成与真实系统状态不符（reply 字段本身也不会被当作操作性回复发送，仅供内部记录，可简要留空）。\n"
+        )
+    return (
+        "- addresses：将用户描述的目的地与此列表匹配，提取 address_id 填入 destination_address_id。"
+        "【重要】在 reply 中向用户确认匹配到的目的地时，必须同时给出公司名和完整地址（如\"发往 ABC 公司（123 Main St, City, ST 12345）\"），"
+        "不能只提公司名——地址信息才是用户真正需要核对的部分。"
+        "【重要】destination_address_id 只能填此列表中真实存在的 address_id（一个 UUID），绝不能把客户描述的公司名/地址原文当作 "
+        "destination_address_id 直接填入——如果此列表中没有任何一项能匹配客户描述的目的地（注意：客户压根还没提到目的地，属于正常的"
+        "缺失字段等待，不算这种情况；这里特指客户已经明确说了一个目的地，但列表里找不到对应项），不要设置 all_fields_collected=true，"
+        "也不要在 extracted_fields 里填 destination_address_id。此时改为在顶层字段 unmatched_new_address 中尽力提取一个"
+        "{{\"company_name\": \"<公司名，提取不到则省略此键>\", \"addr\": \"<地址，按上面 upsert_address 的地址整理规则处理，"
+        "要素不全就只填齐全的部分，不要瞎猜补全，提取不到则省略此键>\"}}，供系统据此转为新增地址流程使用。"
+        "同时 reply 中必须说明：这是一个新地址、尚未收录，系统已将其转为新增地址流程，原出库申请已自动取消，"
+        "还需要补充计费类型（以及所属仓库，如果无法判断）后才能完成新增，新增完成后请重新提交出库申请。\n"
+    )
 
 
 def build_system_prompt(context: dict) -> str:
@@ -55,6 +98,12 @@ def build_system_prompt(context: dict) -> str:
             "用户询问某个计费类型是什么意思、或几种类型有什么区别时，据此如实解释，不要凭空编造标准。\n"
         )
 
+    # kefu-deterministic-response-plan.md Sec 2/3: channel mode determines the
+    # structured-vs-legacy AI contract. Smart Robot (default when absent, e.g.
+    # offline tests building context dicts by hand) keeps its exact existing
+    # behavior; only source_channel=="kefu" gets the structured-only contract.
+    is_kefu = context.get("source_channel") == "kefu"
+
     uchoice_candidates = context.get("uchoice_candidates") or {}
     candidates_block = (
         f"\n## 候选列表（用于模糊匹配，不是让你调用工具，只是预取的参考数据）\n"
@@ -72,25 +121,7 @@ def build_system_prompt(context: dict) -> str:
         "应理解为已打托的整托商品，填入 sku_lines 为 {{\"sku_code\": \"<编码>\", \"boxes_per_pallet\": X, \"pallet_count\": 1}}，"
         "绝不能理解为散箱（{{\"box_count\": X}}）。只有当客户给出箱数但完全没有提及\"版/板\"（一整托）这个概念时（如仅说\"60箱黑色缠绕膜\"），"
         "才存在整托与散箱的歧义，此时不要猜测，在 reply 中询问客户这批货是已经打好的整托，还是需要按散箱处理。\n"
-        "- customers：仅在企业微信客服（Kefu）渠道下出现，代表真实客户目录。此列表只在案件尚未锁定客户时出现——"
-        "一旦锁定，此列表不会再出现，即使用户后续提到别的客户名字也不应改变已锁定的客户，直接按当前案件的客户继续处理即可。"
-        "客服人员描述的客户名称（可能是全名、简称，或此列表 aliases 中的别名）与此列表的 canonical_name/aliases 语义匹配，"
-        "提取匹配到的 customer_id（真实 UUID）填入 extracted_fields 的 customer_id 字段。"
-        "【重要】customer_id 只能填此列表中真实存在的 customer_id，绝不能把客户名称原文当作 customer_id 直接填入。"
-        "如果客服人员还没有说明是哪位客户，这是正常的缺失字段等待，不要设置 all_fields_collected=true，"
-        "在 reply 中询问这是哪位客户的申请；如果客服人员已经说了一个客户名称但此列表中找不到匹配项，"
-        "同样不要设置 all_fields_collected=true，在 reply 中如实说明未找到该客户，请客服人员核实客户名称或联系管理员，不要瞎猜。\n"
-        "- addresses：将用户描述的目的地与此列表匹配，提取 address_id 填入 destination_address_id。"
-        "【重要】在 reply 中向用户确认匹配到的目的地时，必须同时给出公司名和完整地址（如\"发往 ABC 公司（123 Main St, City, ST 12345）\"），"
-        "不能只提公司名——地址信息才是用户真正需要核对的部分。"
-        "【重要】destination_address_id 只能填此列表中真实存在的 address_id（一个 UUID），绝不能把客户描述的公司名/地址原文当作 "
-        "destination_address_id 直接填入——如果此列表中没有任何一项能匹配客户描述的目的地（注意：客户压根还没提到目的地，属于正常的"
-        "缺失字段等待，不算这种情况；这里特指客户已经明确说了一个目的地，但列表里找不到对应项），不要设置 all_fields_collected=true，"
-        "也不要在 extracted_fields 里填 destination_address_id。此时改为在顶层字段 unmatched_new_address 中尽力提取一个"
-        "{{\"company_name\": \"<公司名，提取不到则省略此键>\", \"addr\": \"<地址，按上面 upsert_address 的地址整理规则处理，"
-        "要素不全就只填齐全的部分，不要瞎猜补全，提取不到则省略此键>\"}}，供系统据此转为新增地址流程使用。"
-        "同时 reply 中必须说明：这是一个新地址、尚未收录，系统已将其转为新增地址流程，原出库申请已自动取消，"
-        "还需要补充计费类型（以及所属仓库，如果无法判断）后才能完成新增，新增完成后请重新提交出库申请。\n"
+        f"{_address_matching_instructions(is_kefu)}"
         "- pending_inbound_requests / pending_outbound_requests：当前所有待处理的入库/出库申请候选列表。\n"
         "  · 0 条：告知用户当前没有待处理的申请，不要设置 all_fields_collected=true。\n"
         "  · 恰好 1 条：不需要询问，也不需要列出来给用户选——直接把这唯一一条的 serial_number 填入 reference_serial，"
@@ -144,6 +175,40 @@ def build_system_prompt(context: dict) -> str:
     today = datetime.now(timezone.utc).date()
     today_str = f"{today.isoformat()}（{_WEEKDAY_CN[today.weekday()]}）"
 
+    # kefu-deterministic-response-plan.md Sec 3: Kefu's response schema swaps
+    # unmatched_new_address for address_match and adds semantic_issues; reply
+    # is relabeled internal-only. Smart Robot's schema/wording is byte-for-
+    # byte the original, unaffected by this phase (Sec 2 compatibility rule).
+    if is_kefu:
+        response_format_block = """{
+  "intent": "<意图>",
+  "reply": "<仅供内部记录，不会发送给客服人员，可留空>",
+  "extracted_fields": {},
+  "all_fields_collected": false,
+  "service_type_name": null,
+  "semantic_issues": [],
+  "address_match": null
+}"""
+        reply_field_note = (
+            "- 【重要，企业微信客服渠道】reply 字段不会发送给客服人员——所有实际发送的消息均由后端根据 "
+            "extracted_fields/address_match/semantic_issues 等结构化结果生成。reply 仅供内部记录，"
+            "不得包含任何关于系统状态、操作结果或下一步流程的论断，可简要留空。\n"
+            "- semantic_issues：当某个字段的取值有歧义、无法识别、或与已知目录矛盾，且没有更具体的结构化字段"
+            "（如 address_match）可用来表达时，在此列出，每项包含 {\"code\": \"ambiguous_value\" | "
+            "\"unknown_value\" | \"contradictory_value\", \"field\": \"<字段名>\", \"candidate_ids\": [...], "
+            "\"value\": \"<原始值，可选>\"}。candidate_ids 只能是本轮实际提供给你的候选项 ID。\n"
+        )
+    else:
+        response_format_block = """{
+  "intent": "<意图>",
+  "reply": "<发送给用户的中文消息>",
+  "extracted_fields": {},
+  "all_fields_collected": false,
+  "service_type_name": null,
+  "unmatched_new_address": null
+}"""
+        reply_field_note = ""
+
     return f"""你是一个中文物流助手机器人，运行在企业微信群里，帮助用户提交物流服务申请。
 
 ## 当前日期
@@ -167,15 +232,8 @@ def build_system_prompt(context: dict) -> str:
 
 ## 响应格式
 你必须始终返回合法的 JSON，不得包含任何 JSON 以外的文字：
-{{
-  "intent": "<意图>",
-  "reply": "<发送给用户的中文消息>",
-  "extracted_fields": {{}},
-  "all_fields_collected": false,
-  "service_type_name": null,
-  "unmatched_new_address": null
-}}
-
+{response_format_block}
+{reply_field_note}
 ## 意图说明
 - new_request：用户发起新申请。识别服务类型，开始收集必填字段。service_type_name 必须设置为服务的 name 字段（如 "fedex_label"），不得为 null。
 - continuation：用户在补充信息。提取新字段，询问下一个缺失字段。
@@ -242,6 +300,57 @@ def build_messages(context: dict) -> list[dict]:
     return history + [current]
 
 
+def _parse_semantic_issues(raw_issues) -> tuple[SemanticIssue, ...]:
+    """
+    Defensive structural parsing only -- this is NOT where candidate IDs get
+    validated against the real candidate set (that's
+    core/kefu_response_renderer.validate_address_match and its future
+    field-level counterparts, kefu-deterministic-response-plan.md Sec 3-4).
+    A malformed entry is dropped, not raised -- one bad item must not corrupt
+    the rest of the response.
+    """
+    if not isinstance(raw_issues, list):
+        return ()
+    issues = []
+    for item in raw_issues:
+        if not isinstance(item, dict):
+            continue
+        code = item.get("code")
+        field_name = item.get("field")
+        if not code or not field_name:
+            continue
+        candidate_ids = item.get("candidate_ids")
+        if not isinstance(candidate_ids, list):
+            candidate_ids = []
+        issues.append(SemanticIssue(
+            code=str(code),
+            field=str(field_name),
+            candidate_ids=tuple(str(c) for c in candidate_ids),
+            value=item.get("value"),
+        ))
+    return tuple(issues)
+
+
+def _parse_address_match(raw_match) -> AddressMatch | None:
+    """Defensive structural parsing only -- see _parse_semantic_issues."""
+    if not isinstance(raw_match, dict):
+        return None
+    status = raw_match.get("status")
+    if status not in ("matched", "ambiguous", "unmatched", "not_provided"):
+        return None
+    candidate_ids = raw_match.get("candidate_ids")
+    if not isinstance(candidate_ids, list):
+        candidate_ids = []
+    new_address = raw_match.get("new_address")
+    if not isinstance(new_address, dict):
+        new_address = None
+    return AddressMatch(
+        status=status,
+        candidate_ids=tuple(str(c) for c in candidate_ids),
+        new_address=new_address,
+    )
+
+
 def parse_response(raw: str) -> AIResponse:
     """Parses JSON response from any provider into AIResponse."""
     try:
@@ -262,4 +371,6 @@ def parse_response(raw: str) -> AIResponse:
         all_fields_collected=data.get("all_fields_collected", False),
         service_type_name=data.get("service_type_name"),
         unmatched_new_address=data.get("unmatched_new_address"),
+        semantic_issues=_parse_semantic_issues(data.get("semantic_issues")),
+        address_match=_parse_address_match(data.get("address_match")),
     )

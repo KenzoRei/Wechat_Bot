@@ -11,6 +11,7 @@ tests/kefu_integration/), per Codex's own explicit request that "the
 sequential mock cannot prove it."
 """
 from types import SimpleNamespace
+import pytest
 
 from core import kefu_completion_notice
 
@@ -57,16 +58,15 @@ def test_outbound_completion_labeled_correctly():
     assert "出库" in text
 
 
-def test_unknown_service_type_falls_back_to_generic_label():
+def test_unknown_service_type_is_never_rendered_as_warehouse_completion():
     db = MockDB(service_types=SERVICE_TYPES)
     log = SimpleNamespace(serial_number="REQ-3", service_type_id="svc-unknown")
-    text = kefu_completion_notice.notice_text(db, log)
-    assert "REQ-3" in text
-    assert "请求" in text
+    with pytest.raises(ValueError, match="only valid"):
+        kefu_completion_notice.notice_text(db, log)
 
 
-def test_null_service_type_id_falls_back_to_generic_label():
+def test_null_service_type_id_is_never_rendered_as_warehouse_completion():
     db = MockDB(service_types=SERVICE_TYPES)
     log = SimpleNamespace(serial_number="REQ-4", service_type_id=None)
-    text = kefu_completion_notice.notice_text(db, log)
-    assert "REQ-4" in text
+    with pytest.raises(ValueError, match="only valid"):
+        kefu_completion_notice.notice_text(db, log)
