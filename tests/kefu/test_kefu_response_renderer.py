@@ -72,6 +72,7 @@ _SAMPLES = [
     oc.ConfirmationAlreadyProcessedOutcome(),
     oc.ConfirmationNothingPendingOutcome(),
     oc.ConfirmationRecoveringOutcome(),
+    oc.SessionConflictOutcome(service_label="出库申请", case_number="CASE-1", last_question="请提供目的地地址。"),
     oc.ExecutionSubmittedOutcome(serial_number="REQ-3", service_label="入库申请"),
     oc.ExecutionCompletedOutcome(serial_number="REQ-4", service_label="出库申请", result_lines=("已扣减库存",)),
     oc.ExecutionRetryableFailureOutcome(service_label="出库申请"),
