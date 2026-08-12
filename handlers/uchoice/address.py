@@ -15,7 +15,6 @@ class UpsertAddressHandler(BaseHandler):
 
         fields = context.get("collected_fields", {})
         matched_id = fields.get("matched_address_id")
-        created_by = context.get("wechat_openid")
         # kefu-migration-plan.md Sec 2.2/6.2: customer_id is authoritative
         # context (the case's own locked customer, never a model-generated
         # company_name string) -- present only for Kefu-originated cases,
@@ -41,6 +40,18 @@ class UpsertAddressHandler(BaseHandler):
             if not config.get("_defer_commit", False):
                 db.commit()
             return {"address_id": str(addr.address_id), "mode": "更新"}
+
+        # wechat_openid is always None for Kefu-originated turns (Kefu has
+        # no such identity at all -- see core/kefu_turn_apply.py) -- must
+        # fall back to submitted_by_staff_id, same as
+        # handlers/uchoice/storage_txns.py's _actor_id. Without this,
+        # every Kefu-originated new address crashes on uchoice_address's
+        # NOT NULL created_by constraint (observed live, msgid
+        # B7AMS7ixMesqF5r4f4DWZ6DAa3). Scoped to the new-address branch only
+        # -- the update branch above never touches created_by at all.
+        created_by = context.get("wechat_openid") or context.get("submitted_by_staff_id")
+        if not created_by:
+            raise RuntimeError("无法确定操作人身份，无法新增地址。")
 
         addr = UchoiceAddress(
             company_name=fields.get("company_name"),
