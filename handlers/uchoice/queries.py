@@ -13,9 +13,12 @@ class QueryStorageHandler(BaseHandler):
     def handle(self, context: dict, config: dict, db) -> dict:
         from models.uchoice import UchoiceStorage
 
-        rows = db.query(UchoiceStorage).order_by(
-            UchoiceStorage.warehouse_code, UchoiceStorage.sku_code, UchoiceStorage.boxes_per_pallet
-        ).all()
+        rows = (
+            db.query(UchoiceStorage)
+            .filter(UchoiceStorage.pallet_count > 0)
+            .order_by(UchoiceStorage.warehouse_code, UchoiceStorage.sku_code, UchoiceStorage.boxes_per_pallet)
+            .all()
+        )
 
         # structured, not pre-formatted — core/result_message.py's builder
         # resolves sku_code -> product name and formats for display

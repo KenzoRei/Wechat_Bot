@@ -128,6 +128,8 @@ def _sku_bucket_sections(rows: list[dict], sku_labels: dict[str, str]) -> list[d
 
     by_sku: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
+        if r["pallet_count"] <= 0:
+            continue
         by_sku[r["sku_code"]].append(r)
 
     sections = []
@@ -282,7 +284,12 @@ def _warehouse_storage_summary_sections(db: DBSession, warehouse_code: str | Non
     if not warehouse_code:
         return []
 
-    orm_rows = db.query(UchoiceStorage).filter_by(warehouse_code=warehouse_code).all()
+    orm_rows = (
+        db.query(UchoiceStorage)
+        .filter_by(warehouse_code=warehouse_code)
+        .filter(UchoiceStorage.pallet_count > 0)
+        .all()
+    )
     rows = [{"sku_code": r.sku_code, "boxes_per_pallet": r.boxes_per_pallet, "pallet_count": r.pallet_count} for r in orm_rows]
     sku_labels = sku_label_map(db)
     if not rows:
