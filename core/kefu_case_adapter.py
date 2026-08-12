@@ -90,15 +90,24 @@ _ai_chain = AIProviderChain(providers=[
 
 _OPEN_SESSION_STATUSES = ("active", "pending_confirmation")
 
-# Services with a Kefu-native, single-transaction implementation.  The three
-# customer-scoped mutations use core.kefu_turn_apply's confirmation state
-# machine and a separate logical confirmation execution key; unrelated
-# mutating services remain gated.
+# Services with a Kefu-native, single-transaction implementation --
+# core.kefu_turn_apply.apply_kefu_turn/confirm_kefu_turn, which never calls
+# core.workflow_engine's independently-committing Smart Robot helpers, so a
+# duplicate/retried Kefu message can never double-apply a mutation.
+# adjust_storage/recount_storage/move_storage were built generically
+# alongside the others during the same phase (their PRE_CONFIRM_VALIDATORS
+# entry, CONFIRMATION_BUILDERS entry, and HANDLER_REGISTRY dispatch via
+# core/uchoice_storage.py's advisory-lock-protected apply_storage_delta
+# already existed) but were left off this allowlist as an extra rollout-
+# staging precaution, not because their wiring was actually unsafe --
+# enabled once that was independently verified end-to-end via Kefu (see
+# tests/kefu_integration/test_kefu_storage_correction_services.py).
 _KEFU_ENABLED_SERVICES = frozenset({
     "view_storage", "view_storage_history", "view_invoice",
     "view_pending_digest", "explain_service",
     "uchoice_inbound_request", "uchoice_outbound_request", "upsert_address",
     "confirm_inbound_completion", "confirm_outbound_completion",
+    "adjust_storage", "recount_storage", "move_storage",
 })
 
 # purge_kefu_sessions is DELIBERATELY absent from the set above. It's
@@ -111,6 +120,19 @@ _KEFU_ENABLED_SERVICES = frozenset({
 # workflow steps to run and no real purge performed, a false-success trap.
 # The only real trigger is core/kefu_admin_purge.py's exact-phrase
 # pre-AI command.
+
+# check_services must only advertise what a Kefu caller can actually
+# invoke. A service can be granted via group_service_role (so it appears
+# in context["allowed_services"]) while still being rejected by
+# _kefu_rollout_denial_reason below -- adjust_storage/recount_storage/
+# move_storage are exactly this today, staged out until they get the same
+# Kefu-native confirmation machinery as the enabled set. Listing them
+# anyway is misleading: a caller sees the option, tries it, and gets a
+# denial that has nothing to do with their role (observed live).
+# purge_kefu_sessions is the one deliberate exception in the other
+# direction -- excluded from the rollout allowlist above but genuinely
+# invokable via its own separate pre-AI command, so it stays visible here.
+_KEFU_CHECK_SERVICES_VISIBLE = _KEFU_ENABLED_SERVICES | {"purge_kefu_sessions"}
 
 
 def _kefu_rollout_denial_reason(context: dict, ai_response, session) -> str | None:
@@ -578,6 +600,7 @@ def _process_turn(
                         keywords=tuple(s.get("keywords") or ()),
                     )
                     for s in context.get("allowed_services", [])
+                    if s["name"] in _KEFU_CHECK_SERVICES_VISIBLE
                 )
                 reply_text = render_kefu_outcome(ServiceListOutcome(entries=entries)) if entries else render_kefu_outcome(UnrecognizedRequestOutcome())
             else:
