@@ -18,7 +18,7 @@ of the same gap.
 
 The AI provider chain is monkeypatched to a canned, counting stub -- no
 real LLM call. view_storage is used as the exercised service: it's in
-_READ_ONLY_KEFU_SERVICES (the rollout gate) and already granted to the
+_KEFU_ENABLED_SERVICES (the rollout gate) and already granted to the
 'admin' role on the fixture group, so no new grant seed is needed.
 """
 import threading
@@ -288,7 +288,10 @@ def test_multi_turn_history_ordered_no_duplication_on_replay(monkeypatch, staff)
         history = session.conversation_history
         assert len(history) == 4, f"expected 4 history entries, got {len(history)}: {history}"
         assert history[0] == {"role": "user", "content": "查JFK库存历史"}
-        assert history[1] == {"role": "assistant", "content": "请提供起止月份"}
+        assert history[1] == {
+            "role": "assistant",
+            "content": "办理该服务还需要以下信息：\n- 请提供查询的开始月份。\n- 请提供查询的结束月份。",
+        }
         assert history[2] == {"role": "user", "content": "1月到1月"}
         assert history[3] == {"role": "assistant", "content": second.reply_text}
     finally:

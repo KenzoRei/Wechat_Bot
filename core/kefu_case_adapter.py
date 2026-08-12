@@ -52,6 +52,14 @@ from ai.claude_provider import ClaudeProvider
 from ai.openai_provider import OpenAIProvider
 from clients.kefu_client import KefuAPIError, KefuClient
 from core import access_control, kefu_completion_notice, kefu_registration, kefu_turn_apply, session_manager
+from core.kefu_outcomes import (
+    ConfirmationAlreadyProcessedOutcome,
+    ConfirmationNothingPendingOutcome,
+    ConfirmationRecoveringOutcome,
+    ServiceListOutcome,
+    UnrecognizedRequestOutcome,
+)
+from core.kefu_response_renderer import render_kefu_outcome
 from core.kefu_contracts import (
     CaseTurnDenied,
     CaseTurnError,
@@ -89,6 +97,7 @@ _KEFU_ENABLED_SERVICES = frozenset({
     "view_storage", "view_storage_history", "view_invoice",
     "view_pending_digest", "explain_service",
     "uchoice_inbound_request", "uchoice_outbound_request", "upsert_address",
+    "confirm_inbound_completion", "confirm_outbound_completion",
 })
 
 
@@ -422,7 +431,7 @@ def _process_turn(
         elif ai_response.intent == "confirm":
             service = _resolve_turn_service(context, ai_response, session)
             if session is None or service is None:
-                reply_text = "抱歉，未找到待确认的申请，请重新发起。"
+                reply_text = render_kefu_outcome(ConfirmationNothingPendingOutcome())
             else:
                 logical_key = f"kefu-confirm:{session.session_id}:{session.case_revision or 0}"
                 confirm_action, confirmation_execution_row = _acquire_execution(db, logical_key)
@@ -431,7 +440,7 @@ def _process_turn(
                 # refresh is safe and makes a concurrent winner visible.
                 db.refresh(session)
                 if confirm_action == "completed" or session.status != "pending_confirmation":
-                    reply_text = "该申请已处理或已关闭，不能重复确认。"
+                    reply_text = render_kefu_outcome(ConfirmationAlreadyProcessedOutcome())
                     confirmation_execution_row = None
                 elif confirm_action == "in_progress":
                     raise KefuTurnInProgress(f"execution {logical_key} is already in progress")
@@ -440,7 +449,7 @@ def _process_turn(
                     # durable delivery enqueue in one transaction, so it
                     # cannot normally leave this intermediate state. Treat it
                     # as a recovery-only completion without re-running DB work.
-                    reply_text = "该申请已经提交，正在恢复消息投递，请勿重复确认。"
+                    reply_text = render_kefu_outcome(ConfirmationRecoveringOutcome())
                 else:
                     confirmation_execution_row.session_id = session.session_id
                     reply_text = kefu_turn_apply.confirm_kefu_turn(db, context, service, session)
@@ -451,18 +460,24 @@ def _process_turn(
                     execution_row.status = "failed"
                     execution_row.last_error = "no_service_resolved"
                 db.commit()
-                reply_text = ai_response.reply or "抱歉，没能理解您需要哪项服务，请重新描述一下您的需求。"
+                reply_text = render_kefu_outcome(UnrecognizedRequestOutcome())
                 _direct_send(client, identity, f"kefu-reply:{msgid}", reply_text)
                 return CaseTurnSuccess(reply_text=reply_text, customer_copy_text=None, case_number="", new_revision=0)
             if execution_key:
                 context["_kefu_execution_key"] = execution_key
             reply_text = kefu_turn_apply.apply_kefu_turn(db, context, ai_response, service, session)
         else:
-            # check_services / unrecognized / confirm (the last never
-            # legitimately fires for the read-only allowlist -- none of
-            # its services require confirmation): no service/session
-            # mutation, just the AI's own reply.
-            reply_text = ai_response.reply
+            # check_services / unrecognized (confirm is handled in its own
+            # elif above): no service/session mutation, just a deterministic
+            # routing reply.
+            if ai_response.intent == "check_services":
+                labels = tuple(
+                    (s.get("description") or s.get("name") or "服务").split("，", 1)[0]
+                    for s in context.get("allowed_services", [])
+                )
+                reply_text = render_kefu_outcome(ServiceListOutcome(service_labels=labels)) if labels else render_kefu_outcome(UnrecognizedRequestOutcome())
+            else:
+                reply_text = render_kefu_outcome(UnrecognizedRequestOutcome())
 
     new_session_id = context.get("session_id")
     if new_session_id and staff is not None:
@@ -474,7 +489,7 @@ def _process_turn(
         # back everything in this unit, nothing partial survives.
         reply_text, case_number, case_revision = _finalize_turn(
             db, client, staff, new_session_id, message_content, msgid, reply_text,
-            service_name=service["name"] if service else None,
+            service_name=context.get("_effective_service_name") or (service["name"] if service else None),
             context=context,
         )
         customer_copy_text = context.get("_customer_copy_text")

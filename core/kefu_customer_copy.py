@@ -26,10 +26,19 @@ def _line_text(db, line: dict) -> str:
 
 
 def render_customer_copy(db, *, service_name: str | None, session, request_log, context: dict) -> str | None:
-    """Return a customer-safe success message, or ``None`` when not applicable."""
+    """
+    Return a customer-safe success message, or ``None`` when not applicable.
+
+    Deliberately independent of ``session.customer_id``: every current
+    U-Choice service is performed on behalf of U-Choice itself (the sole
+    platform tenant today), never on behalf of one of the destination
+    companies in the address book -- `customer_id` identifies a future
+    second *tenant*, not "which company this copy is safe to paste to". Gating
+    on it here was a category error carried over from the same mistaken
+    premise as the old address-partitioning rule (see docs/ai-collaboration
+    /decisions.md's "Superseded or challenged assumptions").
+    """
     if service_name not in _SERVICE_LABELS or session is None or session.status != "completed":
-        return None
-    if session.customer_id is None:
         return None
 
     serial = request_log.serial_number if request_log is not None else ""

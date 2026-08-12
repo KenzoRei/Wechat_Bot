@@ -41,10 +41,13 @@ def lock_pending_completion_notice(db: DBSession, staff):
     if staff.warehouse_code is None:
         row = db.execute(sql_text(
             """
-            SELECT log_id FROM request_log
-            WHERE status = 'success' AND source_channel = 'kefu'
-              AND completion_notice_shown_at IS NULL
-            ORDER BY completed_at ASC
+            SELECT rl.log_id FROM request_log rl
+            JOIN service_type st ON st.service_type_id = rl.service_type_id
+            WHERE rl.status = 'success' AND rl.source_channel = 'kefu'
+              AND rl.completed_at IS NOT NULL
+              AND rl.completion_notice_shown_at IS NULL
+              AND st.name IN ('uchoice_inbound_request', 'uchoice_outbound_request')
+            ORDER BY rl.completed_at ASC
             LIMIT 1
             FOR UPDATE SKIP LOCKED
             """
@@ -52,11 +55,14 @@ def lock_pending_completion_notice(db: DBSession, staff):
     else:
         row = db.execute(sql_text(
             """
-            SELECT log_id FROM request_log
-            WHERE status = 'success' AND source_channel = 'kefu'
-              AND completion_notice_shown_at IS NULL
-              AND result ->> 'warehouse_code' = :wh
-            ORDER BY completed_at ASC
+            SELECT rl.log_id FROM request_log rl
+            JOIN service_type st ON st.service_type_id = rl.service_type_id
+            WHERE rl.status = 'success' AND rl.source_channel = 'kefu'
+              AND rl.completed_at IS NOT NULL
+              AND rl.completion_notice_shown_at IS NULL
+              AND st.name IN ('uchoice_inbound_request', 'uchoice_outbound_request')
+              AND rl.result ->> 'warehouse_code' = :wh
+            ORDER BY rl.completed_at ASC
             LIMIT 1
             FOR UPDATE SKIP LOCKED
             """
@@ -69,7 +75,12 @@ def lock_pending_completion_notice(db: DBSession, staff):
 
 def notice_text(db: DBSession, log) -> str:
     direction_label = _direction_label(db, log.service_type_id)
-    return f"提示：申请 {log.serial_number}（{direction_label}）已由仓库确认完成。"
+    from core.kefu_outcomes import CompletionNoticeOutcome
+    from core.kefu_response_renderer import render_kefu_outcome
+    return render_kefu_outcome(CompletionNoticeOutcome(
+        serial_number=log.serial_number,
+        direction_label=direction_label,
+    ))
 
 
 def _direction_label(db: DBSession, service_type_id) -> str:
@@ -88,4 +99,4 @@ def _direction_label(db: DBSession, service_type_id) -> str:
         return "入库"
     if st and st.name == "uchoice_outbound_request":
         return "出库"
-    return "请求"
+    raise ValueError("completion notice is only valid for inbound/outbound requests")

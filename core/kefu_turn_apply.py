@@ -13,10 +13,150 @@ from uuid import UUID
 from sqlalchemy.orm import Session as DBSession
 
 import config
-from core import pre_confirm_validators, uchoice_constants
+from core import pre_confirm_validators
 from core.confirmation import build_confirmation_message, build_display_name, build_sections
-from core.uchoice_customer import resolve_and_lock_customer
 from core.workflow_engine import _sanitize_extracted_fields_before_persistence
+
+
+_FIELD_PROMPTS = {
+    "sku_lines": ("商品及数量", "请提供商品、托盘/箱数及每托箱数。"),
+    "destination_address_id": ("送货地址", "请提供或确认送货目的地。"),
+    "charge_type": ("计费类型", "请选择计费类型：短途配送、配送、卡车转仓费或自提。"),
+    "warehouse_code": ("所属仓库", "请选择所属仓库：JFK 或 DE。"),
+    "reference_serial": ("申请编号", "请提供要处理的申请编号。"),
+    "start_month": ("开始月份", "请提供查询的开始月份。"),
+    "end_month": ("结束月份", "请提供查询的结束月份。"),
+    "fulfillment_lines": ("实际出库明细", "请提供更正后的实际出库数量。"),
+    "destination_packing_lines": ("目的仓装托方式", "请说明货物到达目的仓后的每托箱数和托盘数。"),
+}
+
+
+_SERVICE_LABELS = {
+    "uchoice_outbound_request": "出库申请",
+    "uchoice_inbound_request": "入库申请",
+    "upsert_address": "地址维护",
+    "confirm_outbound_completion": "出库完成确认",
+    "confirm_inbound_completion": "入库完成确认",
+}
+
+
+def _service_label(service: dict | None) -> str:
+    """Shared display label lookup so missing-fields and cancellation
+    wording stay consistent -- a bare fallback ("该申请"/"该服务") when the
+    service is unresolved or unrecognized, never a raw internal name."""
+    if service is None:
+        return "该申请"
+    return _SERVICE_LABELS.get(service.get("name"), "该服务")
+
+
+def _render_missing_fields(service: dict, fields: dict) -> str:
+    from core.kefu_outcomes import FieldPrompt, MissingFieldsOutcome
+    from core.kefu_response_renderer import render_kefu_outcome
+
+    missing = [
+        name for name in ((service.get("input_schema") or {}).get("required") or [])
+        if fields.get(name) in (None, "", [])
+    ]
+    prompts = []
+    for name in dict.fromkeys(missing):
+        label, question = _FIELD_PROMPTS.get(name, (name, f"请提供{name}。"))
+        prompts.append(FieldPrompt(field=name, label=label, question=question))
+    if not prompts:
+        # A semantic ambiguity can keep a case open even when schema fields
+        # appear present. Never fall back to AI prose.
+        prompts.append(FieldPrompt(field="request_details", label="申请信息", question="请补充或确认申请信息。"))
+    return render_kefu_outcome(MissingFieldsOutcome(service_label=_service_label(service), fields=tuple(prompts)))
+
+
+def _address_decision(db: DBSession, context: dict, ai_response):
+    from core.kefu_response_renderer import validate_address_match
+    candidates = (context.get("uchoice_candidates") or {}).get("addresses") or []
+    return validate_address_match(ai_response, candidates), candidates
+
+
+def _render_address_ambiguity(decision, candidates: list[dict]) -> str:
+    from core.kefu_outcomes import AddressAmbiguousOutcome, AddressOption
+    from core.kefu_response_renderer import render_kefu_outcome
+    by_id = {c["address_id"]: c for c in candidates}
+    options = []
+    for index, address_id in enumerate(decision.ambiguous_address_ids, start=1):
+        candidate = by_id[address_id]
+        company = candidate.get("company_name")
+        addr = candidate.get("addr") or ""
+        label = f"{company}（{addr}）" if company else addr
+        options.append(AddressOption(candidate_key=str(index), display_label=label))
+    return render_kefu_outcome(AddressAmbiguousOutcome(options=tuple(options)))
+
+
+def _pivot_to_address(db: DBSession, context: dict, old_session, old_log, guess: dict, services: list[dict]):
+    """Atomically replace an unmatched outbound draft with address upkeep."""
+    from models.kefu import CaseExecution
+    from models.request_log import RequestLog
+    from models.session import ConversationSession
+    from core.kefu_outcomes import AddressPivotStartedOutcome, FieldPrompt
+    from core.kefu_response_renderer import render_kefu_outcome
+
+    address_service = next((s for s in services if s["name"] == "upsert_address"), None)
+    if address_service is None:
+        return None
+
+    old_log.status = "cancelled"
+    old_session.status = "cancelled"
+    old_session.updated_at = datetime.now(timezone.utc)
+
+    seed = {key: value for key, value in (guess or {}).items() if key in {"company_name", "addr"} and value}
+    new_session = ConversationSession(
+        wechat_openid=None,
+        group_id=old_session.group_id,
+        service_type_id=UUID(address_service["service_type_id"]),
+        status="active",
+        conversation_history=[{"role": "user", "content": context["content"]}],
+        collected_fields=seed,
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=config.SESSION_EXPIRY_MINUTES),
+        source_channel="kefu",
+        opened_by_staff_id=old_session.opened_by_staff_id,
+    )
+    db.add(new_session)
+    db.flush()
+    new_log = RequestLog(
+        wechat_openid=None,
+        group_id=old_session.group_id,
+        service_type_id=UUID(address_service["service_type_id"]),
+        status="pending",
+        raw_message=context["content"],
+        # The triggering msgid already belongs to the cancelled outbound log
+        # (request_log has a unique msgid index). CaseExecution/CaseTurn link
+        # the atomic pivot; the new address log must not duplicate that key.
+        wechat_msg_id=None,
+        source_channel="kefu",
+        submitted_by_staff_id=old_session.opened_by_staff_id,
+        origin_session_id=new_session.session_id,
+    )
+    db.add(new_log)
+    db.flush()
+    new_session.request_log_id = new_log.log_id
+
+    key = context.get("_kefu_execution_key")
+    if key:
+        db.query(CaseExecution).filter_by(execution_key=key, status="claimed").update({"session_id": new_session.session_id})
+
+    missing = []
+    if not seed.get("charge_type"):
+        missing.append(FieldPrompt(field="charge_type", label="计费类型", question=_FIELD_PROMPTS["charge_type"][1]))
+    if not seed.get("warehouse_code"):
+        missing.append(FieldPrompt(field="warehouse_code", label="所属仓库", question=_FIELD_PROMPTS["warehouse_code"][1]))
+    reply = render_kefu_outcome(AddressPivotStartedOutcome(
+        cancelled_serial_number=old_log.serial_number,
+        still_missing_fields=tuple(missing),
+    ))
+    _append(new_session, "assistant", reply)
+    context["session_id"] = str(new_session.session_id)
+    context["service_type_id"] = str(new_session.service_type_id)
+    context["serial_number"] = new_log.serial_number
+    context["collected_fields"] = seed
+    context["_effective_service_name"] = "upsert_address"
+    context["_reply"] = reply
+    return reply
 
 
 def _all_required_fields_present(service: dict, collected_fields: dict) -> bool:
@@ -37,6 +177,23 @@ def _load_log(db: DBSession, session):
         return None
     from models.request_log import RequestLog
     return db.get(RequestLog, session.request_log_id)
+
+
+def _resolve_existing_target(db: DBSession, session, owned_log):
+    from models.request_log import RequestLog
+    reference = (session.collected_fields or {}).get("reference_serial")
+    if not reference:
+        return None, "未能确定要处理的申请编号，请重新描述或提供申请编号。"
+    target = db.query(RequestLog).filter_by(serial_number=reference).first()
+    if target is None:
+        return None, f"未找到申请编号 {reference}，请确认后重试。"
+    if target.status != "processing":
+        return None, f"申请 {reference} 当前状态为「{target.status}」，无法处理。"
+    session.request_log_id = target.log_id
+    if owned_log is not None and owned_log.log_id != target.log_id:
+        db.delete(owned_log)
+        db.flush()
+    return target, None
 
 
 def _set_context_for_session(context: dict, session, log) -> None:
@@ -83,6 +240,12 @@ def _resolve_outbound_pallet_defaults(db: DBSession, session, context: dict) -> 
             .all()
         )
         count, stated = line.get("pallet_count"), line.get("boxes_per_pallet")
+        # A stated pallet size describes the requested final packing, not the
+        # shape of the source inventory. Preserve it; total-box feasibility
+        # below decides whether boxes can be repalletized to satisfy it.
+        if isinstance(stated, int) and not isinstance(stated, bool) and stated > 0 and count is not None:
+            resolved.append(line)
+            continue
         matching = next((bucket for bucket in buckets if bucket.boxes_per_pallet == stated), None)
         if matching is not None and count is not None and matching.pallet_count >= count:
             resolved.append(line)
@@ -106,33 +269,41 @@ def _resolve_outbound_pallet_defaults(db: DBSession, session, context: dict) -> 
 
 
 def _outbound_stock_error(db: DBSession, fields: dict) -> str | None:
-    from models.uchoice import UchoiceStorage
     from core.uchoice_context import sku_label_map
+    from core.uchoice_storage import available_box_count
 
     warehouse = fields.get("warehouse_code")
-    problems = []
+    required_by_sku: dict[str, int] = {}
     for line in fields.get("sku_lines") or []:
-        if not isinstance(line, dict) or "box_count" in line or line.get("pallet_count") is None:
+        if not isinstance(line, dict) or not line.get("sku_code"):
             continue
-        bpp = line.get("boxes_per_pallet")
-        bucket = None
-        if bpp is not None:
-            bucket = db.query(UchoiceStorage).filter_by(
-                warehouse_code=warehouse,
-                sku_code=line.get("sku_code"),
-                boxes_per_pallet=bpp,
-            ).first()
-        available = bucket.pallet_count if bucket else 0
-        if bpp is None or available < line["pallet_count"]:
-            problems.append((line.get("sku_code"), bpp or "任意规格", available, line["pallet_count"]))
+        if line.get("box_count") is not None:
+            boxes = line.get("box_count")
+        else:
+            bpp, pallets = line.get("boxes_per_pallet"), line.get("pallet_count")
+            if bpp is None or pallets is None:
+                continue
+            boxes = bpp * pallets
+        required_by_sku[line["sku_code"]] = required_by_sku.get(line["sku_code"], 0) + boxes
+
+    problems = []
+    for sku, requested_boxes in sorted(required_by_sku.items()):
+        available_boxes = available_box_count(db, warehouse, sku)
+        if available_boxes < requested_boxes:
+            problems.append((sku, available_boxes, requested_boxes))
     if not problems:
         return None
     labels = sku_label_map(db)
-    detail = "；".join(
-        f"{labels.get(sku, sku)}@{bpp}/托 现有 {available} 托，申请 {requested} 托"
-        for sku, bpp, available, requested in problems
-    )
-    return f"申请已取消：{warehouse} 仓库没有足够库存可满足此次出库——{detail}。请核实商品规格或数量后重新提交。"
+    from core.kefu_outcomes import InsufficientStockOutcome, StockShortage
+    from core.kefu_response_renderer import render_kefu_outcome
+    return render_kefu_outcome(InsufficientStockOutcome(
+        warehouse_label=warehouse,
+        shortages=tuple(StockShortage(
+            sku_label=labels.get(sku, sku),
+            requested_boxes=requested,
+            available_boxes=available,
+        ) for sku, available, requested in problems),
+    ))
 
 
 def _render_confirmation(db: DBSession, service: dict, session, log) -> str:
@@ -178,11 +349,41 @@ def _workflow_steps(db: DBSession, context: dict, service: dict, session) -> Non
             merged["_defer_commit"] = True
         result = handler_class().handle(context, merged, db)
         context["result"].update(result or {})
+        if (result or {}).get("_kefu_stop_workflow"):
+            break
 
 
 def _finish_execution(db: DBSession, context: dict, service: dict, session, log) -> str:
     _workflow_steps(db, context, service, session)
     now = datetime.now(timezone.utc)
+    if context.get("result", {}).get("_kefu_stop_workflow") == "stock_changed":
+        # Expected, committed business outcome: inventory was rechecked under
+        # lock and changed since the summary. Keep the original request open,
+        # return this completion case to collection, and discard every stale
+        # packing/pick assumption before a corrected revision is confirmed.
+        fields = dict(session.collected_fields or {})
+        for key in ("fulfillment_lines", "source_picks", "destination_packing_lines"):
+            fields.pop(key, None)
+        session.collected_fields = fields
+        context["collected_fields"] = fields
+        session.status = "active"
+        session.updated_at = now
+        shortages = context["result"].get("stock_shortages") or []
+        from core.uchoice_context import sku_label_map
+        from core.kefu_outcomes import StockChangedOutcome, StockShortage
+        from core.kefu_response_renderer import render_kefu_outcome
+        labels = sku_label_map(db)
+        reply = render_kefu_outcome(StockChangedOutcome(
+            serial_number=log.serial_number if log is not None else (context.get("serial_number") or "未知申请"),
+            shortages=tuple(StockShortage(
+                sku_label=labels.get(item["sku_code"], item["sku_code"]),
+                requested_boxes=item["requested_boxes"],
+                available_boxes=item["available_boxes"],
+            ) for item in shortages),
+        ))
+        context["_reply"] = reply
+        _append(session, "assistant", reply)
+        return reply
     if log is not None:
         if not service.get("awaits_completion", False):
             log.status = "success"
@@ -206,14 +407,20 @@ def confirm_kefu_turn(db: DBSession, context: dict, service: dict, session) -> s
         reply = "该申请已处理或已关闭，不能重复确认。"
         _append(session, "assistant", reply)
         return reply
-    session.status = "processing"
+    # RequestLog supports ``processing``; ConversationSession deliberately
+    # does not.  The surrounding CaseExecution claim/advisory lock owns this
+    # confirmation attempt until the transaction reaches its terminal state.
+    session.status = "active"
     if log is not None:
         log.status = "processing"
     return _finish_execution(db, context, service, session, log)
 
 
 def cancel_kefu_turn(db: DBSession, context: dict, service: dict | None, session) -> str:
-    reply = "已取消，您可以随时发起新申请。"
+    from core.kefu_outcomes import ConfirmationCancelledOutcome
+    from core.kefu_response_renderer import render_kefu_outcome
+
+    reply = render_kefu_outcome(ConfirmationCancelledOutcome(service_label=_service_label(service)))
     if session is None:
         return reply
     log = _load_log(db, session)
@@ -303,33 +510,11 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
         session.collected_fields = {**(session.collected_fields or {}), **extracted}
         context["collected_fields"] = session.collected_fields
 
-    customer_id = None
-    if service["name"] in uchoice_constants.CUSTOMER_SCOPED_KEFU_SERVICES:
-        customer_id = resolve_and_lock_customer(
-            session,
-            session.collected_fields or {},
-            (context.get("uchoice_candidates") or {}).get("customers", []),
-        )
-        context["customer_id"] = customer_id
-        if customer_id and log is not None:
-            log.customer_id = UUID(customer_id)
-
-    ready = ai_response.all_fields_collected or _all_required_fields_present(service, session.collected_fields or {})
-    if service["name"] in uchoice_constants.CUSTOMER_SCOPED_KEFU_SERVICES and customer_id is None:
-        ready = False
-    if not ready:
-        reply = ai_response.reply
-        context["_reply"] = reply
-        _append(session, "assistant", reply)
-        return reply
-
+    # Stock impossibility is independent of customer/address collection. Once
+    # SKU quantities and the warehouse are resolvable, reject immediately so
+    # staff are not asked to maintain an address for goods that cannot ship.
     _apply_warehouse_default(service["name"], session, context)
     if service["name"] == "uchoice_outbound_request":
-        clarification = _resolve_outbound_pallet_defaults(db, session, context)
-        if clarification:
-            context["_reply"] = clarification
-            _append(session, "assistant", clarification)
-            return clarification
         stock_error = _outbound_stock_error(db, session.collected_fields or {})
         if stock_error:
             if log is not None:
@@ -339,6 +524,70 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
             _append(session, "assistant", stock_error)
             return stock_error
 
+        if not (session.collected_fields or {}).get("destination_address_id"):
+            decision, address_candidates = _address_decision(db, context, ai_response)
+            if decision.status == "matched":
+                session.collected_fields = {
+                    **(session.collected_fields or {}),
+                    "destination_address_id": decision.matched_address_id,
+                }
+                context["collected_fields"] = session.collected_fields
+            elif decision.status == "ambiguous":
+                reply = _render_address_ambiguity(decision, address_candidates)
+                context["_reply"] = reply
+                _append(session, "assistant", reply)
+                return reply
+            elif decision.status == "unmatched" and (decision.unmatched_new_address or {}).get("addr"):
+                pivot_reply = _pivot_to_address(
+                    db, context, session, log, decision.unmatched_new_address,
+                    context.get("allowed_services") or [],
+                )
+                if pivot_reply is not None:
+                    return pivot_reply
+                from core.kefu_outcomes import AddressPivotUnavailableOutcome
+                from core.kefu_response_renderer import render_kefu_outcome
+                reply = render_kefu_outcome(AddressPivotUnavailableOutcome(
+                    escalation_note="该地址尚未收录，您当前没有新增地址权限。原出库申请仍保留，请联系管理员维护地址。"
+                ))
+                context["_reply"] = reply
+                _append(session, "assistant", reply)
+                return reply
+
+    # Every current U-Choice service is performed on behalf of U-Choice
+    # itself (the sole platform tenant today) -- there is no second
+    # "customer" to identify for uchoice_inbound_request/uchoice_
+    # outbound_request. `customer_id` identifies a future second tenant
+    # (the same role group_id plays for Smart Robot), not which company in
+    # the address book a request is for; requiring it here was a category
+    # error, corrected after the user's direct clarification (see
+    # docs/ai-collaboration/decisions.md's "Superseded or challenged
+    # assumptions"). core/uchoice_customer.py's resolve_and_lock_customer
+    # and core/uchoice_context.customer_candidates() remain as dormant,
+    # reusable infrastructure for whenever a real second tenant exists.
+    ready = ai_response.all_fields_collected or _all_required_fields_present(service, session.collected_fields or {})
+    if not ready:
+        reply = _render_missing_fields(service, session.collected_fields or {})
+        context["_reply"] = reply
+        _append(session, "assistant", reply)
+        return reply
+
+    if service.get("targets_existing_request", False):
+        target, target_error = _resolve_existing_target(db, session, log)
+        if target_error:
+            session.status = "cancelled"
+            context["_reply"] = target_error
+            _append(session, "assistant", target_error)
+            return target_error
+        log = target
+        context["serial_number"] = target.serial_number
+        context["request_log_id"] = str(target.log_id)
+
+    if service["name"] == "uchoice_outbound_request":
+        clarification = _resolve_outbound_pallet_defaults(db, session, context)
+        if clarification:
+            context["_reply"] = clarification
+            _append(session, "assistant", clarification)
+            return clarification
     validation_error = pre_confirm_validators.run(service["name"], context, session.collected_fields or {}, db)
     if validation_error:
         context["_reply"] = validation_error

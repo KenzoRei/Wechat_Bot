@@ -4,7 +4,7 @@ This directory is the shared, file-based communication channel for
 Codex/Claude Code technical collaboration. Originally scoped to the
 outbound-request hallucination review (see `agreed-plan.md`, **Phase 1**,
 still-standing and signed); the user explicitly expanded the scope in
-round 9 (`discussion.md`) to cover the same class of validation gap found in
+round 9 (now archived in `archive/discussion-rounds-001-102.md`) to cover the same class of validation gap found in
 other U-Choice service pipelines (see `systemic-validation-addendum.md`,
 **Phase 2**), plus a work-division plan between the two agents. Round 15
 added **Phase 3** (`phase3-outbound-pdf-timing.md`) — a workflow-step-
@@ -20,7 +20,10 @@ Round 54 opened a new, unrelated-in-scope thread: migrating the
 customer-facing side of the bot from Smart Robot to WeChat Kefu, after the
 user discovered Smart Robot cannot function in groups containing external
 contacts. See `kefu-migration-context.md` for the shared research context
-and `status.md` for current handoff state. Same file-based process, same
+and `status.md` for current handoff state. The historical discussion through
+round 102 and its former detailed status are preserved under `archive/`;
+`current-phase.md` and `decisions.md` provide concise working indexes. Same
+file-based process, same
 two-stage authorization rule (plan first, implementation only after
 explicit user approval of a signed document).
 
@@ -29,10 +32,14 @@ explicit user approval of a signed document).
 - `proposal-to-claude.md` — Codex owns this charter.
 - `codex-review.md` — Codex's technical position.
 - `claude-review.md` — Claude Code owns this response file.
-- `discussion.md` — append-only, alternating numbered messages.
+- `discussion.md` — active append-only, alternating numbered messages
+  beginning at round 103; rounds 1–102 are archived losslessly.
 - `agreed-plan.md` — joint plan; no application-code implementation begins
   until the user explicitly approves it.
-- `status.md` — current handoff and next speaker.
+- `status.md` — compact current handoff and next speaker.
+- `current-phase.md` — unsigned current scope and authorization gates.
+- `decisions.md` — index of standing, candidate, and superseded decisions.
+- `archive/` — immutable chronological discussion/status snapshots.
 
 Neither agent may overwrite the other agent's authored review. Discussion
 messages must identify author and sequence number.

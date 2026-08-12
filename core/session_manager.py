@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session as DBSession
 from models.session import ConversationSession
 from models.request_log import RequestLog
 from core.access_control import AccessResult
-from core import uchoice_context, uchoice_constants
+from core import uchoice_context
 import config
 
 SERIAL_PATTERN = re.compile(r'REQ-\d{8}-\d{6}')
@@ -233,25 +233,32 @@ def _build_uchoice_candidates(
         # will actually end up defaulting to.
         candidates["skus"] = uchoice_context.sku_catalog(db, scope_warehouse or "JFK")
 
-    # kefu-migration-plan.md Sec 6.2: customer selection only exists for
-    # Kefu-originated cases -- Smart Robot has no customer-selection concept
-    # (one WeChat group implicitly IS one customer, unaffected by this).
-    is_kefu = access.source_channel == "kefu"
-    locked_customer_id = str(session.customer_id) if session and session.customer_id else None
-    if is_kefu and names & uchoice_constants.CUSTOMER_SCOPED_KEFU_SERVICES:
-        if locked_customer_id is None:
-            candidates["customers"] = uchoice_context.customer_candidates(db)
+    # kefu-migration-plan.md Sec 6.2 (superseded): customer selection used to
+    # be required for Kefu inbound/outbound requests. The user corrected this
+    # directly: every current U-Choice service is performed on behalf of
+    # U-Choice itself (the sole platform tenant today) -- `customer_id`
+    # identifies a future second TENANT (the role group_id plays for Smart
+    # Robot), not "which address-book company is this for". No current
+    # service injects a customer candidate list. core/uchoice_context
+    # .customer_candidates() and core/uchoice_customer.resolve_and_lock_
+    # customer remain as dormant, reusable infrastructure for whenever a
+    # real second tenant exists (see docs/ai-collaboration/decisions.md's
+    # "Superseded or challenged assumptions").
 
-    if "uchoice_outbound_request" in names and (not is_kefu or locked_customer_id is not None):
-        # Smart Robot keeps its pre-migration, unfiltered behavior exactly
-        # as before (locked_customer_id is always None there, and
-        # is_kefu is False, so the "not is_kefu" arm always applies). For a
-        # Kefu case, addresses are withheld entirely until the customer is
-        # locked -- otherwise every OTHER customer's addresses would leak
-        # into the AI's prompt context before the case even knows who it's
-        # for (plan Sec 2.2: no request may see or offer another customer's
-        # address). Once locked, scoped to that customer only.
-        candidates["addresses"] = uchoice_context.address_candidates(db, customer_id=locked_customer_id)
+    # kefu-deterministic-response-plan.md Sec 5: the shared U-Choice address
+    # book is injected immediately for every authorized service that can
+    # match against it, on BOTH channels, never filtered/withheld by
+    # customer_id. Round 99 built the opposite rule (withhold until a
+    # customer is locked, then filter to it) on the mistaken belief that
+    # addresses were customer-private; the user corrected this after the
+    # live incident that motivated this phase (see decisions.md's
+    # "Superseded or challenged assumptions") -- customer_id is provenance/
+    # reporting metadata only, never an address ACL. upsert_address needs
+    # the same candidate list to resolve create-vs-update via
+    # matched_address_id, so it's included here too (previously a gap: it
+    # received no address candidates at all).
+    if names & {"uchoice_outbound_request", "upsert_address"}:
+        candidates["addresses"] = uchoice_context.address_candidates(db)
         # boxes_per_pallet resolution (default-fill, ambiguity-clarification,
         # stock-sufficiency check) is entirely code-level now — see
         # workflow_engine._resolve_outbound_pallet_defaults — so the AI no
