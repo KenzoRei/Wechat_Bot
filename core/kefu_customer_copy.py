@@ -21,8 +21,17 @@ def _line_text(db, line: dict) -> str:
     sku = line.get("sku_code")
     label = labels.get(sku, sku or "商品")
     if "box_count" in line:
-        return f"{label}：{line.get('box_count')} 箱"
-    return f"{label}：{line.get('pallet_count')} 托（{line.get('boxes_per_pallet')} 箱/托）"
+        count = line.get("box_count")
+        return f"{label}：{count} 箱" if count is not None else f"{label}：数量待确认"
+    pallet_count, bpp = line.get("pallet_count"), line.get("boxes_per_pallet")
+    if pallet_count is None or bpp is None:
+        # pre_confirm_validators.py's per-service quantity checks are the
+        # real backstop against this ever being missing at confirm time --
+        # this is a last-resort fallback only, never a raw Python None
+        # leaking into customer-facing text (observed live on
+        # REQ-20260812-001179 before that validator existed).
+        return f"{label}：数量待确认"
+    return f"{label}：{pallet_count} 托（{bpp} 箱/托）"
 
 
 def render_customer_copy(db, *, service_name: str | None, session, request_log, context: dict) -> str | None:

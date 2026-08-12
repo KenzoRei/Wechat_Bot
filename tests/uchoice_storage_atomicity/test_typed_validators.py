@@ -141,3 +141,49 @@ def test_move_storage_accepts_valid_line(db):
         db,
     )
     assert error is None
+
+
+# ── uchoice_inbound_request / uchoice_outbound_request ─────────────────────
+# Live incident REQ-20260812-001179: a pallet line with pallet_count but no
+# boxes_per_pallet reached confirmation as a literal "?" and, once
+# confirmed, as a literal "None" in the customer-facing copy --
+# validate_sku_lines only ever checked sku_code, never quantity fields.
+
+@pytest.mark.parametrize("bad_line", [
+    {"sku_code": "s1", "pallet_count": 10},                              # bpp missing entirely
+    {"sku_code": "s1", "boxes_per_pallet": None, "pallet_count": 10},    # bpp explicitly null
+    {"sku_code": "s1", "boxes_per_pallet": 0, "pallet_count": 10},       # bpp not positive
+    {"sku_code": "s1", "boxes_per_pallet": 70, "pallet_count": 0},       # pallet_count not positive
+    {"sku_code": "s1", "boxes_per_pallet": 70},                         # pallet_count missing entirely
+    {"sku_code": "s1", "box_count": 0},                                  # loose line, box_count not positive
+])
+def test_inbound_rejects_incomplete_pallet_or_loose_line(db, bad_line):
+    error = pre_confirm_validators.run("uchoice_inbound_request", {}, {"sku_lines": [bad_line]}, db)
+    assert error is not None
+
+
+def test_inbound_accepts_valid_pallet_line(db):
+    error = pre_confirm_validators.run(
+        "uchoice_inbound_request", {},
+        {"sku_lines": [{"sku_code": "s1", "boxes_per_pallet": 70, "pallet_count": 10}]},
+        db,
+    )
+    assert error is None
+
+
+def test_inbound_accepts_valid_loose_line(db):
+    error = pre_confirm_validators.run(
+        "uchoice_inbound_request", {},
+        {"sku_lines": [{"sku_code": "s1", "box_count": 20}]},
+        db,
+    )
+    assert error is None
+
+
+def test_outbound_rejects_incomplete_pallet_line(db):
+    error = pre_confirm_validators.run(
+        "uchoice_outbound_request", {},
+        {"sku_lines": [{"sku_code": "s1", "pallet_count": 10}]},
+        db,
+    )
+    assert error is not None
