@@ -81,7 +81,10 @@ _SAMPLES = [
     oc.NoCaseOutcome(),
     oc.CaseClosedOutcome(serial_number="REQ-5"),
     oc.CaseStaleOutcome(serial_number="REQ-6"),
-    oc.ServiceListOutcome(service_labels=("查库存", "入库申请")),
+    oc.ServiceListOutcome(entries=(
+        oc.ServiceListEntry(label="查库存", keywords=("查库存", "库存查询")),
+        oc.ServiceListEntry(label="入库申请"),
+    )),
     oc.UnrecognizedRequestOutcome(),
     oc.ServiceUnavailableOutcome(),
     oc.QueryEmptyOutcome(query_label="库存查询"),

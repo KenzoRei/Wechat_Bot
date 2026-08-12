@@ -45,6 +45,7 @@ from core.kefu_outcomes import (
     QueryInvalidFiltersOutcome,
     QueryResultOutcome,
     SemanticUnavailableOutcome,
+    ServiceListEntry,
     ServiceListOutcome,
     ServiceUnavailableOutcome,
     StockChangedOutcome,
@@ -277,7 +278,12 @@ def _render_case_stale(o: CaseStaleOutcome) -> str:
 
 
 def _render_service_list(o: ServiceListOutcome) -> str:
-    return "当前可用服务：\n" + "\n".join(o.service_labels)
+    def line(entry: ServiceListEntry) -> str:
+        if not entry.keywords:
+            return entry.label
+        example = "、".join(entry.keywords[:2])
+        return f"{entry.label}（如：{example}）"
+    return "当前可用服务：\n" + "\n".join(line(e) for e in o.entries)
 
 
 def _render_unrecognized_request(_: UnrecognizedRequestOutcome) -> str:

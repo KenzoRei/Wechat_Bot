@@ -570,11 +570,16 @@ def _process_turn(
             # elif above): no service/session mutation, just a deterministic
             # routing reply.
             if ai_response.intent == "check_services":
-                labels = tuple(
-                    (s.get("description") or s.get("name") or "服务").split("，", 1)[0]
+                from core.confirmation import build_display_name
+                from core.kefu_outcomes import ServiceListEntry
+                entries = tuple(
+                    ServiceListEntry(
+                        label=build_display_name(s["name"], {}),
+                        keywords=tuple(s.get("keywords") or ()),
+                    )
                     for s in context.get("allowed_services", [])
                 )
-                reply_text = render_kefu_outcome(ServiceListOutcome(service_labels=labels)) if labels else render_kefu_outcome(UnrecognizedRequestOutcome())
+                reply_text = render_kefu_outcome(ServiceListOutcome(entries=entries)) if entries else render_kefu_outcome(UnrecognizedRequestOutcome())
             else:
                 reply_text = render_kefu_outcome(UnrecognizedRequestOutcome())
 
