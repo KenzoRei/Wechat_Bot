@@ -109,3 +109,41 @@ def test_cancel_closes_owned_log_without_commit():
     assert "已取消" in reply
     assert session.status == "cancelled"
     assert log.status == "cancelled"
+
+
+def test_stale_all_fields_collected_claim_cannot_bypass_missing_fields_check(monkeypatch):
+    """
+    Live incident: the AI claimed all_fields_collected=true while stuffing
+    an invalid, non-list value into sku_lines ("库存" -- a bare string, not
+    a proper line array). _sanitize_extracted_fields_before_persistence
+    correctly drops it, but the OLD `ai_response.all_fields_collected or
+    _all_required_fields_present(...)` readiness check trusted the AI's
+    stale claim regardless, sailing past the missing-fields prompt straight
+    into pre_confirm_validators -- which then produced the confusing
+    validator-level "商品明细必须是列表" message instead of a normal
+    "please provide sku_lines" prompt. The AI's raw claim must never bypass
+    what's actually left in collected_fields after sanitization.
+    """
+    session = _session()
+    log = SimpleNamespace(serial_number="REQ-1", status="pending")
+    service = _service(name="uchoice_outbound_request", input_schema={"required": ["sku_lines"]})
+    ai = SimpleNamespace(
+        extracted_fields={"sku_lines": "库存"},  # malformed -- not a list
+        all_fields_collected=True,               # AI's stale claim
+        reply="ready",
+    )
+    monkeypatch.setattr(kefu_turn_apply.pre_confirm_validators, "run", lambda *args: None)
+
+    reply = kefu_turn_apply.apply_kefu_turn(
+        _DB(log),
+        {"group_id": "group-1", "content": "库存", "uchoice_candidates": {}},
+        ai,
+        service,
+        session,
+    )
+
+    # Must re-ask for sku_lines, never reach a validator-level error about
+    # a field the user was never even told was still missing.
+    assert "商品明细必须是列表" not in reply
+    assert "sku_lines" not in session.collected_fields
+    assert session.status == "active"

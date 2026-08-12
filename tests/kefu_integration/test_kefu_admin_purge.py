@@ -4,12 +4,27 @@ exchange itself must never touch any session (open or otherwise), and the
 actual purge must close every open Kefu session + its OWNED request_log
 while leaving a targets_existing_request session's REFERENCED log alone,
 matching jobs/session_expiry.py's owns_log precedent.
+
+`_run_purge`'s real query (`_open_kefu_sessions`) is deliberately global --
+every open Kefu session in the database, no scoping by staff/group -- because
+that's the actual production behavior the admin command needs. Against this
+project's shared production database (no separate test DB -- see
+docs/ai-collaboration -- this suite runs directly against prod), calling the
+real, unscoped `try_handle_purge_command(..., CONFIRM_COMMAND)` would cancel
+every genuinely in-flight Kefu case system-wide as a side effect of running
+this test file. That happened live on 2026-08-12: a real user's
+confirm_outbound_completion case (REQ-20260812-001955) was cancelled mid-
+confirmation by this exact test. Every test below monkeypatches
+core.kefu_admin_purge._open_kefu_sessions to scope the query to only the
+rows this test itself created, so _run_purge's actual cancellation/owns-log
+logic is still exercised faithfully without ever touching real traffic.
 """
 import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
 
+import core.kefu_admin_purge as kefu_admin_purge
 from core.kefu_admin_purge import CONFIRM_COMMAND, TRIGGER_COMMAND, try_handle_purge_command
 from database import SessionLocal
 from models.group import GroupConfig
@@ -18,6 +33,21 @@ from models.request_log import RequestLog
 from models.role import Role
 from models.service import ServiceType
 from models.session import ConversationSession
+
+
+def _scope_open_sessions_to(monkeypatch, session_ids):
+    """
+    Replaces the real, unscoped _open_kefu_sessions with one filtered to
+    exactly the session_ids this test created -- _run_purge's own logic
+    (cancel + owns_log request_log handling) runs completely unmodified,
+    only the candidate set is scoped down to synthetic test data.
+    """
+    real_open_sessions = kefu_admin_purge._open_kefu_sessions
+
+    def _scoped(db):
+        return [s for s in real_open_sessions(db) if s.session_id in session_ids]
+
+    monkeypatch.setattr(kefu_admin_purge, "_open_kefu_sessions", _scoped)
 
 
 def _make_session(db, group_id, service_type_id, status, staff_id):
@@ -51,7 +81,7 @@ def _make_log(db, group_id, service_type_id, status):
     return log
 
 
-def test_purge_closes_open_sessions_leaves_targets_existing_request_log_alone():
+def test_purge_closes_open_sessions_leaves_targets_existing_request_log_alone(monkeypatch):
     db = SessionLocal()
     staff_id = None
     session_ids = []
@@ -95,6 +125,7 @@ def test_purge_closes_open_sessions_leaves_targets_existing_request_log_alone():
 
         session_ids = [owned_session.session_id, completion_session.session_id, closed_session.session_id]
         log_ids = [owned_log.log_id, original_log.log_id]
+        _scope_open_sessions_to(monkeypatch, set(session_ids))
 
         # Trigger phrase must not touch anything -- purely informational.
         trigger_reply = try_handle_purge_command(db, "admin", TRIGGER_COMMAND)
@@ -143,7 +174,7 @@ def test_purge_closes_open_sessions_leaves_targets_existing_request_log_alone():
         db.close()
 
 
-def test_purge_ignores_non_kefu_sessions():
+def test_purge_ignores_non_kefu_sessions(monkeypatch):
     db = SessionLocal()
     staff_id = None
     session_ids = []
@@ -175,6 +206,7 @@ def test_purge_ignores_non_kefu_sessions():
         db.add(smart_robot_session)
         db.commit()
         session_ids = [smart_robot_session.session_id]
+        _scope_open_sessions_to(monkeypatch, set(session_ids))
 
         reply = try_handle_purge_command(db, "admin", CONFIRM_COMMAND)
         assert "没有" in reply
