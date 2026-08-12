@@ -731,7 +731,20 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
             _append(session, "assistant", serial_reply)
             return serial_reply
 
-    ready = ai_response.all_fields_collected or _all_required_fields_present(service, session.collected_fields or {})
+    # Deliberately NOT `ai_response.all_fields_collected or ...` -- that flag
+    # is the AI's OWN claim, computed before _sanitize_extracted_fields_
+    # before_persistence ever ran. If the field the AI based that claim on
+    # gets silently dropped by sanitization (e.g. a malformed non-list
+    # sku_lines value), an `or` here would let a stale, now-false claim
+    # bypass the missing-fields check entirely -- observed live: the AI
+    # claimed all_fields_collected=true while stuffing an invalid value into
+    # sku_lines, sanitization correctly dropped it, but readiness still
+    # passed on the strength of the discarded claim, and the turn sailed
+    # into pre_confirm_validators instead of just re-asking for the field.
+    # _all_required_fields_present alone is authoritative here: it already
+    # returns true for a service with an empty required list, so nothing is
+    # lost by not OR-ing in the AI's claim.
+    ready = _all_required_fields_present(service, session.collected_fields or {})
     if not ready:
         reply = _render_missing_fields(service, session.collected_fields or {})
         context["_reply"] = reply
