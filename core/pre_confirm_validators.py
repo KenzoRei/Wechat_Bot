@@ -403,6 +403,52 @@ def _loose_inbound_restatement_required(context: dict, collected_fields: dict, d
     return f"商品 {missing_labels} 是散箱入库，请说明打包成了多少箱/托、共多少托。"
 
 
+def _valid_sku_line_quantities(field_name: str):
+    """
+    Build a validator requiring every line to be either a complete loose-box
+    line (positive box_count) or a complete pallet line (positive
+    boxes_per_pallet AND positive pallet_count) -- never a line missing part
+    of either shape.
+
+    validate_sku_lines (used by _valid_inbound_sku_lines/
+    _valid_outbound_sku_lines) only checks sku_code shape/catalog
+    membership -- it was never responsible for quantity fields, and unlike
+    adjust_storage/recount_storage/move_storage there was no separate
+    per-line quantity check for inbound/outbound at all. A line missing
+    boxes_per_pallet reached the confirmation summary as a literal "?" and,
+    when confirmed anyway, as a literal "None" in the customer-facing copy
+    (core/kefu_customer_copy.py's f-string formats whatever's there) --
+    observed live on REQ-20260812-001179 (10 托 with no boxes_per_pallet
+    ever collected or asked for).
+    """
+
+    def validator(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+        del context
+        lines = collected_fields.get(field_name)
+        if not isinstance(lines, list):
+            return None
+
+        def check(line: dict) -> str | None:
+            if "box_count" in line:
+                if not _positive_int(line.get("box_count")):
+                    return "散箱数量（box_count）必须是正整数。"
+                return None
+            if not _positive_int(line.get("boxes_per_pallet")):
+                return "每托箱数（boxes_per_pallet）必须是正整数。"
+            if not _positive_int(line.get("pallet_count")):
+                return "托数（pallet_count）必须是正整数。"
+            return None
+
+        messages = _typed_line_issues(lines, check)
+        return "请修正以下商品明细：" + "；".join(messages) if messages else None
+
+    return validator
+
+
+_valid_inbound_sku_quantities = _valid_sku_line_quantities("sku_lines")
+_valid_outbound_sku_quantities = _valid_sku_line_quantities("sku_lines")
+
+
 def _valid_outbound_sku_lines(context: dict, collected_fields: dict, db: DBSession) -> str | None:
     """uchoice_outbound_request: reject missing or uncataloged line SKUs (Sev 2).
 
@@ -467,9 +513,13 @@ PRE_CONFIRM_VALIDATORS = {
     ),
     "uchoice_outbound_request": _compose(
         _valid_outbound_sku_lines,
+        _valid_outbound_sku_quantities,
         _valid_destination_address_required,
     ),
-    "uchoice_inbound_request": _valid_inbound_sku_lines,
+    "uchoice_inbound_request": _compose(
+        _valid_inbound_sku_lines,
+        _valid_inbound_sku_quantities,
+    ),
     "adjust_storage": _valid_adjust_storage_lines,
     "move_storage": _valid_move_storage_lines,
     "recount_storage": _valid_recount_storage_lines,

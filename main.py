@@ -92,10 +92,11 @@ if config.KEFU_ENABLED:
         kefu_delivery_worker.run_delivery_sweep(SessionLocal, _kefu_client, kefu_artifact_loader.load_artifact)
 
     # Short intervals -- Kefu's own reply-window/quota semantics (plan
-    # Sec 11.3) already govern actual send timing; these just keep the
-    # claim -> process -> enqueue -> deliver pipeline moving promptly.
-    scheduler.add_job(_run_kefu_worker_job, "interval", seconds=15, id="kefu_worker")
-    scheduler.add_job(_run_kefu_delivery_job, "interval", seconds=20, id="kefu_delivery")
+    # Sec 11.3) govern how many messages can be sent per window, not how
+    # often we're allowed to poll; there's no WeCom-imposed floor on these.
+    # Tightened from 15s/20s after live latency observed as slow.
+    scheduler.add_job(_run_kefu_worker_job, "interval", seconds=3, id="kefu_worker")
+    scheduler.add_job(_run_kefu_delivery_job, "interval", seconds=2, id="kefu_delivery")
 
 _kefu_router = create_kefu_callback_router(_kefu_crypt, _on_kefu_sync_event)
 
