@@ -66,6 +66,23 @@ def test_kefu_prompt_with_no_candidates_omits_candidates_matching_rules():
     assert '"address_match": null' in prompt
 
 
+def test_prompt_teaches_how_to_answer_the_pallet_spec_clarification():
+    """
+    Live incident: the deterministic backend clarification (core.
+    kefu_turn_apply._resolve_outbound_pallet_defaults's "请确认托盘规格——..."
+    message, sent when a SKU has multiple stocked pallet sizes) had no
+    corresponding prompt instruction at all -- the AI never learned to
+    re-extract the full sku_lines array with the chosen boxes_per_pallet
+    filled in, so the same clarification question repeated forever with
+    collected_fields never changing across turns.
+    """
+    ctx = _base_context(source_channel="kefu", uchoice_candidates={"skus": []})
+    prompt = build_system_prompt(ctx)
+    assert "托盘规格澄清问题" in prompt
+    assert "完整重新给出所有商品行" in prompt
+    assert '"boxes_per_pallet": 29' in prompt  # the worked example
+
+
 # ---------------------------------------------------------------------------
 # parse_response: structured fields
 # ---------------------------------------------------------------------------
