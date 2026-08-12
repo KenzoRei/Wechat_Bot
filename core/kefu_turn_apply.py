@@ -358,6 +358,67 @@ def _resolve_outbound_pallet_defaults(db: DBSession, session, context: dict) -> 
     return None
 
 
+def _resolve_outbound_completion_loose_picks(db: DBSession, session, context: dict) -> None:
+    """
+    Non-committing Kefu-native counterpart of workflow_engine's
+    _resolve_outbound_loose_pick_defaults -- was missing entirely from this
+    module, so every Kefu confirm_outbound_completion for an originally
+    loose (box_count) SKU line always fell through to pre_confirm_
+    validators.py's _loose_outbound_pick_required with an empty `picks`,
+    which renders as "当前库存不足以自动分配所需数量" regardless of actual
+    stock (observed live on REQ-20260812-001651: 524 real boxes on hand,
+    only 15 needed, still rejected as "insufficient" -- the validator
+    itself never checks stock, it only checks whether this resolution step
+    already ran and filled in picks).
+
+    Same greedy smallest-bucket-first resolution as the Smart Robot path,
+    via the shared core.uchoice_context.resolve_loose_pick_defaults query.
+    Must run before pre_confirm_validators.run for confirm_outbound_
+    completion, mirroring _resolve_outbound_pallet_defaults's persist-
+    before-validate ordering.
+    """
+    from core.uchoice_context import resolve_completion_target, resolve_loose_pick_defaults
+
+    fields = session.collected_fields or {}
+    reference_serial = fields.get("reference_serial")
+    if not reference_serial:
+        return
+    target, original_fields = resolve_completion_target(db, reference_serial)
+    if target is None:
+        return
+
+    loose_box_counts = {
+        l["sku_code"]: l["box_count"]
+        for l in (original_fields.get("sku_lines") or []) if "box_count" in l
+    }
+    if not loose_box_counts:
+        return
+
+    warehouse_code = original_fields.get("warehouse_code")
+    fulfillment_lines = fields.get("fulfillment_lines") or []
+    by_sku = {l.get("sku_code"): l for l in fulfillment_lines}
+    resolved_lines = list(fulfillment_lines)
+    changed = False
+
+    for sku, box_count_needed in loose_box_counts.items():
+        existing = by_sku.get(sku)
+        if existing and existing.get("picks"):
+            continue  # already explicitly specified this turn
+        picks = resolve_loose_pick_defaults(db, warehouse_code, sku, box_count_needed)
+        if picks is None:
+            continue  # insufficient stock -- leave unresolved, pre_confirm_validators will block with a clear message
+        new_line = {"sku_code": sku, "picks": [{**p, "_auto_default": True} for p in picks]}
+        if existing:
+            resolved_lines = [new_line if l.get("sku_code") == sku else l for l in resolved_lines]
+        else:
+            resolved_lines.append(new_line)
+        changed = True
+
+    if changed:
+        session.collected_fields = {**fields, "fulfillment_lines": resolved_lines}
+        context["collected_fields"] = session.collected_fields
+
+
 def _outbound_stock_error(db: DBSession, fields: dict) -> str | None:
     from core.uchoice_context import sku_label_map
     from core.uchoice_storage import available_box_count
@@ -510,8 +571,8 @@ def cancel_kefu_turn(db: DBSession, context: dict, service: dict | None, session
     from core.kefu_outcomes import ConfirmationCancelledOutcome
     from core.kefu_response_renderer import render_kefu_outcome
 
-    reply = render_kefu_outcome(ConfirmationCancelledOutcome(service_label=_service_label(service)))
     if session is None:
+        reply = render_kefu_outcome(ConfirmationCancelledOutcome(service_label=_service_label(service)))
         return reply
     log = _load_log(db, session)
     _set_context_for_session(context, session, log)
@@ -520,6 +581,15 @@ def cancel_kefu_turn(db: DBSession, context: dict, service: dict | None, session
     if owns_log and log is not None and log.status in ("pending", "processing"):
         log.status = "cancelled"
     session.status = "cancelled"
+    # serial_number is only shown when the session genuinely owns the log
+    # being closed -- for a targets_existing_request service (e.g. cancelling
+    # a confirm_inbound_completion attempt), `log` is the ORIGINAL request,
+    # which is untouched by this cancellation; showing its serial number
+    # here would falsely imply that original request itself was cancelled.
+    serial_number = log.serial_number if (owns_log and log is not None) else ""
+    reply = render_kefu_outcome(ConfirmationCancelledOutcome(
+        service_label=_service_label(service), serial_number=serial_number,
+    ))
     _append(session, "assistant", reply)
     return reply
 
@@ -685,6 +755,8 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
             context["_reply"] = clarification
             _append(session, "assistant", clarification)
             return clarification
+    if service["name"] == "confirm_outbound_completion":
+        _resolve_outbound_completion_loose_picks(db, session, context)
     validation_error = pre_confirm_validators.run(service["name"], context, session.collected_fields or {}, db)
     if validation_error:
         context["_reply"] = validation_error

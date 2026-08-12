@@ -387,39 +387,69 @@ def _last_admin_protection(context: dict, collected_fields: dict, db: DBSession)
 def _loose_outbound_pick_required(context: dict, collected_fields: dict, db: DBSession) -> str | None:
     """
     confirm_outbound_completion: a loose (box_count) original line gets an
-    automatic pick resolved by workflow_engine._resolve_outbound_loose_pick_defaults
-    (smallest-boxes_per_pallet buckets first) before this validator runs.
-    This only needs to block the rare case where that resolution failed —
-    total available stock across every bucket for that sku+warehouse can't
-    even cover the requested amount — so a request that was always going to
-    crash on insufficient stock doesn't get shown a confirmation prompt at all.
+    automatic pick resolved by core.kefu_turn_apply._resolve_outbound_
+    completion_loose_picks / core.workflow_engine._resolve_outbound_loose_
+    pick_defaults (smallest-boxes_per_pallet buckets first) before this
+    validator runs. This only needs to block the rare case where that
+    resolution failed -- total available stock across every bucket for
+    this sku+warehouse can't even cover the requested amount -- so a
+    request that was always going to crash on insufficient stock doesn't
+    get shown a confirmation prompt at all.
+
+    Reports the real bucket breakdown per SKU (same treatment as
+    _move_storage_stock_available), not just "insufficient" -- a bare
+    rejection gives the warehouseman nothing to act on; showing what's
+    actually on hand (or that there's genuinely none) lets them decide
+    whether to correct the request, do a partial fulfillment, or recount.
     """
     reference_serial = collected_fields.get("reference_serial")
     if not reference_serial:
         return None
 
+    from models.uchoice import UchoiceStorage
     from core.uchoice_context import resolve_completion_target, sku_label_map
 
     target, original_fields = resolve_completion_target(db, reference_serial)
     if target is None:
         return None
 
-    loose_skus = {l["sku_code"] for l in (original_fields.get("sku_lines") or []) if "box_count" in l}
-    if not loose_skus:
+    loose_lines = {
+        l["sku_code"]: l["box_count"]
+        for l in (original_fields.get("sku_lines") or []) if "box_count" in l
+    }
+    if not loose_lines:
         return None
 
     restated_lines = collected_fields.get("fulfillment_lines") or []
     by_sku = {l["sku_code"]: l for l in restated_lines}
-    missing = [sku for sku in loose_skus if not (by_sku.get(sku) or {}).get("picks")]
+    missing = [sku for sku in loose_lines if not (by_sku.get(sku) or {}).get("picks")]
     if not missing:
         return None
 
+    warehouse_code = original_fields.get("warehouse_code")
     sku_labels = sku_label_map(db)
-    missing_labels = "、".join(sku_labels.get(s, s) for s in sorted(missing))
-    return (
-        f"商品 {missing_labels} 是散箱发货，当前库存不足以自动分配所需数量，"
-        f"请检查库存，或手动说明从哪些托盘规格各取多少箱。"
-    )
+    messages = []
+    for sku in sorted(missing):
+        label = sku_labels.get(sku, sku)
+        needed = loose_lines[sku]
+        buckets = (
+            db.query(UchoiceStorage)
+            .filter_by(warehouse_code=warehouse_code, sku_code=sku)
+            .filter(UchoiceStorage.pallet_count > 0)
+            .order_by(UchoiceStorage.boxes_per_pallet.asc())
+            .all()
+        )
+        if buckets:
+            options = "、".join(f"{b.boxes_per_pallet}/托（现有{b.pallet_count}托）" for b in buckets)
+            available_total = sum(b.boxes_per_pallet * b.pallet_count for b in buckets)
+            messages.append(
+                f"{label}：需要 {needed} 箱，{warehouse_code} 仓现有规格：{options}"
+                f"（共 {available_total} 箱），不足以自动分配"
+            )
+        else:
+            messages.append(f"{label}：需要 {needed} 箱，{warehouse_code} 仓当前没有库存")
+
+    return "请核实以下商品库存：" + "；".join(messages) + "。或手动说明从哪些托盘规格各取多少箱。"
 
 
 def _loose_inbound_restatement_required(context: dict, collected_fields: dict, db: DBSession) -> str | None:

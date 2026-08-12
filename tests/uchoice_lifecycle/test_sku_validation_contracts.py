@@ -9,7 +9,7 @@ from handlers.uchoice.storage_txns import (
     ApplyInboundStorageHandler,
     ApplyOutboundStorageHandler,
 )
-from models.uchoice import UchoiceSku
+from models.uchoice import UchoiceSku, UchoiceStorage
 
 
 class _Query:
@@ -20,6 +20,15 @@ class _Query:
 
     def filter_by(self, **kwargs):
         self.filters.update(kwargs)
+        return self
+
+    def filter(self, *args):
+        # No real buckets to filter in this catalog-only mock -- used by
+        # pre_confirm_validators.py's stock-breakdown checks (move_storage,
+        # confirm_outbound_completion), which only need an empty result here.
+        return self
+
+    def order_by(self, *args):
         return self
 
     def first(self):
@@ -38,6 +47,8 @@ class _Query:
                 SimpleNamespace(sku_code=sku_code, description=description)
                 for sku_code, description in self.catalog.items()
             ]
+        if self.model is UchoiceStorage:
+            return []
         return []
 
 
