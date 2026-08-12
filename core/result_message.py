@@ -113,13 +113,16 @@ _TXN_TYPE_LABELS = {
 }
 
 
-def _format_sku_bucket_lines(rows: list[dict], sku_labels: dict[str, str]) -> list[str]:
+def _sku_bucket_sections(rows: list[dict], sku_labels: dict[str, str]) -> list[dict]:
     """
     Shared by view_storage and the completion-response full-storage builder.
     rows are already scoped to one warehouse: {sku_code, boxes_per_pallet,
-    pallet_count}. Groups by sku_code (sorted), each line shows every bucket
-    for that SKU plus a total when it has more than one bucket — a single-
-    bucket SKU shows just the one line, no redundant "(total X)".
+    pallet_count}. Groups by sku_code (sorted); a SKU with more than one
+    bucket gets its own mini-section (heading = SKU + total, one bucket per
+    bullet line) instead of cramming every bucket onto a single comma-
+    joined line -- hard to scan once odd leftover buckets accumulate from
+    repackaging/partial picks. A single-bucket SKU stays a single line, no
+    separate heading needed for just one fact.
     """
     from collections import defaultdict
 
@@ -127,22 +130,25 @@ def _format_sku_bucket_lines(rows: list[dict], sku_labels: dict[str, str]) -> li
     for r in rows:
         by_sku[r["sku_code"]].append(r)
 
-    lines = []
+    sections = []
     for sku_code in sorted(by_sku):
         buckets = sorted(by_sku[sku_code], key=lambda b: b["boxes_per_pallet"])
         label = sku_labels.get(sku_code, sku_code)
         if len(buckets) == 1:
             b = buckets[0]
-            lines.append(f'{label}：{b["pallet_count"]} 托 @ {b["boxes_per_pallet"]}/托')
+            sections.append({
+                "label": None, "type": "list",
+                "items": [f'{label}：{b["pallet_count"]} 托 @ {b["boxes_per_pallet"]}/托'],
+            })
         else:
-            bucket_str = "，".join(f'{b["pallet_count"]} 托 @ {b["boxes_per_pallet"]}/托' for b in buckets)
             total = sum(b["pallet_count"] for b in buckets)
-            lines.append(f'{label}：{bucket_str}（合计 {total} 托）')
-    return lines
+            items = [f'{b["pallet_count"]} 托 @ {b["boxes_per_pallet"]}/托' for b in buckets]
+            sections.append({"label": f"{label}（合计 {total} 托）", "type": "list", "items": items})
+    return sections
 
 
 def _storage_sections_builder(context: dict, db: DBSession) -> list[dict]:
-    """view_storage — split into one section per warehouse, sorted by SKU within each, with per-SKU totals."""
+    """view_storage — split into one section per warehouse, then one sub-section per SKU within each."""
     from collections import defaultdict
     from core.uchoice_context import sku_label_map
 
@@ -159,9 +165,9 @@ def _storage_sections_builder(context: dict, db: DBSession) -> list[dict]:
     sections = []
     for warehouse_code in sorted(by_warehouse):
         warehouse_rows = by_warehouse[warehouse_code]
-        lines = _format_sku_bucket_lines(warehouse_rows, sku_labels)
         warehouse_total = sum(r["pallet_count"] for r in warehouse_rows)
-        sections.append({"label": f"{warehouse_code} 仓（共 {warehouse_total} 托）", "type": "list", "items": lines})
+        sections.append({"label": f"{warehouse_code} 仓（共 {warehouse_total} 托）", "type": "list", "items": []})
+        sections += _sku_bucket_sections(warehouse_rows, sku_labels)
     return sections
 
 
@@ -281,9 +287,10 @@ def _warehouse_storage_summary_sections(db: DBSession, warehouse_code: str | Non
     sku_labels = sku_label_map(db)
     if not rows:
         return [{"label": f"{warehouse_code} {label_prefix}", "type": "list", "items": ["（无库存记录）"]}]
-    lines = _format_sku_bucket_lines(rows, sku_labels)
     warehouse_total = sum(r["pallet_count"] for r in rows)
-    return [{"label": f"{warehouse_code} {label_prefix}（共 {warehouse_total} 托）", "type": "list", "items": lines}]
+    sections = [{"label": f"{warehouse_code} {label_prefix}（共 {warehouse_total} 托）", "type": "list", "items": []}]
+    sections += _sku_bucket_sections(rows, sku_labels)
+    return sections
 
 
 def _completion_result_sections_builder(context: dict, db: DBSession) -> list[dict]:
