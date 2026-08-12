@@ -493,6 +493,26 @@ def _workflow_steps(db: DBSession, context: dict, service: dict, session) -> Non
                     context["_kefu_artifacts"].append({"doc_type": doc_type, "artifact": artifact})
                     context["result"].update({"pdf_status": "ready", "pdf_artifact_key": artifact["artifact_key"]})
             continue
+        if step.step_type == "compute_invoice_handler":
+            # Kefu-native path: send the workbook itself as a chat file
+            # (via _kefu_artifacts -> core/kefu_delivery.py's enqueue_file),
+            # never handlers/uchoice/queries.py's ComputeInvoiceHandler.
+            # That handler's download-link/group-webhook behavior is
+            # Smart Robot-only machinery (response_url can't carry a file at
+            # all) -- irrelevant here since Kefu sends the file natively.
+            from core.uchoice_invoice import compute_invoice
+            from core.uchoice_invoice_export import build_invoice_artifact
+
+            fields = session.collected_fields or {}
+            warehouse_code = fields.get("warehouse_code")
+            start_month = fields.get("start_month")
+            end_month = fields.get("end_month")
+            invoice = compute_invoice(db, warehouse_code, start_month, end_month)
+            context["result"].update({k: (str(v) if hasattr(v, "quantize") else v) for k, v in invoice.items()})
+            artifact = build_invoice_artifact(db, warehouse_code, start_month, end_month, context.get("request_log_id"))
+            context["_kefu_artifacts"].append({"doc_type": "invoice_workbook", "artifact": artifact})
+            context["result"]["invoice_artifact_key"] = artifact["artifact_key"]
+            continue
         handler_class = HANDLER_REGISTRY.get(step.step_type)
         if handler_class is None:
             raise RuntimeError(f"No handler registered for step_type: {step.step_type!r}")

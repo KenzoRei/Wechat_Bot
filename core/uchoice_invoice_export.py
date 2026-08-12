@@ -128,3 +128,25 @@ def build_invoice_workbook(db: DBSession, warehouse_code: str, start_month: str,
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def build_invoice_artifact(
+    db: DBSession, warehouse_code: str, start_month: str, end_month: str | None, request_log_id
+) -> dict:
+    """
+    Channel-neutral artifact wrapper around build_invoice_workbook, matching
+    the {bytes, filename, content_type, artifact_key} shape handlers/uchoice/
+    pdf_stub.py's PDF artifacts use -- so Kefu delivery (core/kefu_delivery.py's
+    enqueue_file) and its replay path (core/kefu_artifact_loader.py) can
+    handle an invoice workbook exactly like any other durable Kefu file, no
+    Excel-specific casing needed there. artifact_key is stable per (request,
+    doc_type) for the same idempotent-regeneration reason PDFs use it.
+    """
+    end_month = end_month or start_month
+    data = build_invoice_workbook(db, warehouse_code, start_month, end_month)
+    return {
+        "bytes": data,
+        "filename": f"invoice_{warehouse_code}_{start_month}_{end_month}.xlsx",
+        "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "artifact_key": f"{request_log_id}:invoice_workbook",
+    }
