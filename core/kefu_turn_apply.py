@@ -68,6 +68,83 @@ def _render_missing_fields(service: dict, fields: dict) -> str:
     return render_kefu_outcome(MissingFieldsOutcome(service_label=_service_label(service), fields=tuple(prompts)))
 
 
+_PENDING_CANDIDATE_KEYS = {
+    "confirm_inbound_completion": ("pending_inbound_requests", "入库申请"),
+    "confirm_outbound_completion": ("pending_outbound_requests", "出库申请"),
+}
+
+
+def _candidate_label(candidate: dict) -> str:
+    detail = []
+    if candidate.get("warehouse_code"):
+        detail.append(f'{candidate["warehouse_code"]}仓')
+    if candidate.get("sku_summary"):
+        detail.append(candidate["sku_summary"])
+    if candidate.get("destination"):
+        detail.append(f'发往{candidate["destination"]}')
+    serial = candidate.get("serial_number", "?")
+    return f'{serial}（{"，".join(detail)}）' if detail else serial
+
+
+def _resolve_reference_serial(context: dict, session, service: dict) -> str | None:
+    """
+    reference_serial ambiguity/absence for a targets_existing_request
+    service is resolved deterministically against the injected pending-
+    request candidate list, never left as a bare "请提供申请编号" prompt
+    with no information about what the options even are. The AI's own
+    candidate-listing instructions (ai/prompt_builder.py's candidates_block)
+    live entirely in its `reply` field, which is never sent for Kefu
+    (kefu-deterministic-response-plan.md Sec 3) -- this is the deterministic
+    replacement, observed missing live when multiple pending inbound
+    requests existed and confirm_inbound_completion just asked for a bare
+    serial number.
+
+    Exactly one candidate is auto-resolved here too, as a backend backstop
+    independent of whether the AI actually followed its own single-
+    candidate auto-fill instruction (candidates_block's "恰好 1 条" rule) --
+    a purely mechanical decision that doesn't need AI judgment at all.
+
+    Returns the deterministic reply to send if resolution isn't complete
+    (ambiguous or none pending), or None if reference_serial is already
+    resolved -- either it already was, or exactly one candidate existed
+    and got filled in here -- and the caller should proceed normally.
+    """
+    fields = session.collected_fields or {}
+    if fields.get("reference_serial"):
+        return None
+
+    key_info = _PENDING_CANDIDATE_KEYS.get(service.get("name"))
+    if key_info is None:
+        return None
+    candidate_key, label = key_info
+    candidates = (context.get("uchoice_candidates") or {}).get(candidate_key) or []
+
+    from core.kefu_outcomes import CandidateAmbiguousOutcome, CandidateNoneEligibleOutcome, CandidateOption
+    from core.kefu_response_renderer import render_kefu_outcome
+
+    if not candidates:
+        return render_kefu_outcome(CandidateNoneEligibleOutcome(
+            explanation=f"当前没有待处理的{label}，无需操作。"
+        ))
+    if len(candidates) == 1:
+        serial = candidates[0].get("serial_number")
+        if serial:
+            session.collected_fields = {**fields, "reference_serial": serial}
+            context["collected_fields"] = session.collected_fields
+        return None
+
+    options = tuple(
+        CandidateOption(candidate_key=c["serial_number"], label=_candidate_label(c))
+        for c in candidates if c.get("serial_number")
+    )
+    if len(options) < 2:
+        return None
+    return render_kefu_outcome(CandidateAmbiguousOutcome(
+        prompt=f"当前有多个待处理的{label}，请问是哪一条？",
+        options=options,
+    ))
+
+
 def _address_decision(db: DBSession, context: dict, ai_response):
     from core.kefu_response_renderer import validate_address_match
     candidates = (context.get("uchoice_candidates") or {}).get("addresses") or []
@@ -564,6 +641,13 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
     # assumptions"). core/uchoice_customer.py's resolve_and_lock_customer
     # and core/uchoice_context.customer_candidates() remain as dormant,
     # reusable infrastructure for whenever a real second tenant exists.
+    if service.get("targets_existing_request", False):
+        serial_reply = _resolve_reference_serial(context, session, service)
+        if serial_reply is not None:
+            context["_reply"] = serial_reply
+            _append(session, "assistant", serial_reply)
+            return serial_reply
+
     ready = ai_response.all_fields_collected or _all_required_fields_present(service, session.collected_fields or {})
     if not ready:
         reply = _render_missing_fields(service, session.collected_fields or {})
