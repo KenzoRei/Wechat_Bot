@@ -219,6 +219,8 @@ def _render_confirmation_summary(o: ConfirmationSummaryOutcome) -> str:
 
 
 def _render_confirmation_cancelled(o: ConfirmationCancelledOutcome) -> str:
+    if o.serial_number:
+        return f"{o.service_label}已取消（{o.serial_number}），您可以随时发起新申请。"
     return f"{o.service_label}已取消，您可以随时发起新申请。"
 
 

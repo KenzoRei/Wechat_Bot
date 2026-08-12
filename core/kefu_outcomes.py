@@ -294,6 +294,7 @@ class ConfirmationSummaryOutcome:
 class ConfirmationCancelledOutcome:
     code = OutcomeCode.CONFIRMATION_CANCELLED
     service_label: str
+    serial_number: str = ""
 
     def __post_init__(self):
         _require(self.service_label, "service_label must be non-empty")
