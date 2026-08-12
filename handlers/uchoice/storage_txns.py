@@ -352,9 +352,13 @@ class RecountStorageHandler(BaseHandler):
 class MoveStorageHandler(BaseHandler):
     """
     move_storage — internal repackaging, net-zero total boxes. Each line is
-    two convert pairs (4 txn rows): the source bucket loses box_count_moved
+    two convert-out/convert-in pairs: the source bucket loses box_count_moved
     boxes (its old bucket -1 pallet, a new/adjusted bucket at the reduced
-    count +1 pallet), and the target bucket gains them symmetrically.
+    count +1 pallet -- skipped entirely when the reduced count is zero,
+    since an entire pallet's worth was moved and there's nothing left on
+    that specific pallet to track as a separate bucket), and the target
+    bucket gains them symmetrically (always non-zero, since it's a sum of
+    two positive counts).
     """
 
     def handle(self, context: dict, config: dict, db) -> dict:
@@ -377,14 +381,15 @@ class MoveStorageHandler(BaseHandler):
 
             apply_storage_delta(db, warehouse_code, sku, source_bpp, -1, "move_out",
                                  request_log_id, note="internal move", created_by=created_by)
-            apply_storage_delta(db, warehouse_code, sku, new_source_bpp, 1, "move_in",
-                                 request_log_id, note="internal move", created_by=created_by)
+            if new_source_bpp > 0:
+                apply_storage_delta(db, warehouse_code, sku, new_source_bpp, 1, "move_in",
+                                     request_log_id, note="internal move", created_by=created_by)
             apply_storage_delta(db, warehouse_code, sku, target_bpp, -1, "move_out",
                                  request_log_id, note="internal move", created_by=created_by)
             apply_storage_delta(db, warehouse_code, sku, new_target_bpp, 1, "move_in",
                                  request_log_id, note="internal move", created_by=created_by)
 
-            applied.append({"sku_code": sku, "source": f"{source_bpp}->{new_source_bpp}",
+            applied.append({"sku_code": sku, "source": f"{source_bpp}->{new_source_bpp if new_source_bpp > 0 else '（整托移出）'}",
                              "target": f"{target_bpp}->{new_target_bpp}"})
 
         return {"move_lines": applied}
