@@ -126,12 +126,23 @@ def test_recount_storage_accepts_distinct_buckets(db):
     {"sku_code": "s1", "source_boxes_per_pallet": 0, "box_count_moved": 5, "target_boxes_per_pallet": 64},
     {"sku_code": "s1", "source_boxes_per_pallet": 80, "box_count_moved": 0, "target_boxes_per_pallet": 64},
     {"sku_code": "s1", "source_boxes_per_pallet": 80, "box_count_moved": 5, "target_boxes_per_pallet": 0},
-    {"sku_code": "s1", "source_boxes_per_pallet": 80, "box_count_moved": 80, "target_boxes_per_pallet": 64},   # == source, invalid
     {"sku_code": "s1", "source_boxes_per_pallet": 80, "box_count_moved": 90, "target_boxes_per_pallet": 64},   # > source, invalid
 ])
 def test_move_storage_rejects_invalid_shape(db, bad_line):
     error = pre_confirm_validators.run("move_storage", {}, {"move_lines": [bad_line]}, db)
     assert error is not None
+
+
+def test_move_storage_accepts_moving_an_entire_pallet(db):
+    """box_count_moved == source_boxes_per_pallet is valid -- an entire
+    pallet's worth moved away, nothing left on that specific pallet to
+    track as a leftover bucket (live incident: this used to be rejected)."""
+    error = pre_confirm_validators.run(
+        "move_storage", {},
+        {"move_lines": [{"sku_code": "s1", "source_boxes_per_pallet": 80, "box_count_moved": 80, "target_boxes_per_pallet": 64}]},
+        db,
+    )
+    assert error is None
 
 
 def test_move_storage_accepts_valid_line(db):

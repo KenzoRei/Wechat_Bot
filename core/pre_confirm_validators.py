@@ -130,15 +130,22 @@ def _valid_recount_storage_lines(context: dict, collected_fields: dict, db: DBSe
 def _valid_move_storage_lines(context: dict, collected_fields: dict, db: DBSession) -> str | None:
     """
     move_storage's typed contract: positive/in-range quantities for both
-    the source and target bucket dimensions, and box_count_moved must be
-    strictly less than source_boxes_per_pallet (moving boxes_per_pallet or
-    more would drive the new source bucket's dimension to zero or negative,
-    which isn't a valid boxes_per_pallet). Box conservation -- nothing
-    enters or leaves the warehouse -- is structurally guaranteed by
-    MoveStorageHandler always applying the same box_count_moved to both
-    sides, not something a separate check needs to re-derive. Authoritative
-    source-bucket existence/sufficiency is enforced at execution time by
-    apply_storage_delta's own balance check, same reasoning as adjust_storage.
+    the source and target bucket dimensions. box_count_moved may equal
+    source_boxes_per_pallet -- moving an entire pallet's worth away is
+    valid; MoveStorageHandler skips creating a leftover bucket in that case
+    (there's nothing left on that specific pallet to track) rather than
+    rejecting it. It may never exceed source_boxes_per_pallet -- that would
+    require boxes from more than one pallet, which this single-line
+    contract can't express. Box conservation -- nothing enters or leaves
+    the warehouse -- is structurally guaranteed by MoveStorageHandler
+    always applying the same box_count_moved to both sides, not something
+    a separate check needs to re-derive. Authoritative source-bucket
+    existence/sufficiency is enforced by _move_storage_stock_available
+    below (live incident: reaching apply_storage_delta's own balance check
+    at execution time, after confirmation was already shown, produced a
+    confusing "库存不足" failure with no indication of what buckets
+    actually exist -- the confirmation must not promise a move that's
+    already known to fail).
     """
     del context
     field_name = "move_lines"
@@ -159,12 +166,64 @@ def _valid_move_storage_lines(context: dict, collected_fields: dict, db: DBSessi
             return "目标托盘规格（target_boxes_per_pallet）必须是正整数。"
         if not _positive_int(box_count_moved):
             return "移动箱数（box_count_moved）必须是正整数。"
-        if isinstance(source_bpp, int) and isinstance(box_count_moved, int) and box_count_moved >= source_bpp:
-            return f"移动箱数（{box_count_moved}）不能大于或等于源托盘规格（{source_bpp}）。"
+        if isinstance(source_bpp, int) and isinstance(box_count_moved, int) and box_count_moved > source_bpp:
+            return f"移动箱数（{box_count_moved}）不能大于源托盘规格（{source_bpp}）。"
         return None
 
     messages = _typed_line_issues(lines, check)
     return "请修正以下调拨明细：" + "；".join(messages) if messages else None
+
+
+def _move_storage_stock_available(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """
+    move_storage: the source (warehouse, sku, source_boxes_per_pallet)
+    bucket must actually exist with at least one pallet, or the confirmed
+    move will fail at execution time on apply_storage_delta's own balance
+    check -- after already showing the staff a confirmation summary that
+    promised it would work. Reports exactly what buckets DO exist for that
+    SKU, which surfaces the common real mistake directly: a wrong pallet
+    spec or the wrong SKU entirely (e.g. two similarly-named products each
+    with their own bucket sizes).
+    """
+    from models.uchoice import UchoiceStorage
+    from core.uchoice_context import sku_label_map
+
+    warehouse_code = collected_fields.get("warehouse_code")
+    lines = collected_fields.get("move_lines")
+    if not warehouse_code or not isinstance(lines, list):
+        return None
+
+    sku_labels = None
+    messages = []
+    for index, line in enumerate(lines):
+        if not isinstance(line, dict):
+            continue
+        sku = line.get("sku_code")
+        source_bpp = line.get("source_boxes_per_pallet")
+        if not sku or not _positive_int(source_bpp):
+            continue
+        bucket = db.query(UchoiceStorage).filter_by(
+            warehouse_code=warehouse_code, sku_code=sku, boxes_per_pallet=source_bpp
+        ).first()
+        if bucket is not None and bucket.pallet_count >= 1:
+            continue
+        if sku_labels is None:
+            sku_labels = sku_label_map(db)
+        label = sku_labels.get(sku, sku)
+        existing = (
+            db.query(UchoiceStorage)
+            .filter_by(warehouse_code=warehouse_code, sku_code=sku)
+            .filter(UchoiceStorage.pallet_count > 0)
+            .order_by(UchoiceStorage.boxes_per_pallet.asc())
+            .all()
+        )
+        if existing:
+            options = "、".join(f"{b.boxes_per_pallet}/托（现有{b.pallet_count}托）" for b in existing)
+            messages.append(f"第 {index + 1} 项：{label} 在 {warehouse_code} 仓没有 {source_bpp}/托 的托盘，现有规格：{options}。")
+        else:
+            messages.append(f"第 {index + 1} 项：{label} 在 {warehouse_code} 仓当前没有库存，无法调拨。")
+
+    return "请核实来源托盘规格：" + "；".join(messages) if messages else None
 
 
 def _valid_completion_sku_lines(
@@ -521,7 +580,10 @@ PRE_CONFIRM_VALIDATORS = {
         _valid_inbound_sku_quantities,
     ),
     "adjust_storage": _valid_adjust_storage_lines,
-    "move_storage": _valid_move_storage_lines,
+    "move_storage": _compose(
+        _valid_move_storage_lines,
+        _move_storage_stock_available,
+    ),
     "recount_storage": _valid_recount_storage_lines,
     "confirm_outbound_completion": _compose(
         _valid_outbound_completion_skus,
