@@ -27,6 +27,7 @@ from core.kefu_outcomes import (
     ConfirmationNothingPendingOutcome,
     ConfirmationRecoveringOutcome,
     ConfirmationSummaryOutcome,
+    SessionConflictOutcome,
     ContradictoryValueOutcome,
     ExecutionCompletedOutcome,
     ExecutionPermanentFailureOutcome,
@@ -232,6 +233,14 @@ def _render_confirmation_recovering(_: ConfirmationRecoveringOutcome) -> str:
     return "该申请已经提交，正在恢复消息投递，请勿重复确认。"
 
 
+def _render_session_conflict(o: SessionConflictOutcome) -> str:
+    lines = [f"您有一个正在进行的{o.service_label}：{o.case_number}。"]
+    if o.last_question:
+        lines.append(f"上次系统询问：「{o.last_question}」")
+    lines.append('请回复 **取消** 结束该申请并处理新请求，或回复 **继续** 继续完成该申请。')
+    return "\n".join(lines)
+
+
 def _render_execution_submitted(o: ExecutionSubmittedOutcome) -> str:
     return f"{o.service_label}已提交，申请编号 {o.serial_number}，等待仓库处理。"
 
@@ -318,6 +327,7 @@ _RENDERERS = {
     ConfirmationAlreadyProcessedOutcome: _render_confirmation_already_processed,
     ConfirmationNothingPendingOutcome: _render_confirmation_nothing_pending,
     ConfirmationRecoveringOutcome: _render_confirmation_recovering,
+    SessionConflictOutcome: _render_session_conflict,
     ExecutionSubmittedOutcome: _render_execution_submitted,
     ExecutionCompletedOutcome: _render_execution_completed,
     ExecutionRetryableFailureOutcome: _render_execution_retryable_failure,

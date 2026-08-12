@@ -51,12 +51,13 @@ from ai.chain import AIProviderChain
 from ai.claude_provider import ClaudeProvider
 from ai.openai_provider import OpenAIProvider
 from clients.kefu_client import KefuAPIError, KefuClient
-from core import access_control, kefu_completion_notice, kefu_registration, kefu_turn_apply, session_manager
+from core import access_control, kefu_admin_purge, kefu_completion_notice, kefu_registration, kefu_turn_apply, session_manager
 from core.kefu_outcomes import (
     ConfirmationAlreadyProcessedOutcome,
     ConfirmationNothingPendingOutcome,
     ConfirmationRecoveringOutcome,
     ServiceListOutcome,
+    SessionConflictOutcome,
     UnrecognizedRequestOutcome,
 )
 from core.kefu_response_renderer import render_kefu_outcome
@@ -99,6 +100,17 @@ _KEFU_ENABLED_SERVICES = frozenset({
     "uchoice_inbound_request", "uchoice_outbound_request", "upsert_address",
     "confirm_inbound_completion", "confirm_outbound_completion",
 })
+
+# purge_kefu_sessions is DELIBERATELY absent from the set above. It's
+# granted via group_service_role purely so explain_service/check_services
+# can describe it (see V15's migration comment); its workflow has zero
+# steps and nothing ever dispatches through it. If the AI ever
+# misclassifies a message as this service, leaving it out of the allowlist
+# means _kefu_rollout_denial_reason below denies it before it can reach
+# _finish_execution -- which would otherwise silently "complete" with no
+# workflow steps to run and no real purge performed, a false-success trap.
+# The only real trigger is core/kefu_admin_purge.py's exact-phrase
+# pre-AI command.
 
 
 def _kefu_rollout_denial_reason(context: dict, ai_response, session) -> str | None:
@@ -198,6 +210,66 @@ def _acquire_execution(db: DBSession, execution_key: str) -> tuple[str, object]:
     row.completed_at = None
     row.last_error = None
     return "new", row
+
+
+# Services with no persistent field-collection session of their own --
+# they answer and finish within the same turn, so they never compete for
+# a staff's "current open case" slot and must never trigger the conflict
+# check below, regardless of what else is open.
+_READ_ONLY_KEFU_SERVICES = frozenset({
+    "view_storage", "view_storage_history", "view_invoice",
+    "view_pending_digest", "explain_service",
+})
+
+
+def _detect_session_conflict(context: dict, ai_response, session) -> str | None:
+    """
+    Stateless, per-turn check: a message just classified as new_request
+    for a genuinely different, distinct mutating service than the one the
+    staff already has open. Returns the deterministic conflict reply, or
+    None if it's safe to proceed normally (no open session, ambiguous/
+    continuation content, a read-only service, or the same service the
+    open session already has).
+
+    Deliberately holds no state of its own -- nothing is persisted here,
+    the old session is never touched, and the triggering message's content
+    is discarded either way (the staff resends after resolving). The
+    staff's next message, whatever it is, re-enters this exact same check
+    from scratch; 取消/继续 are handled entirely by the ALREADY-existing
+    cancel/continuation intents, not by anything special this function
+    remembers.
+    """
+    if session is None or session.status not in _OPEN_SESSION_STATUSES:
+        return None
+    if ai_response.intent != "new_request":
+        return None
+    new_name = ai_response.service_type_name
+    if not new_name or new_name in _READ_ONLY_KEFU_SERVICES:
+        return None
+    if session.service_type_id is None:
+        return None
+    allowed = context.get("allowed_services", [])
+    if not any(s["name"] == new_name for s in allowed):
+        # Unresolvable/hallucinated service name -- not a real second
+        # service to conflict against. Let _resolve_turn_service's own
+        # unrecognized handling take it from here.
+        return None
+    by_id = {s["service_type_id"]: s for s in allowed}
+    current_service = by_id.get(str(session.service_type_id))
+    if current_service is None or current_service["name"] == new_name:
+        return None
+
+    from core.kefu_turn_apply import _service_label
+    last_question = ""
+    for turn in reversed(session.conversation_history or []):
+        if turn.get("role") == "assistant":
+            last_question = turn.get("content") or ""
+            break
+    return render_kefu_outcome(SessionConflictOutcome(
+        service_label=_service_label(current_service),
+        case_number=session.case_number or "",
+        last_question=last_question,
+    ))
 
 
 def _resolve_turn_service(context: dict, ai_response, session) -> dict | None:
@@ -336,6 +408,15 @@ def _process_turn(
         _direct_send(client, identity, f"kefu-pending:{msgid}", pending_reply)
         return CaseTurnDenied(reason="pending_role")
 
+    # Deterministic, pre-AI, admin-only system command -- same shape as
+    # registration above: recognized by exact string match only, never
+    # touches conversation_session/case machinery, never goes through the
+    # AI/execution-ledger pipeline at all. See core/kefu_admin_purge.py.
+    purge_reply = kefu_admin_purge.try_handle_purge_command(db, access.role, message_content)
+    if purge_reply is not None:
+        _direct_send(client, identity, f"kefu-purge:{msgid}", purge_reply)
+        return CaseTurnSuccess(reply_text=purge_reply, customer_copy_text=None, case_number="", new_revision=0)
+
     from models.kefu import CaseTurn, KefuStaff
     staff = db.get(KefuStaff, access.staff_id)
 
@@ -454,18 +535,36 @@ def _process_turn(
                     confirmation_execution_row.session_id = session.session_id
                     reply_text = kefu_turn_apply.confirm_kefu_turn(db, context, service, session)
         elif ai_response.intent in ("new_request", "continuation"):
-            service = _resolve_turn_service(context, ai_response, session)
-            if service is None:
+            conflict_reply = _detect_session_conflict(context, ai_response, session)
+            if conflict_reply is not None:
+                # Deliberately bypasses _finalize_turn -- that path performs
+                # a real CAS bump of the OLD session's case_revision, which
+                # would touch state this outcome must leave completely
+                # alone. Sent best-effort, same as unrecognized/
+                # check_services replies below, which have the same
+                # "nothing to attach this to" shape.
                 if execution_row is not None:
-                    execution_row.status = "failed"
-                    execution_row.last_error = "no_service_resolved"
+                    execution_row.status = "completed"
+                    from datetime import datetime, timezone
+                    execution_row.completed_at = datetime.now(timezone.utc)
+                    if execution_row.db_committed_at is None:
+                        execution_row.db_committed_at = execution_row.completed_at
                 db.commit()
-                reply_text = render_kefu_outcome(UnrecognizedRequestOutcome())
-                _direct_send(client, identity, f"kefu-reply:{msgid}", reply_text)
-                return CaseTurnSuccess(reply_text=reply_text, customer_copy_text=None, case_number="", new_revision=0)
-            if execution_key:
-                context["_kefu_execution_key"] = execution_key
-            reply_text = kefu_turn_apply.apply_kefu_turn(db, context, ai_response, service, session)
+                _direct_send(client, identity, f"kefu-reply:{msgid}", conflict_reply)
+                return CaseTurnSuccess(reply_text=conflict_reply, customer_copy_text=None, case_number="", new_revision=0)
+            else:
+                service = _resolve_turn_service(context, ai_response, session)
+                if service is None:
+                    if execution_row is not None:
+                        execution_row.status = "failed"
+                        execution_row.last_error = "no_service_resolved"
+                    db.commit()
+                    reply_text = render_kefu_outcome(UnrecognizedRequestOutcome())
+                    _direct_send(client, identity, f"kefu-reply:{msgid}", reply_text)
+                    return CaseTurnSuccess(reply_text=reply_text, customer_copy_text=None, case_number="", new_revision=0)
+                if execution_key:
+                    context["_kefu_execution_key"] = execution_key
+                reply_text = kefu_turn_apply.apply_kefu_turn(db, context, ai_response, service, session)
         else:
             # check_services / unrecognized (confirm is handled in its own
             # elif above): no service/session mutation, just a deterministic

@@ -60,6 +60,7 @@ class OutcomeCode(Enum):
     CONFIRMATION_ALREADY_PROCESSED = auto()
     CONFIRMATION_NOTHING_PENDING = auto()
     CONFIRMATION_RECOVERING = auto()
+    SESSION_CONFLICT = auto()
     # Execution
     EXECUTION_SUBMITTED = auto()
     EXECUTION_COMPLETED = auto()
@@ -318,6 +319,28 @@ class ConfirmationRecoveringOutcome:
 
 
 @dataclass(frozen=True)
+class SessionConflictOutcome:
+    """
+    A staff member's message resolved to a genuinely different, distinct
+    service than their currently open case -- rather than silently forcing
+    it into that case (the original bug) or silently abandoning the open
+    case, this asks the staff to explicitly decide. Stateless by design: no
+    flag is persisted anywhere between this reply and the staff's next
+    message. 取消/继续 are handled entirely by the ALREADY-existing cancel/
+    continuation intents on the next turn -- this outcome only renders the
+    prompt, it doesn't gate what happens next.
+    """
+    code = OutcomeCode.SESSION_CONFLICT
+    service_label: str
+    case_number: str
+    last_question: str = ""
+
+    def __post_init__(self):
+        _require(self.service_label, "service_label must be non-empty")
+        _require(self.case_number, "case_number must be non-empty")
+
+
+@dataclass(frozen=True)
 class ExecutionSubmittedOutcome:
     code = OutcomeCode.EXECUTION_SUBMITTED
     serial_number: str
@@ -478,6 +501,7 @@ KefuOutcome = (
     | ConfirmationAlreadyProcessedOutcome
     | ConfirmationNothingPendingOutcome
     | ConfirmationRecoveringOutcome
+    | SessionConflictOutcome
     | ExecutionSubmittedOutcome
     | ExecutionCompletedOutcome
     | ExecutionRetryableFailureOutcome
