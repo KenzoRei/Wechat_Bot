@@ -52,7 +52,13 @@ def _cleanup(staff_id, warehouse, sku):
 
 def test_unmatched_address_atomically_pivots_without_ai_operational_prose(monkeypatch):
     staff_id, open_kfid, external_userid = _seed_staff()
-    warehouse, sku = "JFK", "s2"
+    # Live incident: this file previously used the REAL warehouse/SKU
+    # ("JFK", "s2") -- since this project runs tests directly against
+    # production (no separate test DB), every run of this file wiped real
+    # production inventory for that exact bucket via the cleanup below,
+    # which isn't even scoped by boxes_per_pallet. A synthetic warehouse
+    # code can never collide with a real one (only "JFK"/"DE" exist).
+    warehouse, sku = "TESTWHXPIVOT", "s2"
     try:
         db = SessionLocal()
         db.execute(text("delete from uchoice_storage where warehouse_code=:wh and sku_code=:sku"), {"wh": warehouse, "sku": sku})
@@ -70,6 +76,7 @@ def test_unmatched_address_atomically_pivots_without_ai_operational_prose(monkey
                 intent="new_request",
                 service_type_name="uchoice_outbound_request",
                 extracted_fields={
+                    "warehouse_code": warehouse,
                     "sku_lines": [{"sku_code": sku, "boxes_per_pallet": 72, "pallet_count": 2}],
                 },
                 address_match=AddressMatch(
@@ -124,7 +131,7 @@ def test_unmatched_address_atomically_pivots_without_ai_operational_prose(monkey
 
 def test_insufficient_boxes_reject_before_unmatched_address_pivot(monkeypatch):
     staff_id, open_kfid, external_userid = _seed_staff()
-    warehouse, sku = "JFK", "s2"
+    warehouse, sku = "TESTWHXPIVOT", "s2"
     try:
         db = SessionLocal()
         db.execute(text("delete from uchoice_storage where warehouse_code=:wh and sku_code=:sku"), {"wh": warehouse, "sku": sku})
@@ -137,7 +144,7 @@ def test_insufficient_boxes_reject_before_unmatched_address_pivot(monkeypatch):
         monkeypatch.setattr(adapter._ai_chain, "process", lambda context: AIResponse(
             intent="new_request",
             service_type_name="uchoice_outbound_request",
-            extracted_fields={"sku_lines": [{"sku_code": sku, "boxes_per_pallet": 72, "pallet_count": 2}]},
+            extracted_fields={"warehouse_code": warehouse, "sku_lines": [{"sku_code": sku, "boxes_per_pallet": 72, "pallet_count": 2}]},
             address_match=AddressMatch(
                 status="unmatched", candidate_ids=(),
                 new_address={"company_name": "YANWEN EXPRESS LLC", "addr": "600 Blair Rd, Carteret, NJ 07008"},

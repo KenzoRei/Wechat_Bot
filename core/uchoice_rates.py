@@ -18,8 +18,8 @@ CHARGE_TYPE_RATES = {
 # Explanatory context surfaced to the AI (see ai/prompt_builder.py) so it can
 # answer "这几种计费类型有什么区别" without guessing — not just the label + rate.
 CHARGE_TYPE_DESCRIPTIONS = {
-    "short_delivery": "短途配送：JFK 仓库范围内，$30/托",
-    "delivery":        "配送：JFK 附近 10 分钟车程内，$45/托",
-    "truck_transfer":  "卡车转仓费：超过 JFK 附近 10 分钟车程（含跨仓库转运），$85/托",
-    "self_pickup":     "自提：客户或仓库自行到仓库取货，不产生运输费，$0/托",
+    "short_delivery": "短途配送：5 分钟车程内，$30/托",
+    "delivery":        "配送：5-20 分钟车程内，$45/托",
+    "truck_transfer":  "卡车转仓费：20 分钟以上车程，$85/托",
+    "self_pickup":     "自提：无需送货服务，不收费",
 }

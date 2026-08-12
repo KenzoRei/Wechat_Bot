@@ -416,12 +416,24 @@ class CaseStaleOutcome:
 
 
 @dataclass(frozen=True)
-class ServiceListOutcome:
-    code = OutcomeCode.SERVICE_LIST
-    service_labels: tuple[str, ...]
+class ServiceListEntry:
+    """One service's short display label plus a couple of example trigger
+    phrases -- lets check_services double as "how do I ask for this"
+    documentation, not just a bare name."""
+    label: str
+    keywords: tuple[str, ...] = ()
 
     def __post_init__(self):
-        _require(len(self.service_labels) > 0, "service_labels must be non-empty")
+        _require(self.label, "ServiceListEntry.label must be non-empty")
+
+
+@dataclass(frozen=True)
+class ServiceListOutcome:
+    code = OutcomeCode.SERVICE_LIST
+    entries: tuple[ServiceListEntry, ...]
+
+    def __post_init__(self):
+        _require(len(self.entries) > 0, "entries must be non-empty")
 
 
 @dataclass(frozen=True)

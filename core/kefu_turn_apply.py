@@ -15,13 +15,23 @@ from sqlalchemy.orm import Session as DBSession
 import config
 from core import pre_confirm_validators
 from core.confirmation import build_confirmation_message, build_display_name, build_sections
+from core.uchoice_rates import CHARGE_TYPE_DESCRIPTIONS
 from core.workflow_engine import _sanitize_extracted_fields_before_persistence
 
+
+# Built from CHARGE_TYPE_DESCRIPTIONS (core/uchoice_rates.py) so the actual
+# distance/price definitions shown when asking for charge_type can never
+# drift out of sync with the single source of truth used everywhere else
+# (explain_service, the AI's charge-type explanation block, the
+# upsert_address confirmation summary).
+_CHARGE_TYPE_QUESTION = "请选择计费类型：\n" + "\n".join(
+    f"- {desc}" for desc in CHARGE_TYPE_DESCRIPTIONS.values()
+)
 
 _FIELD_PROMPTS = {
     "sku_lines": ("商品及数量", "请提供商品、托盘/箱数及每托箱数。"),
     "destination_address_id": ("送货地址", "请提供或确认送货目的地。"),
-    "charge_type": ("计费类型", "请选择计费类型：短途配送、配送、卡车转仓费或自提。"),
+    "charge_type": ("计费类型", _CHARGE_TYPE_QUESTION),
     "warehouse_code": ("所属仓库", "请选择所属仓库：JFK 或 DE。"),
     "reference_serial": ("申请编号", "请提供要处理的申请编号。"),
     "start_month": ("开始月份", "请提供查询的开始月份。"),

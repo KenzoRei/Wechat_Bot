@@ -54,6 +54,8 @@ _DISPLAY_NAMES = {
     "view_storage_history":       "库存变动记录",
     "view_invoice":               "费用报告",
     "explain_service":            "服务说明",
+    "view_pending_digest":        "待处理事项查询",
+    "purge_kefu_sessions":        "清空进行中会话",
 }
 
 
