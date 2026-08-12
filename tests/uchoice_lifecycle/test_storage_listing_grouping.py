@@ -31,6 +31,12 @@ class _StorageQuery:
         self._warehouse = kwargs.get("warehouse_code")
         return self
 
+    def filter(self, *args):
+        # Only real caller filter is pallet_count > 0 -- apply it directly
+        # rather than trying to evaluate the SQLAlchemy expression.
+        self.rows = [r for r in self.rows if r["pallet_count"] > 0]
+        return self
+
     def all(self):
         return [SimpleNamespace(**r) for r in self.rows if r["warehouse_code"] == self._warehouse]
 
@@ -57,7 +63,6 @@ def test_multi_bucket_sku_gets_its_own_section_not_one_crammed_line():
     context = {"result": {"storage_rows": [
         {"warehouse_code": "JFK", "sku_code": "s2", "boxes_per_pallet": 37, "pallet_count": 1},
         {"warehouse_code": "JFK", "sku_code": "s2", "boxes_per_pallet": 64, "pallet_count": 10},
-        {"warehouse_code": "JFK", "sku_code": "s2", "boxes_per_pallet": 70, "pallet_count": 0},
     ]}}
     sections = _storage_sections_builder(context, db)
     text = "\n".join(render_sections(sections))
@@ -66,9 +71,31 @@ def test_multi_bucket_sku_gets_its_own_section_not_one_crammed_line():
     assert "**S2 1500 ft Stretch Wrap（合计 11 托）**" in text
     assert "- 1 托 @ 37/托" in text
     assert "- 10 托 @ 64/托" in text
-    assert "- 0 托 @ 70/托" in text
     # The old cramped single-line format must be gone.
     assert "1 托 @ 37/托，10 托 @ 64/托" not in text
+
+
+def test_zero_count_buckets_are_dropped_from_the_listing():
+    """
+    A leftover-pallet bucket that's since been fully consumed (e.g. by a
+    move/pick) stays a row in uchoice_storage -- nothing deletes it -- so
+    it must never show up as a meaningless "0 托 @ X/托" line. Also proves
+    a SKU whose ONLY bucket dropped to zero disappears from the listing
+    entirely, not left as a 0-total heading.
+    """
+    db = _DB(_CATALOG, [])
+    context = {"result": {"storage_rows": [
+        {"warehouse_code": "JFK", "sku_code": "s2", "boxes_per_pallet": 37, "pallet_count": 1},
+        {"warehouse_code": "JFK", "sku_code": "s2", "boxes_per_pallet": 64, "pallet_count": 10},
+        {"warehouse_code": "JFK", "sku_code": "s2", "boxes_per_pallet": 70, "pallet_count": 0},
+        {"warehouse_code": "JFK", "sku_code": "t1", "boxes_per_pallet": 105, "pallet_count": 0},
+    ]}}
+    sections = _storage_sections_builder(context, db)
+    text = "\n".join(render_sections(sections))
+
+    assert "70/托" not in text  # s2's zero bucket must be gone
+    assert "T1 3-inch Clear Packing Tape" not in text  # its only bucket was zero -- vanishes entirely
+    assert "**S2 1500 ft Stretch Wrap（合计 11 托）**" in text  # total unaffected -- zero contributed 0 anyway
 
 
 def test_single_bucket_sku_stays_one_line_no_separate_heading():
