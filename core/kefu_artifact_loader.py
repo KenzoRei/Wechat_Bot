@@ -34,9 +34,17 @@ def load_artifact(request_log_id: UUID, doc_type: str, artifact_key: str) -> Art
             "serial_number": log.serial_number,
             "collected_fields": session.collected_fields or {},
         }
-        if doc_type != "outbound_instruction":
+        if doc_type == "outbound_instruction":
+            mapping = GeneratePdfStubHandler._build_outbound_instruction_artifact(context, db)
+        elif doc_type == "invoice_workbook":
+            from core.uchoice_invoice_export import build_invoice_artifact
+
+            fields = session.collected_fields or {}
+            mapping = build_invoice_artifact(
+                db, fields.get("warehouse_code"), fields.get("start_month"), fields.get("end_month"), log.log_id
+            )
+        else:
             raise ValueError(f"unsupported durable artifact doc_type: {doc_type}")
-        mapping = GeneratePdfStubHandler._build_outbound_instruction_artifact(context, db)
         if mapping is None:
             raise RuntimeError(f"failed to regenerate {doc_type} for {request_log_id}")
         artifact = Artifact.from_mapping(mapping)
