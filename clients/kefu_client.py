@@ -196,17 +196,49 @@ class KefuClient:
         )
         return str(data.get("msgid") or outbound_msgid)
 
-    def upload_file(self, *, filename: str, content: bytes, content_type: str) -> str:
+    def upload_file(self, *, filename: str, content: bytes, content_type: str, media_type: str = "file") -> str:
+        """
+        media_type is WeCom's temporary-media `type` query param -- "file"
+        for the PDF/xlsx delivery path (send_file's payload), "image" for an
+        account avatar (kf/account/add's media_id -- WeCom's image upload
+        endpoint validates actual image content, unlike the generic "file"
+        type used elsewhere in this client).
+        """
         data = self._request(
             "POST",
             "/cgi-bin/media/upload",
-            params={"type": "file"},
+            params={"type": media_type},
             files={"media": (filename, content, content_type)},
         )
         media_id = data.get("media_id")
         if not media_id:
             raise RuntimeError("Kefu media upload response omitted media_id")
         return str(media_id)
+
+    def list_accounts(self) -> list[dict[str, Any]]:
+        """Returns every existing Kefu account (客服帐号) -- name + open_kfid."""
+        data = self._request("POST", "/cgi-bin/kf/account/list", json={})
+        accounts = data.get("account_list") or []
+        if not isinstance(accounts, list):
+            raise RuntimeError("Kefu account/list response account_list is not a list")
+        return accounts
+
+    def add_account(self, *, name: str, media_id: str) -> str:
+        """
+        Creates a new Kefu account (客服帐号). Once a corp's Kefu scope has
+        API mode enabled, account management itself is API-only -- the
+        console's own add-account UI is unavailable, per WeCom's docs:
+        "开启API后，仅可通过API来管理客服帐号、分配客服会话和收发客服消息".
+        media_id (an uploaded avatar image, see upload_file) is REQUIRED by
+        WeCom's current API -- confirmed live via errcode 40058 ("missing
+        field `media_id`") when omitted, despite it being undocumented as
+        mandatory. Returns the new account's open_kfid.
+        """
+        data = self._request("POST", "/cgi-bin/kf/account/add", json={"name": name, "media_id": media_id})
+        open_kfid = data.get("open_kfid")
+        if not open_kfid:
+            raise RuntimeError("Kefu account/add response omitted open_kfid")
+        return str(open_kfid)
 
     def send_file(self, *, open_kfid: str, external_userid: str, media_id: str, msgid: str) -> str:
         outbound_msgid = provider_msgid(msgid)

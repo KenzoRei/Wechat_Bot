@@ -83,6 +83,48 @@ def test_get_service_state_uses_customer_identity():
     }
 
 
+def test_list_accounts_returns_account_list():
+    http = FakeHTTP(
+        [{"access_token": "token", "expires_in": 7200}],
+        [{"errcode": 0, "account_list": [{"open_kfid": "wk1", "name": "existing"}]}],
+    )
+
+    accounts = client(http).list_accounts()
+
+    assert accounts == [{"open_kfid": "wk1", "name": "existing"}]
+
+
+def test_add_account_returns_open_kfid_and_sends_required_media_id():
+    """
+    media_id is required by WeCom's current kf/account/add API -- confirmed
+    live via errcode 40058 ("missing field `media_id`") when omitted, even
+    though it isn't documented as mandatory.
+    """
+    http = FakeHTTP(
+        [{"access_token": "token", "expires_in": 7200}],
+        [{"errcode": 0, "open_kfid": "wkNew123"}],
+    )
+
+    open_kfid = client(http).add_account(name="仓库客服", media_id="media-avatar-1")
+
+    assert open_kfid == "wkNew123"
+    assert http.request_calls[0][2]["json"] == {"name": "仓库客服", "media_id": "media-avatar-1"}
+
+
+def test_upload_file_defaults_to_type_file_but_accepts_image_for_avatars():
+    http = FakeHTTP(
+        [{"access_token": "token", "expires_in": 7200}],
+        [{"errcode": 0, "media_id": "media-avatar-1"}],
+    )
+
+    media_id = client(http).upload_file(
+        filename="avatar.png", content=b"png", content_type="image/png", media_type="image",
+    )
+
+    assert media_id == "media-avatar-1"
+    assert http.request_calls[0][2]["params"]["type"] == "image"
+
+
 def test_invalid_token_refreshes_once_and_replays_original_upload_params():
     http = FakeHTTP(
         [
