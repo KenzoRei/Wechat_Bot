@@ -109,6 +109,69 @@ def test_upsert_address_receives_the_same_shared_candidate_list(kefu_access):
     assert "addresses" in context["uchoice_candidates"]
 
 
+def test_locked_outbound_session_scopes_addresses_to_its_own_source_warehouse(kefu_access):
+    """
+    Two addresses can share the identical physical addr and differ only by
+    which warehouse's outbound requests they're meant for (e.g. "DE
+    Warehouse", warehouse_code=JFK, a real JFK->DE inter-warehouse transfer,
+    vs. a same-address DE-only self-pickup entry) -- observed live to
+    confuse the AI into offering the wrong one for a JFK-sourced request.
+    Once a session is locked to uchoice_outbound_request alone (the only
+    case this scoping applies to -- upsert_address needs the full list),
+    candidates must exclude an address scoped to a different warehouse,
+    while still including a warehouse-agnostic (null warehouse_code) one.
+    """
+    access, db = kefu_access
+    names = {s["name"] for s in access.allowed_services}
+    assert "uchoice_outbound_request" in names, "fixture admin role must be granted uchoice_outbound_request"
+
+    from models.uchoice import UchoiceAddress
+    from models.session import ConversationSession
+    from models.service import ServiceType
+    from datetime import datetime, timedelta, timezone
+
+    jfk_addr = UchoiceAddress(
+        company_name="JFK-Scoped Co", charge_type="delivery", addr="1 JFK Scoped St",
+        warehouse_code="JFK", created_by="test",
+    )
+    de_addr = UchoiceAddress(
+        company_name="DE-Scoped Co", charge_type="self_pickup", addr="2 DE Scoped St",
+        warehouse_code="DE", created_by="test",
+    )
+    agnostic_addr = UchoiceAddress(
+        company_name="Any-Warehouse Co", charge_type="self_pickup", addr="", created_by="test",
+    )
+    db.add_all([jfk_addr, de_addr, agnostic_addr])
+    db.commit()
+
+    outbound_type = db.query(ServiceType).filter_by(name="uchoice_outbound_request").first()
+    session = ConversationSession(
+        wechat_openid=None, group_id=access.group_id, status="active",
+        conversation_history=[], collected_fields={"warehouse_code": "JFK"},
+        service_type_id=outbound_type.service_type_id,
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=60),
+        source_channel="kefu",
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    try:
+        message = {"content": "发到...", "msg_id": "", "response_url": ""}
+        context = session_manager.build_context(db, access, session=session, message=message)
+        addr_ids = {a["address_id"] for a in context["uchoice_candidates"]["addresses"]}
+
+        assert str(jfk_addr.address_id) in addr_ids
+        assert str(agnostic_addr.address_id) in addr_ids
+        assert str(de_addr.address_id) not in addr_ids
+    finally:
+        db.execute(text("delete from conversation_session where session_id = :sid"), {"sid": session.session_id})
+        db.execute(text("delete from uchoice_address where address_id in (:a, :b, :c)"), {
+            "a": jfk_addr.address_id, "b": de_addr.address_id, "c": agnostic_addr.address_id,
+        })
+        db.commit()
+
+
 def test_service_outside_the_authorized_address_using_set_gets_no_address_list(kefu_access):
     access, db = kefu_access
     names = {s["name"] for s in access.allowed_services}

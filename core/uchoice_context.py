@@ -63,7 +63,7 @@ def sku_label_map(db: DBSession) -> dict[str, str]:
     return {s.sku_code: s.description for s in db.query(UchoiceSku).all()}
 
 
-def address_candidates(db: DBSession, customer_id=None) -> list[dict]:
+def address_candidates(db: DBSession, customer_id=None, source_warehouse_code=None) -> list[dict]:
     """
     kefu-deterministic-response-plan.md Sec 5: the U-Choice address book is
     shared across every authorized U-Choice service -- `customer_id` is
@@ -80,10 +80,31 @@ def address_candidates(db: DBSession, customer_id=None) -> list[dict]:
     incident showed it contradicted the actual business rule; see
     docs/ai-collaboration/decisions.md's "Superseded or challenged
     assumptions").
+
+    source_warehouse_code, when given, scopes to addresses whose OWN
+    warehouse_code either matches it or is null (warehouse-agnostic, e.g.
+    "散客"/walk-in). Two addresses can share the identical physical addr and
+    differ only by which warehouse's outbound requests they're meant for
+    (e.g. "DE Warehouse", warehouse_code=JFK, a real JFK->DE inter-warehouse
+    transfer, vs. "DE仓库自提留存", warehouse_code=DE, a same-address
+    self-pickup entry for DE-sourced requests only) -- observed live to
+    confuse the AI into offering the wrong one for a JFK-sourced request,
+    since nothing distinguished them by function, only by which of two
+    near-identical labels textually resembled the customer's phrasing more
+    closely. core/pre_confirm_validators.py's _valid_destination_address_
+    required is the actual correctness backstop for this; this filter only
+    reduces how often the AI has to be corrected by it. Only meaningful for
+    uchoice_outbound_request's own candidate injection -- upsert_address
+    needs the FULL, unfiltered list to resolve create-vs-update, so its
+    caller must never pass this.
     """
     query = db.query(UchoiceAddress)
     if customer_id is not None:
         query = query.filter_by(customer_id=customer_id)
+    if source_warehouse_code is not None:
+        query = query.filter(
+            (UchoiceAddress.warehouse_code == source_warehouse_code) | (UchoiceAddress.warehouse_code.is_(None))
+        )
     rows = query.all()
     return [
         {
