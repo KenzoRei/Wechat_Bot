@@ -264,8 +264,11 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
 
     auto_resolved = _autoresolve_single_candidate(context, service, session, db)
 
-    # Q3 fix: if AI already has all fields from the first message, go straight to confirmation
-    if ai_response.all_fields_collected or auto_resolved or _outbound_required_fields_present(service, session):
+    # Ready once every declared required field is actually present post-
+    # sanitization (_all_required_fields_present), or a deterministic
+    # override applies -- never on the AI's own pre-sanitization claim (see
+    # that function's docstring for why).
+    if _all_required_fields_present(service, session.collected_fields) or auto_resolved or _outbound_required_fields_present(service, session):
         _on_all_fields_collected(context, ai_response, service, session, db)
     else:
         session_manager.add_message(db, session, "assistant", ai_response.reply)
@@ -458,6 +461,32 @@ def _sanitize_role_change_fields_before_persistence(extracted_fields: dict, db: 
     return result
 
 
+def _all_required_fields_present(service: dict, collected_fields: dict) -> bool:
+    """
+    Generic post-sanitization readiness check, mirroring core/kefu_turn_apply.py's
+    predicate of the same name. Smart Robot historically had no equivalent —
+    every readiness decision leaned on ai_response.all_fields_collected, the
+    AI's OWN claim, computed before _sanitize_extracted_fields_before_persistence
+    ever ran. If the field the AI based that claim on gets silently dropped by
+    sanitization (a malformed non-list sku_lines value, etc.), trusting the
+    stale claim lets a turn sail past a missing-field re-prompt it should have
+    hit — the same bug fixed on the Kefu side in commit 38c812a.
+
+    Deliberately service-agnostic: an empty input_schema.required list (most
+    read-only services) is ready immediately; every other service is ready
+    only once every one of its declared required fields is actually present
+    and non-empty in collected_fields. This is the sole general authority at
+    both readiness branch points below -- the AI's all_fields_collected flag
+    is no longer consulted there. Existing deterministic overrides
+    (_autoresolve_single_candidate, _outbound_required_fields_present) remain
+    unchanged alongside it; they cover genuine cases (a single eligible
+    reference_serial candidate, uchoice_outbound_request's boxes_per_pallet
+    sub-field) this generic schema check was never meant to replace.
+    """
+    required = (service.get("input_schema") or {}).get("required") or []
+    return all(collected_fields.get(field) not in (None, "", []) for field in required)
+
+
 def _outbound_required_fields_present(service: dict, session) -> bool:
     """
     Deterministic override for uchoice_outbound_request: its only genuinely
@@ -525,8 +554,10 @@ def _on_all_fields_collected(
     db: DBSession
 ) -> None:
     """
-    Shared branch point once all_fields_collected=True — used by both
-    _handle_new_request and _handle_continuation. Resolves a target request
+    Shared branch point once every required field is genuinely present
+    (per _all_required_fields_present) or a deterministic override applies
+    — used by both _handle_new_request and _handle_continuation. Resolves
+    a target request
     for targets_existing_request services, runs pre-confirmation validators,
     then either shows a confirmation template or executes immediately
     depending on requires_confirmation.
@@ -935,8 +966,12 @@ def _handle_continuation(context: dict, ai_response: AIResponse, db: DBSession) 
 
     auto_resolved = service is not None and _autoresolve_single_candidate(context, service, session, db)
     force_complete = service is not None and _outbound_required_fields_present(service, session)
+    # Ready once every declared required field is actually present post-
+    # sanitization -- never on the AI's own pre-sanitization claim (see
+    # _all_required_fields_present's docstring for why).
+    schema_ready = service is not None and _all_required_fields_present(service, session.collected_fields)
 
-    if (ai_response.all_fields_collected or auto_resolved or force_complete) and service is not None:
+    if (schema_ready or auto_resolved or force_complete) and service is not None:
         _on_all_fields_collected(context, ai_response, service, session, db)
     else:
         session_manager.add_message(db, session, "assistant", ai_response.reply)
@@ -1095,16 +1130,28 @@ def _handle_cancel(context: dict, db: DBSession) -> None:
     Only marks request_log as cancelled if this session actually owns the
     log (i.e. its service isn't targets_existing_request) — cancelling a
     completion-confirmation session must never touch the original request
-    it was merely referencing.
+    it was merely referencing. The same owns_log distinction gates whether
+    the cancellation message names a serial number: a targets_existing_
+    request session's log is the ORIGINAL request it references, not one
+    this session owns, so naming it here would falsely imply that request
+    itself was cancelled (matches Kefu's ConfirmationCancelledOutcome).
     """
     session = _get_session(context, db)
+    serial_number = None
     if session:
         service = _find_service_by_type_id(context, session.service_type_id)
         owns_log = service is None or not service.get("targets_existing_request", False)
         if session.request_log_id and owns_log:
             request_logger.mark_cancelled(db, session.request_log_id)
+            from models.request_log import RequestLog
+            log = db.query(RequestLog).filter_by(log_id=session.request_log_id).first()
+            if log:
+                serial_number = log.serial_number
         session_manager.close_session(db, session, status="cancelled")
-    send_message(context, "已取消，您可以随时发起新申请。")
+    if serial_number:
+        send_message(context, f"已取消（{serial_number}），您可以随时发起新申请。")
+    else:
+        send_message(context, "已取消，您可以随时发起新申请。")
 
 
 def _handle_check_services(context: dict, ai_response: AIResponse) -> None:
