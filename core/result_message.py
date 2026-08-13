@@ -269,6 +269,25 @@ def _empty_sections_builder(context: dict, db: DBSession) -> list[dict]:
     return []
 
 
+def _outbound_request_result_sections_builder(context: dict, db: DBSession) -> list[dict]:
+    """
+    uchoice_outbound_request — same "nothing restated" rule as inbound
+    (_empty_sections_builder), except this workflow's own generate_pdf_stub
+    step (phase3-outbound-pdf-timing.md: the delivery-order PDF is built at
+    REQUEST time now, not at completion) computes a genuinely new pdf_url
+    right here, in this same reply -- there's no earlier turn that could
+    have shown it. _empty_sections_builder's blanket [] used to silently
+    discard that link, so the PDF was built successfully but never reachable
+    by the user (observed live: build succeeds standalone, link just never
+    made it into the reply). Mirrors _completion_result_sections_builder's
+    identical pdf_url raw-section pattern.
+    """
+    pdf_url = context.get("result", {}).get("pdf_url")
+    if not pdf_url:
+        return []
+    return [{"label": None, "type": "raw", "items": [f"[下载送货单]({pdf_url})（1小时内有效）"]}]
+
+
 def _warehouse_storage_summary_sections(db: DBSession, warehouse_code: str | None, label_prefix: str) -> list[dict]:
     """
     Shared "show the full updated storage for one warehouse" block — used by
@@ -431,7 +450,7 @@ RESULT_BUILDERS: dict[str, Callable[[dict, DBSession], list[dict]]] = {
     "view_pending_digest":         _pending_digest_sections_builder,
     "view_invoice":                _invoice_sections_builder,
     "uchoice_inbound_request":     _empty_sections_builder,
-    "uchoice_outbound_request":    _empty_sections_builder,
+    "uchoice_outbound_request":    _outbound_request_result_sections_builder,
     "confirm_inbound_completion":  _completion_result_sections_builder,
     "confirm_outbound_completion": _completion_result_sections_builder,
     "adjust_storage":              _adjust_result_sections_builder,
