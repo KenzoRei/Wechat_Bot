@@ -258,19 +258,31 @@ def _build_uchoice_candidates(
     # matched_address_id, so it's included here too (previously a gap: it
     # received no address candidates at all).
     if names & {"uchoice_outbound_request", "upsert_address"}:
-        # Scoped to the request's own source warehouse ONLY when
-        # uchoice_outbound_request is the sole possible service this turn --
-        # upsert_address needs the full, unfiltered book to resolve
-        # create-vs-update, so any turn where it's still a live possibility
-        # (a brand-new, not-yet-service-locked session) must not filter.
+        # Scoped to the request's own source warehouse by default. Originally
+        # this only filtered when uchoice_outbound_request was the *sole*
+        # possible service, on the reasoning that upsert_address needs the
+        # full, unfiltered book -- but that made the filter a dead letter in
+        # the single most common case: a brand-new session's first message,
+        # where the role (e.g. warehouseman) is also granted upsert_address,
+        # so `names` is the full role set and the exact-match check always
+        # failed. Live incident: "发货到DE" on turn 1 still offered the
+        # DE-scoped self-pickup address to a JFK-sourced request, because
+        # nothing had locked the session to uchoice_outbound_request yet.
+        # Flipped: filter is now the default, and unfiltered is reserved for
+        # the one case that actually needs it -- a session ALREADY locked to
+        # upsert_address specifically (not merely "could still become one").
         # scope_warehouse mirrors the SKU catalog scoping above/default-JFK
         # reasoning: real customers essentially never state warehouse_code,
         # so candidates should reflect whichever warehouse the request will
         # actually end up defaulting to.
-        if names == {"uchoice_outbound_request"}:
-            candidates["addresses"] = uchoice_context.address_candidates(db, source_warehouse_code=scope_warehouse or "JFK")
-        else:
+        active_is_upsert_address = (
+            session is not None and session.service_type_id
+            and by_id.get(str(session.service_type_id)) == "upsert_address"
+        )
+        if active_is_upsert_address:
             candidates["addresses"] = uchoice_context.address_candidates(db)
+        else:
+            candidates["addresses"] = uchoice_context.address_candidates(db, source_warehouse_code=scope_warehouse or "JFK")
         # boxes_per_pallet resolution (default-fill, ambiguity-clarification,
         # stock-sufficiency check) is entirely code-level now — see
         # workflow_engine._resolve_outbound_pallet_defaults — so the AI no
