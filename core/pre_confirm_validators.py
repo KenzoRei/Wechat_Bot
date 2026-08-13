@@ -570,6 +570,18 @@ def _valid_destination_address_required(context: dict, collected_fields: dict, d
     as the loose-line/pallet-bucket issues fixed earlier: an AI field
     extraction that's supposed to be constrained to a known set of values
     needs a deterministic backstop, not just a prompt instruction.
+
+    Also rejects an address whose OWN uchoice_address.warehouse_code (which
+    source warehouse's outbound requests this address is a legitimate
+    candidate for) doesn't match this request's collected warehouse_code.
+    Observed live: two addresses can share the identical physical addr and
+    differ only by which warehouse's outbound flow they're meant for (e.g.
+    "DE Warehouse", warehouse_code=JFK, a real JFK->DE inter-warehouse
+    transfer vs. "DE仓库自提留存", warehouse_code=DE, a same-address
+    self-pickup entry that does NOT credit any warehouse's storage) --
+    nothing previously stopped the wrong one from reaching confirmation for
+    a JFK-sourced request. A null addr.warehouse_code (e.g. "散客"/walk-in)
+    is warehouse-agnostic and always allowed.
     """
     dest_id = collected_fields.get("destination_address_id")
     if not dest_id:
@@ -592,7 +604,17 @@ def _valid_destination_address_required(context: dict, collected_fields: dict, d
 
     from models.uchoice import UchoiceAddress
     addr = db.query(UchoiceAddress).filter_by(address_id=dest_id).first()
-    return None if addr is not None else not_found_message
+    if addr is None:
+        return not_found_message
+
+    warehouse_code = collected_fields.get("warehouse_code")
+    if warehouse_code and addr.warehouse_code and addr.warehouse_code != warehouse_code:
+        label = addr.company_name or addr.addr
+        return (
+            f"送货地址「{label}」不是 {warehouse_code} 仓出库申请的可选目的地"
+            f"（该地址仅适用于 {addr.warehouse_code} 仓出库），请重新确认目的地或联系管理员。"
+        )
+    return None
 
 
 PRE_CONFIRM_VALIDATORS = {

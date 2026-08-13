@@ -258,7 +258,19 @@ def _build_uchoice_candidates(
     # matched_address_id, so it's included here too (previously a gap: it
     # received no address candidates at all).
     if names & {"uchoice_outbound_request", "upsert_address"}:
-        candidates["addresses"] = uchoice_context.address_candidates(db)
+        # Scoped to the request's own source warehouse ONLY when
+        # uchoice_outbound_request is the sole possible service this turn --
+        # upsert_address needs the full, unfiltered book to resolve
+        # create-vs-update, so any turn where it's still a live possibility
+        # (a brand-new, not-yet-service-locked session) must not filter.
+        # scope_warehouse mirrors the SKU catalog scoping above/default-JFK
+        # reasoning: real customers essentially never state warehouse_code,
+        # so candidates should reflect whichever warehouse the request will
+        # actually end up defaulting to.
+        if names == {"uchoice_outbound_request"}:
+            candidates["addresses"] = uchoice_context.address_candidates(db, source_warehouse_code=scope_warehouse or "JFK")
+        else:
+            candidates["addresses"] = uchoice_context.address_candidates(db)
         # boxes_per_pallet resolution (default-fill, ambiguity-clarification,
         # stock-sufficiency check) is entirely code-level now — see
         # workflow_engine._resolve_outbound_pallet_defaults — so the AI no
