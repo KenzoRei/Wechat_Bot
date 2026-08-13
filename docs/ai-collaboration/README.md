@@ -19,13 +19,21 @@ self-registration) are complete, signed, and shipped (`7374037` on `main`).
 Round 54 opened a new, unrelated-in-scope thread: migrating the
 customer-facing side of the bot from Smart Robot to WeChat Kefu, after the
 user discovered Smart Robot cannot function in groups containing external
-contacts. See `kefu-migration-context.md` for the shared research context
-and `status.md` for current handoff state. The historical discussion through
-round 102 and its former detailed status are preserved under `archive/`;
-`current-phase.md` and `decisions.md` provide concise working indexes. Same
-file-based process, same
-two-stage authorization rule (plan first, implementation only after
-explicit user approval of a signed document).
+contacts. That thread's "deterministic Kefu operational responses" phase
+(rounds 103-124) is also complete, signed, implemented, and shipped —
+archived under `archive/discussion-rounds-103-124.md`. Round 125 opened a
+new phase: Smart Robot / Kefu parity, triggered by the user's Kefu account
+being blocked by WeCom's own platform-side risk-control system (a WeCom
+account-state issue, not a defect in this codebase) — the user wants Smart
+Robot usable as a fallback without having fallen behind what the Kefu
+pipeline independently learned since the two diverged. See
+`kefu-migration-context.md` for the original shared research context and
+`status.md` for current handoff state. The historical discussion through
+round 102 (and separately, rounds 103-124) and their former detailed status
+are preserved under `archive/`; `current-phase.md` and `decisions.md`
+provide concise working indexes reflecting the current (round 125+) phase.
+Same file-based process, same two-stage authorization rule (plan first,
+implementation only after explicit user approval of a signed document).
 
 ## File ownership
 

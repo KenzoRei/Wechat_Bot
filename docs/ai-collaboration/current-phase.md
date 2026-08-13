@@ -1,123 +1,116 @@
-# Current phase: deterministic Kefu operational responses
+# Current phase: Smart Robot / Kefu parity
 
 ## State
 
-> **Round 112 correction, closed by round 114:** rounds 103, 105, 107, 109,
-> 111 (attributed to "Claude Code" below) were actually written by a
-> Codex-spawned subagent mislabeled `claude_code` -- disclosed by Codex,
-> relayed by the user (discussion.md round 112). **Round 114 is this phase's
-> first genuine independent Claude Code review**: the goal and plan v2 were
-> re-verified against the current repository from scratch (not inferred from
-> rounds 103-111) and confirmed, with two non-blocking findings recorded.
-> The goal/plan below now carry one real cross-model signature (round 114)
-> alongside Codex's own rounds 104/106/108/110.
+The prior phase ("deterministic Kefu operational responses") is complete,
+signed, implemented, mutually cross-reviewed, and shipped. Its full record
+is archived at
+[`archive/discussion-rounds-103-124.md`](archive/discussion-rounds-103-124.md)
+and [`archive/status-through-round-124.md`](archive/status-through-round-124.md).
+This phase (round 125+, active in [`discussion.md`](discussion.md)) is
+unrelated in trigger but built on top of that same architecture and the 11
+further commits that landed on top of it since (listed in full in round
+125) — none of which touch the signed architecture itself.
 
-> **Round 123 update:** implementation is COMPLETE and mutually
-> cross-reviewed. The user authorized implementation in round 116; Claude
-> Code's Stage A/B (round 118) and Codex's Stage C/D/E (round 122) are both
-> done. Each side found and the other fixed real issues in the other's
-> diff (rounds 119-121); Claude's final full-diff pass (round 123) found no
-> blockers, only 2 minor non-blocking items. Commit, push, deployment,
-> production migration, and operational API calls remain separately gated
-> and are NOT authorized by any of this.
+## Trigger
 
-> **Round 124 update:** both of round 123's minor non-blocking findings are
-> fixed (new `ConfirmationRecoveringOutcome` outcome/renderer replacing a
-> hardcoded string; a stray indentation/stale-comment fix in
-> `kefu_case_adapter.py`). Round 124 also removed a real domain-modeling
-> error, corrected directly by the user: `customer_id` was wrongly required
-> for `uchoice_inbound_request`/`uchoice_outbound_request` -- every current
-> U-Choice service is performed on behalf of U-Choice itself, the sole
-> platform tenant, and `customer_id` is dormant infrastructure for a real
-> future second tenant, not something today's services should collect. See
-> `decisions.md`'s "Superseded or challenged assumptions" for the full
-> correction. Full offline suite 267/267, both real-Postgres suites green.
-> Commit, push, deployment, production migration, and operational API calls
-> remain separately gated and are NOT authorized by any of this.
+The user's Kefu account was blocked by WeCom's platform-side risk-control
+system — confirmed via WeCom's own error text on account-management API
+calls (`"微信客服当前处于联合版模式，而调用接口的access_token是通过独立版
+secret获取的"`) and independently consistent with `work.weixin.qq.com/nl/norm`'s
+"频繁注册、批量注册" (frequent/batch registration) prohibition, which the
+account-recreation attempt sequence closely matches. This is a WeCom
+account-state issue, not a defect in this codebase, and not fixable from
+here — the user is pursuing it through WeCom support separately, duration
+unknown.
 
-Documentation reorganization (Phase 0) is complete and independently verified
-(round 104, genuinely Codex). The goal is confirmed and plan v2 is signed by
-both a genuine Codex review and a genuine Claude Code review (round 114).
-Implementation is complete under that plan and its round-124 corrections (see
-the updates above).
+## Goal
 
-## Jointly confirmed goal supplied by the user
+Make `core/workflow_engine.py` (the Smart Robot channel — internal WeCom
+group chats, `@bot` mentions, `api/webhook.py`) usable as a functional
+fallback for U-Choice warehouse operations, at parity with everything
+`core/kefu_turn_apply.py` (the Kefu channel — customer-facing 1:1 chat
+links) has independently learned since the two pipelines diverged. The two
+never share turn-application code by design (`kefu_turn_apply.py`'s own
+docstring: it never calls `workflow_engine.py`), though they do share
+`core/pre_confirm_validators.py`, `core/result_message.py`,
+`core/confirmation.py`, and `handlers/uchoice/*`.
 
-Refactor the Kefu operational workflow so AI interprets user language, while
-backend code exclusively validates business facts, performs state transitions,
-and renders operational responses that accurately reflect committed database
-state.
+## Findings (independently confirmed by both agents, rounds 125-127)
 
-Proposed responsibility boundary to confirm or challenge:
+**Real correctness gap**, same bug class as commit `38c812a`'s Kefu fix:
+`workflow_engine.py` lines 268 and 939 still contain
+`ai_response.all_fields_collected or ...` — the AI's raw, pre-sanitization
+claim can bypass a missing-field check the same way it did in Kefu before
+that fix.
 
-- AI identifies intent and service type.
-- AI extracts and normalizes user-provided fields.
-- AI may semantically match or rank an arbitrary destination against the
-  shared U-Choice address candidates supplied by the backend.
-- AI returns candidate IDs and structured matched/ambiguous/unmatched evidence,
-  not operational prose for delivery.
-- The backend validates every AI-selected identifier against the supplied
-  candidate set and owns ambiguity thresholds/confirmation policy.
-- The U-Choice address book is shared by authorized U-Choice services; address
-  visibility is not partitioned by `customer_id`.
-- Outbound feasibility is calculated in total boxes across all compatible
-  inventory buckets in the chosen warehouse. Requested pallet layout does not
-  require a matching stored pallet bucket because boxes may be repalletized.
-- The box-level rule applies both to the early feasibility decision and to
-  atomic execution: source picks, leftovers, and final packing must conserve
-  boxes, with stock revalidated when fulfillment is confirmed.
-- The backend exclusively owns authorization, inventory arithmetic, request
-  numbers, confirmation, cancellation, workflow transitions, persistence, and
-  claims that an operation succeeded or completed.
-- All user-visible operational replies are deterministic and derived from
-  validated or committed backend results. AI-authored prose is not sent on an
-  operational workflow path and AI must not claim a state change.
-- Completion notices apply only to genuinely completed inbound/outbound
-  requests, never read-only queries.
+**Codex's important extension (round 126, verified by Claude Code round
+127 against real DB data)**: unlike Kefu, Smart Robot has no generic
+post-sanitization `input_schema.required` readiness predicate. Deleting
+only `ai_response.all_fields_collected` while keeping `auto_resolved`/
+`_outbound_required_fields_present` would strand FedEx/UPS and most other
+services — verified live: both have `targets_existing_request=False` and
+13 required fields each, and both existing overrides are unconditionally
+`False` for them. The plan adds a generic schema-required predicate
+(mirroring Kefu's `_all_required_fields_present`) as the new general
+authority at both branch points, alongside the existing overrides
+(unchanged).
 
-Clarifications, independently re-confirmed by a real Claude Code session in
-round 114 (originally drafted in the mislabeled round 105):
+**Minor UX gap**: `workflow_engine.py`'s `_handle_cancel` doesn't name the
+request in its cancellation message, unlike Kefu's — fix reuses the
+`owns_log` boolean the function already computes.
 
-- `customer_id` may remain as provenance/reporting metadata, but it does not
-  control shared address visibility, reuse, or matching.
-- “Reject early” starts after the warehouse is explicitly resolved or
-  deterministically defaulted; no warehouse is guessed when policy leaves it
-  unresolved.
-- Existing Kefu single-transaction, replay/deduplication, and exactly-once
-  completion-notice guarantees remain standing constraints.
+**Confirmed already shared / no action needed**: `pre_confirm_validators.py`
+fixes (confirmed zero `source_channel` references — channel-neutral),
+storage-listing grouping/zero-filtering, and the loose-pick
+outbound-completion resolver (Smart Robot had this first; Kefu's version
+was ported from it).
 
-Two non-blocking findings from round 114's review, to fold into
-implementation: (1) Sec 6.3.4's stock-conflict clearing step should also
-clear `destination_packing_lines`, not just `fulfillment_lines`/computed
-picks; (2) plan Sec 12 transfers `core/kefu_turn_apply.py`/
-`core/kefu_case_adapter.py` ownership from Claude Code (per the original
-`kefu-migration-plan.md` Sec 12) to Codex for this phase -- a reasonable,
-explicit transfer given Codex already built the confirm/cancel state machine
-in those files (round 101), recorded here so it isn't a silent supersession.
+**Confirmed intentionally different by design, do not port**: session-
+conflict detection, the admin purge command, invoice-as-chat-file delivery,
+and `check_services` AI-authored-vs-deterministic rendering — each has a
+structural reason tied to the channel it's built for.
 
-## Motivating incident
+Full detail, evidence, and exact file/line citations are in rounds 125-127
+of [`discussion.md`](discussion.md) — this file is a compressed index, not
+a substitute for it. The concrete signed plan is
+[`smart-robot-kefu-parity-plan.md`](smart-robot-kefu-parity-plan.md).
 
-A Kefu message requesting two 72-box pallets of S2 was correctly classified as
-an outbound request. The reply nevertheless claimed an add-address transition
-that the Kefu backend had not executed and prepended an unrelated successful
-read-only request number as if a warehouse had completed it. The intended
-behavior must also reject an outbound request when total available boxes are
-insufficient before beginning address maintenance.
+## Required sequence
 
-## Required sequence after the goal is signed
+1. ~~Codex independently confirms or extends Claude Code's round-125
+   findings against the current repository (not on faith).~~ **Done, round
+   126** — found and the plan addresses a real gap a naive port would have
+   missed.
+2. ~~Both agents jointly draft and sign a concrete implementation +
+   regression-test plan.~~ **Done** — `smart-robot-kefu-parity-plan.md`
+   signed by Codex (round 126) and independently verified/signed by Claude
+   Code against real DB schema data (round 127).
+3. ~~The user explicitly authorizes implementation of the signed plan.~~
+   **Done**, approved 2026-08-13.
+4. ~~Production files changed.~~ **Done** — `core/workflow_engine.py`
+   implemented by Claude Code, independently reviewed and tested by Codex
+   (`tests/test_smart_robot_parity.py`), reciprocally reviewed by Claude
+   Code (round 129, no issues). 334 offline + 74 real-Postgres, all green.
 
-1. Codex and Claude Code independently confirm or challenge the candidate goal.
-2. They write and sign a concrete implementation and regression-test plan.
-3. The user explicitly authorizes implementation of that signed plan.
-4. Only then may production files be changed.
+**Phase complete.** Only remaining step: the user's separate commit/push
+authorization (not implied by implementation approval, same standing rule
+as every prior phase).
 
-Commit, push, deployment, operational API calls, and production database
-changes remain separately authorized actions; none are inferred from approval
-to discuss or plan.
+Commit, push, deployment, and any operational API call remain separately
+authorized actions, same standing rule as every prior phase. Kefu API calls
+specifically are also currently blocked at the platform level regardless of
+any authorization here.
 
 ## Relevant history
 
-- Full chronological discussion: [`archive/discussion-rounds-001-102.md`](archive/discussion-rounds-001-102.md)
-- Former detailed handoff: [`archive/status-through-round-102.md`](archive/status-through-round-102.md)
+- Full chronological discussion through round 102:
+  [`archive/discussion-rounds-001-102.md`](archive/discussion-rounds-001-102.md)
+- Full chronological discussion, rounds 103-124:
+  [`archive/discussion-rounds-103-124.md`](archive/discussion-rounds-103-124.md)
+- Former detailed handoffs:
+  [`archive/status-through-round-102.md`](archive/status-through-round-102.md),
+  [`archive/status-through-round-124.md`](archive/status-through-round-124.md)
 - Signed Kefu migration plan: [`kefu-migration-plan.md`](kefu-migration-plan.md)
+- Signed deterministic-response plan: [`kefu-deterministic-response-plan.md`](kefu-deterministic-response-plan.md)
 - Current decision index: [`decisions.md`](decisions.md)
