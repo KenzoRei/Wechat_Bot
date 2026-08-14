@@ -117,7 +117,7 @@ def build_invoice_workbook(
     # ── Transportation & Palletization (outbound completions) ──────────────
     from models.uchoice import UchoiceAddress
 
-    ws2 = wb.create_sheet("Transportation & Palletization")
+    ws2 = wb.create_sheet("outbound")
     _write_header(ws2, 1, [
         "Serial Number", "Completed At (UTC)", "SKU Lines",
         "Destination Company", "Destination Address",
@@ -157,7 +157,7 @@ def build_invoice_workbook(
     _autosize(ws2)
 
     # ── Unpacking (inbound completions) ─────────────────────────────────────
-    ws3 = wb.create_sheet("Unpacking")
+    ws3 = wb.create_sheet("inbound")
     _write_header(ws3, 1, ["Serial Number", "Completed At (UTC)", "SKU Lines", "Unpacking Fee"])
     inbound_logs = _completed_logs(db, "uchoice_inbound_request", warehouse_code, start, end_exclusive)
     for log in inbound_logs:
