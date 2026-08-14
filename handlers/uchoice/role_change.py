@@ -18,6 +18,7 @@ class RoleChangeHandler(BaseHandler):
     def handle(self, context: dict, config: dict, db) -> dict:
         from models.group import GroupMember
         from models.role import Role
+        from core.admin_invariants import lock_group_admin_invariant, would_remove_last_admin
         from core.uchoice_constants import ASSIGNABLE_ROLE_NAMES, VALID_WAREHOUSE_CODES
         from core.role_identity import parse_target_identity
 
@@ -48,6 +49,30 @@ class RoleChangeHandler(BaseHandler):
         role = db.query(Role).filter_by(name=new_role_name).first()
         if role is None:
             raise RuntimeError(f"未知角色：{new_role_name}")
+
+        # Codex's third-round review: core/pre_confirm_validators.py's
+        # _last_admin_protection runs earlier, before the user ever sees a
+        # confirmation prompt -- unlocked, and with a real time gap (the
+        # user has to actually confirm) during which a concurrent REST
+        # admin-API call or another chat confirmation could change the
+        # group's admin count. This is the actual mutation point, so this
+        # is where the invariant must be authoritatively re-checked, under
+        # the same advisory lock the REST APIs use, immediately before
+        # commit -- not trusted from the earlier pre-confirm pass.
+        lock_group_admin_invariant(db, group_id)
+        db.refresh(target)  # re-read post-lock in case it changed underneath the earlier check
+
+        current_role = db.query(Role).filter_by(role_id=target.role_id).first()
+        is_currently_active_admin = bool(
+            current_role and current_role.name == "admin" and target.is_active
+        )
+        if would_remove_last_admin(
+            db, group_id,
+            is_currently_active_admin=is_currently_active_admin,
+            new_role_name=new_role_name,
+            new_is_active=None,  # this handler never changes is_active
+        ):
+            raise RuntimeError("无法将该成员的角色改为非管理员——该群组当前仅剩一名管理员。")
 
         target.role_id = role.role_id
         # warehouse_code is meaningful only for warehouseman — cleared on any other role
