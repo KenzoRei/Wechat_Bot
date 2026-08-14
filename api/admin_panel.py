@@ -104,6 +104,8 @@ _PANEL_HTML = """<!doctype html>
   .card-header .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
   table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  td.actions { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+  td.actions button { padding: 6px 10px; }
   th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
   tr:last-child td { border-bottom: none; }
   button {
@@ -290,7 +292,7 @@ function kefuRoleRowHtml(s, roles) {
             style="width:90px;${isWarehouseman ? "" : "display:none"}" placeholder="warehouse"></td>
       <td>${s.is_active ? '<span class="badge ok">active</span>' : '<span class="badge bad">suspended</span>'}</td>
       <td>${fmtDate(s.created_at)}</td>
-      <td>
+      <td class="actions">
         <button onclick="saveKefuRole('${s.staff_id}')">Save</button>
         <button class="secondary" onclick="deleteKefuStaff('${s.staff_id}')">Delete</button>
       </td>
