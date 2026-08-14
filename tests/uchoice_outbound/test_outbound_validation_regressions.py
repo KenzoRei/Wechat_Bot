@@ -1,5 +1,5 @@
 """
-Pre-implementation baseline for Phase 1 (agreed-plan.md): Sev 1 (zero-bucket
+Regression coverage for outbound validation and zero-bucket handling:
 None/未知 leak) and Sev 2 (missing sku_code reaches confirmation).
 
 Uses the real dev Postgres DB (not a mock) — Sev 1 specifically depends on
@@ -9,10 +9,8 @@ session (test_full_redesign.py's 9 passing groups). A throwaway warehouse
 code (TESTWHX) isolates fixtures from real data; everything is cleaned up
 in a finally block.
 
-Run against CURRENT, unmodified core/workflow_engine.py + core/confirmation.py
-+ core/pre_confirm_validators.py. Sev 1/Sev 2 cases are marked xfail(strict=True)
--- they document real bugs and must fail until Phase 1 lands. If one starts
-passing unexpectedly, pytest fails loudly rather than silently losing coverage.
+These cases protect fixes that prevent missing SKU data from reaching
+confirmation and prevent unknown values from leaking into storage buckets.
 """
 import uuid
 import pytest

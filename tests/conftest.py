@@ -1,79 +1,86 @@
-"""
-Shared safety guards for every test package under tests/ that touches the
-real dev database, per the signed plan's layered isolation requirement
-(systemic-validation-addendum.md Sec 5 / agreed-plan.md Sec 7) and Codex
-round-30's finding 4: patching only the public client module exports is not
-enough, because production code imports these functions by value
-(`from clients.x import y`) -- the bound alias in the importing module keeps
-its own reference to the original function, unaffected by patching the
-source module's attribute. Every layer below must be patched separately.
-
-Also does NOT replace tests/uchoice_lifecycle/conftest.py, which still runs
-its own (SQLite-scoped) block for its own directory.
-"""
+"""Shared configuration and safety guards for the complete test suite."""
 import os
 import pytest
 
 
-# The production callback is always mounted. Tests use deterministic callback
-# crypto so importing config never depends on developer or deployment secrets.
-os.environ.setdefault("WECHAT_KEFU_TOKEN", "test-kefu-callback-token")
-os.environ.setdefault(
-    "WECHAT_KEFU_ENCODING_AES_KEY",
-    "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
-)
+# Application configuration is validated during import. Offline tests use
+# inert values and an in-memory database, so they never depend on a developer's
+# .env file. PostgreSQL tests must opt in through TEST_DATABASE_URL below.
+_OFFLINE_ENV = {
+    "WECHAT_CORP_ID": "offline-test",
+    "WECHAT_TOKEN": "offline-test",
+    "WECHAT_ENCODING_AES_KEY": "offline-test",
+    "WECHAT_KEFU_TOKEN": "offline-test",
+    "WECHAT_KEFU_ENCODING_AES_KEY": "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
+    "YIDIDA_BASE_URL": "https://blocked.invalid",
+    "OMS_BASE_URL": "https://blocked.invalid",
+    "CLAUDE_API_KEY": "offline-test",
+    "OPENAI_API_KEY": "offline-test",
+    "ADMIN_API_KEY": "offline-test",
+    "DATABASE_URL": "sqlite:///:memory:",
+}
+
+_EXPLICIT_TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+
+for _name, _value in _OFFLINE_ENV.items():
+    os.environ.setdefault(_name, _value)
+
+if _EXPLICIT_TEST_DATABASE_URL:
+    os.environ["DATABASE_URL"] = _EXPLICIT_TEST_DATABASE_URL
 
 
-_EXPECTED_DB_HOST_FRAGMENT = "dpg-d9p26h7lk1mc73a841d0-a.virginia-postgres.render.com"
+_PRODUCTION_DB_HOST_FRAGMENT = "dpg-d9p26h7lk1mc73a841d0-a.virginia-postgres.render.com"
 
 
 def pytest_configure(config):
-    # Import config (not raw os.environ) so .env has actually been loaded by
-    # the time this check runs -- checking os.environ directly at
-    # pytest_configure time could see an empty value that gets populated
-    # later by config.py's load_dotenv(), silently skipping the check
-    # (Codex round-30 finding 4, first half).
+    config.addinivalue_line("markers", "postgres: requires a disposable PostgreSQL database")
+    config.addinivalue_line("markers", "live: contacts a real external service")
+
     import config as app_config
     db_url = getattr(app_config, "DATABASE_URL", "") or ""
     if not db_url:
         raise pytest.UsageError("DATABASE_URL is empty after config load -- refusing to run tests with no identified database.")
-    if "sqlite" not in db_url and _EXPECTED_DB_HOST_FRAGMENT not in db_url:
+
+    if _PRODUCTION_DB_HOST_FRAGMENT in db_url:
         raise pytest.UsageError(
-            f"DATABASE_URL does not point at the known dev database "
-            f"({_EXPECTED_DB_HOST_FRAGMENT}) -- refusing to run tests against "
-            f"an unrecognized database. Got: {db_url!r}"
+            "Tests may never run against the production database. Provision a "
+            "disposable database and pass its URL as TEST_DATABASE_URL."
         )
 
-    # Codex round-3 review of the signed cross-review plan's implementation:
-    # a hostname-fragment match is not "an unmistakable test database
-    # marker" -- this repository has no separate test database (documented
-    # in tests/kefu_integration/test_kefu_admin_purge.py's own docstring,
-    # including a real incident where an unscoped test cancelled a live
-    # customer case). Until a genuinely isolated test database/schema is
-    # provisioned, running this suite against the shared production
-    # database must be an explicit, conscious choice every time, not merely
-    # possible because DATABASE_URL happens to already point there.
-    if "sqlite" not in db_url and os.environ.get("ALLOW_PRODUCTION_DB_TESTS") != "1":
-        raise pytest.UsageError(
-            "DATABASE_URL points at the shared production database, and no "
-            "isolated test database is configured. Refusing to run by "
-            "default -- set ALLOW_PRODUCTION_DB_TESTS=1 to confirm you "
-            "understand these tests will create, mutate, and delete rows "
-            "in the real production database (see "
-            "tests/kefu_integration/test_kefu_admin_purge.py's docstring "
-            "for why this matters), and accept the risk for this run."
-        )
+
+_POSTGRES_TEST_FILES = {
+    "tests/uchoice_outbound/test_before_persistence_validation.py",
+    "tests/uchoice_outbound/test_outbound_validation_regressions.py",
+    "tests/uchoice_outbound_pdf/test_pdf_timing.py",
+    "tests/uchoice_storage_atomicity/test_storage_atomicity_regressions.py",
+    "tests/uchoice_storage_atomicity/test_engine_split_boundaries.py",
+    "tests/uchoice_storage_atomicity/test_pre_confirm_validators.py",
+    "tests/uchoice_storage_atomicity/test_reply_failure_does_not_roll_back_inventory.py",
+}
+
+
+def pytest_collection_modifyitems(config, items):
+    """Classify database tests and skip them unless explicitly configured."""
+    # Only a value supplied to the pytest process is an opt-in. A value loaded
+    # later from a developer's .env file must not silently enable DB tests.
+    has_test_database = bool(_EXPLICIT_TEST_DATABASE_URL)
+    skip = pytest.mark.skip(reason="requires TEST_DATABASE_URL pointing to disposable PostgreSQL")
+
+    for item in items:
+        path = str(item.path).replace("\\", "/")
+        relative = path.split("/tests/", 1)[-1]
+        relative = f"tests/{relative}" if not relative.startswith("tests/") else relative
+        is_postgres = "/kefu_integration/" in f"/{path}" or relative in _POSTGRES_TEST_FILES
+        if is_postgres:
+            item.add_marker(pytest.mark.postgres)
+            if not has_test_database:
+                item.add_marker(skip)
 
 
 @pytest.fixture(autouse=True)
 def block_operational_clients(monkeypatch):
     """
-    Layered blocking, per Codex round-30 finding 4 / the signed isolation
-    design: patching the client modules alone is insufficient, since
-    production code holds its own bound references.
-
-    Fails closed: if any listed target can't be found/patched, this raises
-    at fixture setup rather than silently leaving a gap.
+    Block both client exports and aliases imported into production modules.
     """
 
     def blocked(*_args, **_kwargs):

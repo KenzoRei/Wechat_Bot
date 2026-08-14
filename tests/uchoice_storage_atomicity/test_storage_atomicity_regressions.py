@@ -1,9 +1,5 @@
 """
-Pre-implementation baseline for Phase 2's atomicity fix
-(systemic-validation-addendum.md Sec 2b/3b): apply_storage_delta commits on
-every call, so a multi-delta operation (move_storage's 4 calls/line,
-adjust/recount's N calls) can leave partial writes committed if a later
-delta fails.
+Regression coverage for atomic multi-delta storage operations.
 
 Uses the real dev Postgres DB directly -- SQLite (used by
 tests/uchoice_lifecycle/'s mocked suite) can't reproduce real multi-
@@ -12,9 +8,7 @@ here. A throwaway warehouse code (TESTWHX2, distinct from Phase 1's
 TESTWHX to avoid any cross-suite collision) isolates fixtures; only exact
 rows this module creates are ever deleted.
 
-Marked xfail(strict=True) until the atomicity fix lands -- these document a
-real bug (partial commit survives a mid-operation failure), not a design
-aspiration.
+The assertions protect against partial commits surviving a later failure.
 """
 import pytest
 from sqlalchemy import text

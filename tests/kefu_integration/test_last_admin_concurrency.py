@@ -114,6 +114,27 @@ def _count_active_admins(group_id, admin_role_id):
         db.close()
 
 
+def _run_and_join(threads: list[threading.Thread], *, timeout: float = 15) -> None:
+    """
+    Codex round-5 review: a hung thread must never leave cleanup racing a
+    still-open session holding the advisory lock, and must never keep the
+    test process alive after pytest itself has moved on. daemon=True means
+    a thread that outlives its join timeout can't block process exit;
+    asserting liveness after join (rather than silently falling through
+    with a possibly-incomplete `results` dict) turns a hang into a clear,
+    immediate test failure instead of a confusing downstream assertion or
+    a cleanup call left racing a lock the hung thread's transaction still
+    holds.
+    """
+    for t in threads:
+        t.daemon = True
+        t.start()
+    for t in threads:
+        t.join(timeout=timeout)
+    still_alive = [t.name for t in threads if t.is_alive()]
+    assert not still_alive, f"thread(s) did not finish within {timeout}s: {still_alive}"
+
+
 def _cleanup(setup_db, *, group_id, member_id, staff_id):
     setup_db.rollback()
     # Member/staff rows first -- KefuStaff.group_id is ondelete=RESTRICT,
@@ -169,12 +190,9 @@ def test_chat_vs_chat_concurrent_demotion_never_reaches_zero_admins():
             finally:
                 db.close()
 
-        t1 = threading.Thread(target=_demote, args=("member", member_id))
-        t2 = threading.Thread(target=_demote, args=("staff", tag_kefu_identity(staff_id)))
-        t1.start()
-        t2.start()
-        t1.join(timeout=15)
-        t2.join(timeout=15)
+        t1 = threading.Thread(target=_demote, args=("member", member_id), name="demote-member")
+        t2 = threading.Thread(target=_demote, args=("staff", tag_kefu_identity(staff_id)), name="demote-staff")
+        _run_and_join([t1, t2])
 
         assert set(results.keys()) == {"member", "staff"}
         outcomes = list(results.values())
@@ -236,12 +254,9 @@ def test_rest_vs_chat_concurrent_demotion_never_reaches_zero_admins(rest_client)
             )
             results["rest"] = "success" if resp.status_code == 200 else f"rejected: {resp.status_code}"
 
-        t1 = threading.Thread(target=_chat_demote_member)
-        t2 = threading.Thread(target=_rest_demote_staff)
-        t1.start()
-        t2.start()
-        t1.join(timeout=15)
-        t2.join(timeout=15)
+        t1 = threading.Thread(target=_chat_demote_member, name="chat-demote-member")
+        t2 = threading.Thread(target=_rest_demote_staff, name="rest-demote-staff")
+        _run_and_join([t1, t2])
 
         assert set(results.keys()) == {"chat", "rest"}
         outcomes = list(results.values())
