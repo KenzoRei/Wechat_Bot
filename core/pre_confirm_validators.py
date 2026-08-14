@@ -353,27 +353,30 @@ def _last_admin_protection(context: dict, collected_fields: dict, db: DBSession)
         return None
 
     if identity.kind == "kefu":
-        target_role_id = getattr(
-            db.query(KefuStaff).filter_by(staff_id=identity.key, group_id=group_id).first(),
-            "role_id", None,
-        )
+        target = db.query(KefuStaff).filter_by(staff_id=identity.key, group_id=group_id).first()
     else:
-        target_role_id = getattr(
-            db.query(GroupMember).filter_by(wechat_openid=identity.key, group_id=group_id).first(),
-            "role_id", None,
-        )
-    if target_role_id is None:
+        target = db.query(GroupMember).filter_by(wechat_openid=identity.key, group_id=group_id).first()
+    if target is None:
         return None
 
-    target_role = db.query(Role).filter_by(role_id=target_role_id).first()
+    target_role = db.query(Role).filter_by(role_id=target.role_id).first()
     if not target_role or target_role.name != "admin":
         return None  # target isn't currently an admin — nothing to protect
 
     from core.admin_invariants import would_remove_last_admin
 
+    # Codex round-4 review: this previously treated ANY current admin as
+    # "currently active" regardless of target.is_active, so demoting an
+    # already-inactive admin was wrongly rejected whenever exactly one
+    # OTHER admin was active -- would_remove_last_admin's count only ever
+    # counted active admins, but this call site claimed the target was one
+    # even when it demonstrably wasn't. RoleChangeHandler's own final check
+    # (handlers/uchoice/role_change.py) already got this right; this
+    # pre-confirm validator is a preview of that same authoritative check
+    # and must agree with it.
     if would_remove_last_admin(
         db, group_id,
-        is_currently_active_admin=True,
+        is_currently_active_admin=bool(target.is_active),
         new_role_name=collected_fields.get("new_role"),
         new_is_active=None,
     ):

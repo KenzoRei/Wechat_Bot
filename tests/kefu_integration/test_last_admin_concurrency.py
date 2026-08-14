@@ -13,9 +13,15 @@ Covers both gaps the review named explicitly:
 - REST-vs-chat: one REST kefu_staff PATCH racing one RoleChangeHandler
   demotion in the same group.
 
-Same production-database isolation discipline as the rest of this
-directory (test_kefu_admin_purge.py's docstring): all rows are created and
-cleaned up scoped to this test's own IDs.
+Codex round-4 review, finding 2: an earlier version of this file selected
+an EXISTING (possibly real, production) group and assumed the two
+synthetic admins it added were that group's only active admins -- invalid
+if the real group already had active admins, and it temporarily altered a
+real group's authorization population. Every test here now creates its own
+dedicated, clearly-marked GroupConfig (wechat_group_id prefixed
+"test-race-") so the admin-count assertions are actually guaranteed true
+by construction, and a crash before cleanup leaves a row that's
+unambiguously identifiable as synthetic test data, never a real group.
 """
 import threading
 import uuid
@@ -52,6 +58,18 @@ def rest_client():
 
     app.dependency_overrides[get_db] = _override_get_db
     return TestClient(app)
+
+
+def _make_test_group(db) -> GroupConfig:
+    group = GroupConfig(
+        wechat_group_id=f"test-race-{uuid.uuid4().hex[:12]}",
+        description="synthetic group for test_last_admin_concurrency.py -- safe to delete if found stale",
+        is_active=True,
+    )
+    db.add(group)
+    db.commit()
+    db.refresh(group)
+    return group
 
 
 def _make_group_member_admin(db, group_id, admin_role_id):
@@ -96,17 +114,36 @@ def _count_active_admins(group_id, admin_role_id):
         db.close()
 
 
+def _cleanup(setup_db, *, group_id, member_id, staff_id):
+    setup_db.rollback()
+    # Member/staff rows first -- KefuStaff.group_id is ondelete=RESTRICT,
+    # so the group row can't be deleted while a staff row still references it.
+    if member_id:
+        setup_db.execute(text("delete from group_member where wechat_openid=:oid"), {"oid": member_id})
+    if staff_id:
+        setup_db.execute(text("delete from kefu_staff where staff_id=:sid"), {"sid": staff_id})
+    if group_id:
+        setup_db.execute(text("delete from group_config where group_id=:gid"), {"gid": group_id})
+    setup_db.commit()
+    setup_db.close()
+
+
 def test_chat_vs_chat_concurrent_demotion_never_reaches_zero_admins():
     setup_db = SessionLocal()
+    group_id = None
     member_id = None
     staff_id = None
     try:
-        group = setup_db.query(GroupConfig).order_by(GroupConfig.created_at).first()
+        group = _make_test_group(setup_db)
+        group_id = group.group_id
         admin_role = setup_db.query(Role).filter_by(name="admin").one()
 
         member = _make_group_member_admin(setup_db, group.group_id, admin_role.role_id)
         staff = _make_kefu_staff_admin(setup_db, group.group_id, admin_role.role_id)
         member_id, staff_id = member.wechat_openid, staff.staff_id
+        # By construction, this fresh group's only two members are these
+        # two synthetic admins -- the "exactly one succeeds" assertions
+        # below are guaranteed true, not merely assumed.
 
         barrier = threading.Barrier(2)
         results = {}
@@ -151,21 +188,17 @@ def test_chat_vs_chat_concurrent_demotion_never_reaches_zero_admins():
             "the group must never end up with zero active admins"
         )
     finally:
-        setup_db.rollback()
-        if member_id:
-            setup_db.execute(text("delete from group_member where wechat_openid=:oid"), {"oid": member_id})
-        if staff_id:
-            setup_db.execute(text("delete from kefu_staff where staff_id=:sid"), {"sid": staff_id})
-        setup_db.commit()
-        setup_db.close()
+        _cleanup(setup_db, group_id=group_id, member_id=member_id, staff_id=staff_id)
 
 
 def test_rest_vs_chat_concurrent_demotion_never_reaches_zero_admins(rest_client):
     setup_db = SessionLocal()
+    group_id = None
     member_id = None
     staff_id = None
     try:
-        group = setup_db.query(GroupConfig).order_by(GroupConfig.created_at).first()
+        group = _make_test_group(setup_db)
+        group_id = group.group_id
         admin_role = setup_db.query(Role).filter_by(name="admin").one()
 
         member = _make_group_member_admin(setup_db, group.group_id, admin_role.role_id)
@@ -221,10 +254,4 @@ def test_rest_vs_chat_concurrent_demotion_never_reaches_zero_admins(rest_client)
             "the group must never end up with zero active admins across the REST and chat paths"
         )
     finally:
-        setup_db.rollback()
-        if member_id:
-            setup_db.execute(text("delete from group_member where wechat_openid=:oid"), {"oid": member_id})
-        if staff_id:
-            setup_db.execute(text("delete from kefu_staff where staff_id=:sid"), {"sid": staff_id})
-        setup_db.commit()
-        setup_db.close()
+        _cleanup(setup_db, group_id=group_id, member_id=member_id, staff_id=staff_id)

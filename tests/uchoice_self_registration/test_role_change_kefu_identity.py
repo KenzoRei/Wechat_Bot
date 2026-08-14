@@ -32,15 +32,18 @@ class _Query:
         if self.model is GroupMember:
             openid = self.filters.get("wechat_openid")
             if openid in self.db.smart_robot_members:
-                return SimpleNamespace(role_id=f"role-{self.db.smart_robot_members[openid]}")
+                role_name, is_active = self.db.smart_robot_members[openid]
+                return SimpleNamespace(role_id=f"role-{role_name}", is_active=is_active)
             return None
         if self.model is KefuStaff:
             staff_id = self.filters.get("staff_id")
             if staff_id in self.db.kefu_members:
+                role_name, is_active = self.db.kefu_members[staff_id]
                 return SimpleNamespace(
                     staff_id=staff_id,
-                    role_id=f"role-{self.db.kefu_members[staff_id]}",
+                    role_id=f"role-{role_name}",
                     warehouse_code=None,
+                    is_active=is_active,
                 )
             return None
         if self.model is Role:
@@ -56,17 +59,31 @@ class _Query:
     def count(self):
         role_id = self.filters.get("role_id")
         wanted_role = role_id.replace("role-", "") if role_id else None
+        wanted_active = self.filters.get("is_active")
         if self.model is GroupMember:
-            return sum(1 for r in self.db.smart_robot_members.values() if r == wanted_role)
+            return sum(
+                1 for role_name, is_active in self.db.smart_robot_members.values()
+                if role_name == wanted_role and (wanted_active is None or is_active == wanted_active)
+            )
         if self.model is KefuStaff:
-            return sum(1 for r in self.db.kefu_members.values() if r == wanted_role)
+            return sum(
+                1 for role_name, is_active in self.db.kefu_members.values()
+                if role_name == wanted_role and (wanted_active is None or is_active == wanted_active)
+            )
         return 0
 
 
 class _MockDB:
     def __init__(self, smart_robot_members=None, kefu_members=None):
-        self.smart_robot_members = smart_robot_members or {}
-        self.kefu_members = kefu_members or {}
+        # each dict: {key: role_name} or {key: (role_name, is_active)}
+        self.smart_robot_members = {
+            k: (v if isinstance(v, tuple) else (v, True))
+            for k, v in (smart_robot_members or {}).items()
+        }
+        self.kefu_members = {
+            k: (v if isinstance(v, tuple) else (v, True))
+            for k, v in (kefu_members or {}).items()
+        }
         self.all_roles = {"admin", "customer", "warehouseman", "accountant", "pending"}
         self.committed = False
 
@@ -75,6 +92,14 @@ class _MockDB:
 
     def commit(self):
         self.committed = True
+
+    def execute(self, *args, **kwargs):
+        """No-op: lock_group_admin_invariant's advisory lock has no meaning against this in-memory mock."""
+        return None
+
+    def refresh(self, obj):
+        """No-op: this mock's SimpleNamespace already reflects the current in-memory state."""
+        return None
 
 
 KEFU_ID = "11111111-1111-1111-1111-111111111111"
@@ -153,6 +178,24 @@ def test_last_admin_protection_allows_demotion_when_another_admin_exists_in_othe
         kefu_members={KEFU_ID: "admin"},
     )
     # Two admins total (one per channel) -- demoting one is fine.
+    error = pre_confirm_validators.run(
+        "role_change", {"group_id": "g1"},
+        {"target_openid": tag_kefu_identity(KEFU_ID), "new_role": "customer"}, db,
+    )
+    assert error is None
+
+
+def test_last_admin_protection_allows_reassigning_an_already_inactive_kefu_admin():
+    """
+    Codex round-4 review: mirrors the Smart Robot case in
+    test_role_change_hardening.py -- an inactive Kefu admin isn't
+    contributing to the active-admin count in the first place, so
+    reassigning them removes nothing.
+    """
+    db = _MockDB(
+        smart_robot_members={"active-admin": "admin"},
+        kefu_members={KEFU_ID: ("admin", False)},
+    )
     error = pre_confirm_validators.run(
         "role_change", {"group_id": "g1"},
         {"target_openid": tag_kefu_identity(KEFU_ID), "new_role": "customer"}, db,

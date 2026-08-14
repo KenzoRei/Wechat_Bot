@@ -27,7 +27,8 @@ class _Query:
         if self.model is GroupMember:
             openid = self.filters.get("wechat_openid")
             if openid in self.db.members:
-                return SimpleNamespace(role_id=f"role-{self.db.members[openid]}")
+                role_name, is_active = self.db.members[openid]
+                return SimpleNamespace(role_id=f"role-{role_name}", is_active=is_active)
             return None
         if self.model is Role:
             role_id = self.filters.get("role_id")
@@ -43,14 +44,22 @@ class _Query:
         if self.model is GroupMember:
             role_id = self.filters.get("role_id")
             wanted_role = role_id.replace("role-", "") if role_id else None
-            return sum(1 for r in self.db.members.values() if r == wanted_role)
+            wanted_active = self.filters.get("is_active")
+            return sum(
+                1 for role_name, is_active in self.db.members.values()
+                if role_name == wanted_role and (wanted_active is None or is_active == wanted_active)
+            )
         return 0
 
 
 class _MockDB:
     def __init__(self, members=None):
-        # members: {wechat_openid: role_name}
-        self.members = members or {"m1": "customer"}
+        # members: {wechat_openid: role_name} or {wechat_openid: (role_name, is_active)}
+        raw = members or {"m1": "customer"}
+        self.members = {
+            openid: (v if isinstance(v, tuple) else (v, True))
+            for openid, v in raw.items()
+        }
         self.all_roles = {"admin", "customer", "warehouseman", "accountant", "pending"}
         self.committed = False
 
@@ -59,6 +68,14 @@ class _MockDB:
 
     def commit(self):
         self.committed = True
+
+    def execute(self, *args, **kwargs):
+        """No-op: lock_group_admin_invariant's advisory lock has no meaning against this in-memory mock."""
+        return None
+
+    def refresh(self, obj):
+        """No-op: this mock's SimpleNamespace already reflects self.members' current state."""
+        return None
 
 
 # ── before-persistence (core/workflow_engine.py) ────────────────────────────
@@ -147,6 +164,36 @@ def test_last_admin_protection_still_holds():
     error = pre_confirm_validators.run(
         "role_change", {"group_id": "g1"},
         {"target_openid": "only-admin", "new_role": "customer"}, db,
+    )
+    assert error is not None
+
+
+def test_last_admin_protection_allows_reassigning_an_already_inactive_admin():
+    """
+    Codex round-4 review: an admin who is currently is_active=False must
+    not be treated as "the last active admin" -- they aren't active at
+    all, so reassigning their role removes nothing from the active count.
+    """
+    db = _MockDB(members={
+        "active-admin": "admin",
+        "inactive-admin": ("admin", False),
+    })
+    error = pre_confirm_validators.run(
+        "role_change", {"group_id": "g1"},
+        {"target_openid": "inactive-admin", "new_role": "customer"}, db,
+    )
+    assert error is None
+
+
+def test_last_admin_protection_inactive_admin_does_not_count_toward_the_total():
+    """The one real ACTIVE admin is still protected even though a second, inactive admin row also exists."""
+    db = _MockDB(members={
+        "only-active-admin": "admin",
+        "inactive-admin": ("admin", False),
+    })
+    error = pre_confirm_validators.run(
+        "role_change", {"group_id": "g1"},
+        {"target_openid": "only-active-admin", "new_role": "customer"}, db,
     )
     assert error is not None
 
