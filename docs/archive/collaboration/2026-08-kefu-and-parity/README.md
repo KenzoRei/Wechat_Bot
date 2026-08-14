@@ -1,0 +1,112 @@
+# Codex ↔ Claude Code collaboration
+
+> **Historical archive:** this collaboration phase is complete. Status and
+> “current” language below are preserved as authored and are not current
+> operating instructions. Start at [`docs/README.md`](../../../README.md).
+
+This directory is the shared, file-based communication channel for
+Codex/Claude Code technical collaboration. Originally scoped to the
+outbound-request hallucination review (see `agreed-plan.md`, **Phase 1**,
+still-standing and signed); the user explicitly expanded the scope in
+round 9 (now archived in `archive/discussion-rounds-001-102.md`) to cover the same class of validation gap found in
+other U-Choice service pipelines (see `systemic-validation-addendum.md`,
+**Phase 2**), plus a work-division plan between the two agents. Round 15
+added **Phase 3** (`phase3-outbound-pdf-timing.md`) — a workflow-step-
+placement fix, unrelated to the hallucination/validation theme but tracked
+in this same channel per explicit user direction. Each phase is a
+separately signed, separately user-approved document; approving one does
+not imply approval of another. Later phases build on, and must not silently
+contradict, what was already agreed in earlier ones.
+
+Phases 1-4 (validation systemics, storage atomicity, PDF timing,
+self-registration) are complete, signed, and shipped (`7374037` on `main`).
+Round 54 opened a new, unrelated-in-scope thread: migrating the
+customer-facing side of the bot from Smart Robot to WeChat Kefu, after the
+user discovered Smart Robot cannot function in groups containing external
+contacts. That thread's "deterministic Kefu operational responses" phase
+(rounds 103-124) is also complete, signed, implemented, and shipped —
+archived under `archive/discussion-rounds-103-124.md`. Round 125 opened a
+new phase: Smart Robot / Kefu parity, triggered by the user's Kefu account
+being blocked by WeCom's own platform-side risk-control system (a WeCom
+account-state issue, not a defect in this codebase) — the user wants Smart
+Robot usable as a fallback without having fallen behind what the Kefu
+pipeline independently learned since the two diverged. See
+`kefu-migration-context.md` for the original shared research context and
+`status.md` for current handoff state. The historical discussion through
+round 102 (and separately, rounds 103-124) and their former detailed status
+are preserved under `archive/`; `current-phase.md` and `decisions.md`
+provide concise working indexes reflecting the current (round 125+) phase.
+Same file-based process, same two-stage authorization rule (plan first,
+implementation only after explicit user approval of a signed document).
+
+## File ownership
+
+- `proposal-to-claude.md` — Codex owns this charter.
+- `codex-review.md` — Codex's technical position.
+- `claude-review.md` — Claude Code owns this response file.
+- `discussion.md` — active append-only, alternating numbered messages
+  beginning at round 103; rounds 1–102 are archived losslessly.
+- `agreed-plan.md` — joint plan; no application-code implementation begins
+  until the user explicitly approves it.
+- `status.md` — compact current handoff and next speaker.
+- `current-phase.md` — unsigned current scope and authorization gates.
+- `decisions.md` — index of standing, candidate, and superseded decisions.
+- `archive/` — immutable chronological discussion/status snapshots.
+
+Neither agent may overwrite the other agent's authored review. Discussion
+messages must identify author and sequence number.
+
+## User authorization boundary
+
+Until the user explicitly approves implementation:
+
+Allowed:
+
+- Read any project file.
+- Read `C:/Users/mshe0/Desktop/Outbound_Sample.xlsx`.
+- Create or modify files under `docs/ai-collaboration/`.
+- Create or modify dedicated automated test-suite files.
+- Run local, non-destructive tests.
+- Make controlled calls to the real `gpt-5-mini` API using the 57 supplied
+  outbound samples.
+
+Not allowed:
+
+- Modify production/application scripts, prompts, migrations, configuration,
+  handlers, models, or deployment files.
+- Apply the proposed fix.
+- Call WeChat, YiDiDa, OMS, or any other operational external service.
+- Create labels, work orders, inventory transactions, requests, or messages.
+- Modify or overwrite the source workbook.
+- Commit, push, deploy, or open a pull request.
+
+## Live-model test boundary
+
+- Model: `gpt-5-mini` only, unless the user separately authorizes another model.
+- Dataset: at most the 57 rows in `Outbound_Sample.xlsx`.
+- Maximum attempts: two calls per sample.
+- Do not send API credentials, database credentials, internal group secrets, or
+  unrelated customer data.
+- The supplied samples contain real addresses and phone numbers. The user has
+  explicitly authorized using this workbook for real GPT-5 mini tests, but raw
+  samples and raw responses must not be committed to Git.
+- Before a live run, estimate the maximum token cost and record it in
+  `discussion.md`.
+- Store any raw result artifact in a gitignored local test-output directory.
+- Report request count, token usage, estimated cost, failures, and retries.
+
+## Completion condition
+
+The discussion is complete only when both agents explicitly agree on:
+
+1. Root causes.
+2. The context that should and should not be sent to GPT.
+3. The typed response contract.
+4. Server-side validation and persistence rules.
+5. The regression and live-model evaluation design.
+6. Acceptance thresholds.
+7. A staged implementation plan.
+8. Remaining disagreements or risks.
+
+The final result is a proposal, not an implementation. The user must approve
+`agreed-plan.md` before production files are changed.
