@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import config
@@ -119,6 +120,50 @@ def update_kefu_staff(staff_id: str, body: KefuStaffUpdate, db: Session = Depend
         role_name = db.query(Role).filter_by(role_id=staff.role_id).first().name
 
     return {"data": _to_response(staff, role_name)}
+
+
+@router.delete("/{staff_id}")
+def remove_kefu_staff(staff_id: str, db: Session = Depends(get_db)):
+    staff = db.query(KefuStaff).filter_by(staff_id=staff_id).first()
+    if not staff:
+        raise HTTPException(status_code=404, detail="Kefu staff member not found")
+
+    lock_group_admin_invariant(db, staff.group_id)
+
+    current_role = db.query(Role).filter_by(role_id=staff.role_id).first()
+    is_currently_active_admin = bool(
+        current_role and current_role.name == "admin" and staff.is_active
+    )
+    # Deletion is a stronger version of deactivation for this invariant's
+    # purposes -- the member becomes not-an-active-admin either way.
+    if would_remove_last_admin(
+        db, staff.group_id,
+        is_currently_active_admin=is_currently_active_admin,
+        new_role_name=None,
+        new_is_active=False,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot remove this staff member — this group has only one active admin remaining.",
+        )
+
+    db.delete(staff)
+    try:
+        db.commit()
+    except IntegrityError:
+        # A staff member with real case history (case_turn.acting_staff_id,
+        # kefu_outbound_delivery.recipient_staff_id) is referenced by
+        # RESTRICT-mode foreign keys, deliberately -- that history must
+        # survive even if the staff member is later removed. Only a staff
+        # row with no such history (e.g. never actually handled a case) can
+        # be deleted through this endpoint.
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete this staff member — they have associated case history "
+                   "(case_turn/delivery records). Deactivate them instead.",
+        )
+    return {"data": {"message": "staff removed"}}
 
 
 @router.post("/refresh-names")

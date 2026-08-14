@@ -259,6 +259,7 @@ function fmtDate(iso) {
 }
 
 let _rolesCache = null;
+let _kefuStaffLabels = {};
 
 async function getRoles() {
   if (_rolesCache) return _rolesCache;
@@ -289,7 +290,10 @@ function kefuRoleRowHtml(s, roles) {
             style="width:90px;${isWarehouseman ? "" : "display:none"}" placeholder="warehouse"></td>
       <td>${s.is_active ? '<span class="badge ok">active</span>' : '<span class="badge bad">suspended</span>'}</td>
       <td>${fmtDate(s.created_at)}</td>
-      <td><button onclick="saveKefuRole('${s.staff_id}')">Save</button></td>
+      <td>
+        <button onclick="saveKefuRole('${s.staff_id}')">Save</button>
+        <button class="secondary" onclick="deleteKefuStaff('${s.staff_id}')">Delete</button>
+      </td>
     </tr>
   `;
 }
@@ -343,10 +347,30 @@ async function loadKefuStaff() {
   const pendingCount = staff.filter(s => s.role === "pending").length;
   document.getElementById("kefuPendingCount").textContent = pendingCount;
 
+  _kefuStaffLabels = {};
+  for (const s of staff) {
+    _kefuStaffLabels[s.staff_id] = s.display_name || s.external_userid;
+  }
+
   const rowsEl = document.getElementById("kefuStaffRows");
   rowsEl.innerHTML = staff.length
     ? staff.map(s => kefuRoleRowHtml(s, roles)).join("")
     : '<tr><td colspan="7" class="empty">No Kefu staff registered yet.</td></tr>';
+}
+
+async function deleteKefuStaff(staffId) {
+  document.getElementById("kefuStaffError").textContent = "";
+  document.getElementById("kefuStaffError").style.color = "";
+  const label = _kefuStaffLabels[staffId] || staffId;
+  if (!confirm(`Delete Kefu staff "${label}"? This cannot be undone.`)) return;
+  try {
+    await authedFetch(`/admin/kefu-staff/${staffId}`, { method: "DELETE" });
+    await loadKefuStaff();
+  } catch (e) {
+    if (e.message === "UNAUTHORIZED") throw e;
+    document.getElementById("kefuStaffError").style.color = "var(--bad)";
+    document.getElementById("kefuStaffError").textContent = "Delete failed: " + e.message;
+  }
 }
 
 async function loadAll() {

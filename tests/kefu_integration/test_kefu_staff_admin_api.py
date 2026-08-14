@@ -313,6 +313,108 @@ def test_unknown_staff_id_returns_404(client):
     assert resp.status_code == 404
 
 
+def test_delete_staff_member_succeeds(client):
+    db = SessionLocal()
+    staff_ids = []
+    try:
+        group = db.query(GroupConfig).order_by(GroupConfig.created_at).first()
+        staff = _make_staff(db, group.group_id, "pending")
+        staff_ids = [staff.staff_id]
+
+        resp = client.delete(f"/admin/kefu-staff/{staff.staff_id}", headers=AUTH)
+        assert resp.status_code == 200
+
+        assert db.query(KefuStaff).filter_by(staff_id=staff.staff_id).first() is None
+        staff_ids = []  # already deleted, nothing left to clean up
+    finally:
+        _cleanup(db, staff_ids)
+        db.close()
+
+
+def test_delete_unknown_staff_id_returns_404(client):
+    resp = client.delete(f"/admin/kefu-staff/{uuid.uuid4()}", headers=AUTH)
+    assert resp.status_code == 404
+
+
+def test_delete_last_admin_is_blocked(client, monkeypatch):
+    db = SessionLocal()
+    staff_ids = []
+    try:
+        group = db.query(GroupConfig).order_by(GroupConfig.created_at).first()
+        sole_admin = _make_staff(db, group.group_id, "admin")
+        staff_ids = [sole_admin.staff_id]
+
+        import core.admin_invariants as admin_invariants
+
+        real_count = admin_invariants.count_active_admins
+
+        def _scoped_count(db_, group_id):
+            if group_id == group.group_id:
+                return 1
+            return real_count(db_, group_id)
+
+        monkeypatch.setattr(admin_invariants, "count_active_admins", _scoped_count)
+
+        resp = client.delete(f"/admin/kefu-staff/{sole_admin.staff_id}", headers=AUTH)
+        assert resp.status_code == 409
+
+        assert db.query(KefuStaff).filter_by(staff_id=sole_admin.staff_id).first() is not None
+    finally:
+        _cleanup(db, staff_ids)
+        db.close()
+
+
+def test_delete_staff_with_case_history_returns_409(client):
+    """A staff member referenced by case_turn/kefu_outbound_delivery must survive deletion
+    -- RESTRICT-mode FKs preserve that audit trail even after the staff row would otherwise
+    be removable."""
+    db = SessionLocal()
+    staff_ids = []
+    session_ids = []
+    try:
+        from models.session import ConversationSession
+        from models.kefu import CaseTurn
+
+        group = db.query(GroupConfig).order_by(GroupConfig.created_at).first()
+        staff = _make_staff(db, group.group_id, "pending")
+        staff_ids = [staff.staff_id]
+
+        session = ConversationSession(
+            group_id=group.group_id,
+            wechat_openid=f"kefu:{staff.staff_id}",
+            status="completed",
+            source_channel="kefu",
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        session_ids = [session.session_id]
+
+        db.add(CaseTurn(
+            session_id=session.session_id,
+            case_revision=0,
+            acting_staff_id=staff.staff_id,
+            source_message_id=f"msg-{uuid.uuid4().hex[:8]}",
+            role="user",
+            content="test",
+        ))
+        db.commit()
+
+        resp = client.delete(f"/admin/kefu-staff/{staff.staff_id}", headers=AUTH)
+        assert resp.status_code == 409
+
+        assert db.query(KefuStaff).filter_by(staff_id=staff.staff_id).first() is not None
+    finally:
+        db.rollback()
+        db.execute(text("delete from case_turn where acting_staff_id = any(:ids)"), {"ids": staff_ids})
+        db.commit()
+        _cleanup(db, staff_ids)
+        for sid in session_ids:
+            db.execute(text("delete from conversation_session where session_id = :sid"), {"sid": sid})
+        db.commit()
+        db.close()
+
+
 def test_refresh_names_without_kefu_configured_returns_503(client, monkeypatch):
     monkeypatch.setattr(config, "WECHAT_KEFU_SECRET", None)
     resp = client.post("/admin/kefu-staff/refresh-names", headers=AUTH)
