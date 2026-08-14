@@ -5,8 +5,6 @@ the exact same row-selection helpers as compute_invoice() (core/uchoice_invoice.
 so the workbook and the chat summary can never silently drift apart.
 """
 import io
-import re
-import zipfile
 from datetime import datetime, timezone
 from decimal import Decimal
 from sqlalchemy.orm import Session as DBSession
@@ -16,11 +14,9 @@ from openpyxl.utils import get_column_letter
 
 from core.uchoice_invoice import compute_invoice, _resolve_range, _completed_logs, _ledger_rows
 from core.uchoice_context import sku_label_map, get_original_fields
+from core.xlsx_determinism import freeze_xlsx_timestamps
 
 _HEADER_FONT = Font(bold=True)
-_CORE_XML_MODIFIED_RE = re.compile(
-    rb"(<dcterms:modified[^>]*>)[^<]*(</dcterms:modified>)"
-)
 
 
 def _write_header(ws, row: int, headers: list[str]) -> None:
@@ -34,38 +30,6 @@ def _autosize(ws) -> None:
     for col_cells in ws.columns:
         length = max((len(str(c.value)) if c.value is not None else 0) for c in col_cells)
         ws.column_dimensions[get_column_letter(col_cells[0].column)].width = min(max(length + 2, 10), 60)
-
-
-def _freeze_xlsx_timestamps(data: bytes, generated_at: datetime) -> bytes:
-    """
-    openpyxl's Workbook.save() unconditionally re-stamps
-    properties.modified with datetime.now() during the save itself --
-    setting wb.properties.modified beforehand (at any point, including
-    immediately before save()) has no effect, confirmed empirically.
-    docProps/core.xml's <dcterms:modified> is the only content difference
-    between two saves of an otherwise-identical workbook; every ZIP
-    entry's own date_time metadata already matches at the granularity
-    that matters here. Rewrite that one XML value post-save and re-zip
-    with every entry's date_time pinned to generated_at, so two builds of
-    the same underlying data are byte-identical regardless of when each
-    was actually generated -- required for Kefu's durable delivery queue,
-    which verifies a content hash before every send (core/kefu_delivery.py).
-    """
-    stamp = generated_at.strftime("%Y-%m-%dT%H:%M:%SZ").encode("ascii")
-    date_time = (generated_at.year, generated_at.month, generated_at.day,
-                 generated_at.hour, generated_at.minute, generated_at.second)
-
-    src = zipfile.ZipFile(io.BytesIO(data))
-    out_buf = io.BytesIO()
-    with zipfile.ZipFile(out_buf, "w", zipfile.ZIP_DEFLATED) as out:
-        for info in src.infolist():
-            content = src.read(info.filename)
-            if info.filename == "docProps/core.xml":
-                content = _CORE_XML_MODIFIED_RE.sub(rb"\g<1>" + stamp + rb"\g<2>", content)
-            new_info = zipfile.ZipInfo(info.filename, date_time=date_time)
-            new_info.compress_type = zipfile.ZIP_DEFLATED
-            out.writestr(new_info, content)
-    return out_buf.getvalue()
 
 
 def build_invoice_workbook(
@@ -184,7 +148,7 @@ def build_invoice_workbook(
 
     buf = io.BytesIO()
     wb.save(buf)
-    return _freeze_xlsx_timestamps(buf.getvalue(), generated_at)
+    return freeze_xlsx_timestamps(buf.getvalue(), generated_at)
 
 
 def build_invoice_artifact(

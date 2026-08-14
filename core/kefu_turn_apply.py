@@ -520,6 +520,20 @@ def _workflow_steps(db: DBSession, context: dict, service: dict, session) -> Non
             merged["_defer_commit"] = True
         result = handler_class().handle(context, merged, db)
         context["result"].update(result or {})
+        if step.step_type == "query_storage_history" and (result or {}).get("export_detail_requested"):
+            # QueryStorageHistoryHandler already skipped its own Smart-Robot-
+            # only download-link build for this channel (source_channel ==
+            # "kefu") -- attach the same workbook as a native chat file
+            # instead, same _kefu_artifacts path compute_invoice_handler uses.
+            from core.uchoice_storage_history_export import build_storage_history_artifact
+
+            fields = session.collected_fields or {}
+            artifact = build_storage_history_artifact(
+                db, fields.get("warehouse_code"), fields.get("start_month"), fields.get("end_month"),
+                context.get("request_log_id"),
+            )
+            context["_kefu_artifacts"].append({"doc_type": "storage_history_workbook", "artifact": artifact})
+            context["result"]["storage_history_artifact_key"] = artifact["artifact_key"]
         if (result or {}).get("_kefu_stop_workflow"):
             break
 

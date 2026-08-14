@@ -173,6 +173,9 @@ def _storage_sections_builder(context: dict, db: DBSession) -> list[dict]:
     return sections
 
 
+_STORAGE_HISTORY_DETAIL_LIMIT = 10
+
+
 def _storage_history_sections_builder(context: dict, db: DBSession) -> list[dict]:
     """
     view_storage_history. Header line states the actual queried range
@@ -182,6 +185,17 @@ def _storage_history_sections_builder(context: dict, db: DBSession) -> list[dict
     SKU), but sorted defensively by created_at here too rather than trusting
     the handler's ORDER BY alone. Ends with a net-change-by-SKU summary plus
     a grand total.
+
+    Detail lines are capped to the latest _STORAGE_HISTORY_DETAIL_LIMIT --
+    a full month's worth of movements easily exceeds WeCom Kefu's hard
+    2048-UTF-8-byte send_text limit (confirmed live: every uncapped
+    storage-history reply through Kefu was silently failing delivery with
+    artifact_hash_mismatch's sibling error, "Kefu text payload exceeds
+    2048 UTF-8 bytes", terminal and unretried). The net-change summary
+    still covers the FULL queried range regardless of how many detail
+    lines are shown -- only the line-by-line list is truncated, not the
+    totals. core/uchoice_storage_history_export.py's export_detail flag
+    is the way to see everything.
     """
     from datetime import datetime
     from core.uchoice_context import sku_label_map
@@ -202,9 +216,15 @@ def _storage_history_sections_builder(context: dict, db: DBSession) -> list[dict
     sku_labels = sku_label_map(db)
     sorted_rows = sorted(rows, key=lambda r: r.get("created_at") or "")
 
-    detail_lines = []
     net_by_sku: dict[str, int] = {}
     for r in sorted_rows:
+        net_by_sku[r["sku_code"]] = net_by_sku.get(r["sku_code"], 0) + r["pallet_delta"]
+
+    truncated = len(sorted_rows) > _STORAGE_HISTORY_DETAIL_LIMIT
+    displayed_rows = sorted_rows[-_STORAGE_HISTORY_DETAIL_LIMIT:] if truncated else sorted_rows
+
+    detail_lines = []
+    for r in displayed_rows:
         created = r.get("created_at") or ""
         try:
             created = datetime.fromisoformat(created).strftime("%m-%d %H:%M") if created else ""
@@ -213,12 +233,17 @@ def _storage_history_sections_builder(context: dict, db: DBSession) -> list[dict
         txn_label = _TXN_TYPE_LABELS.get(r["txn_type"], r["txn_type"])
         sku_label = sku_labels.get(r["sku_code"], r["sku_code"])
         detail_lines.append(f"{created} {txn_label} {sku_label}@{r['boxes_per_pallet']} {r['pallet_delta']:+d}")
-        net_by_sku[r["sku_code"]] = net_by_sku.get(r["sku_code"], 0) + r["pallet_delta"]
 
     sections = []
     if range_line:
         sections.append({"label": None, "type": "raw", "items": [range_line]})
-    sections.append({"label": None, "type": "list", "items": detail_lines})
+    detail_label = f"最近 {_STORAGE_HISTORY_DETAIL_LIMIT} 条（共 {len(sorted_rows)} 条）" if truncated else None
+    sections.append({"label": detail_label, "type": "list", "items": detail_lines})
+    if truncated:
+        sections.append({
+            "label": None, "type": "raw",
+            "items": ["如需查看完整记录，请说明需要导出明细表格。"],
+        })
 
     summary_lines = [
         f"{sku_labels.get(sku, sku)}：{net:+d} 托"
@@ -227,6 +252,10 @@ def _storage_history_sections_builder(context: dict, db: DBSession) -> list[dict
     total_net = sum(net_by_sku.values())
     summary_lines.append(f"合计：{total_net:+d} 托")
     sections.append({"label": "净变动", "type": "list", "items": summary_lines})
+
+    download_url = result.get("download_url")
+    if download_url:
+        sections.append({"label": None, "type": "raw", "items": [f"[下载完整明细]({download_url})（1小时内有效）"]})
 
     return sections
 

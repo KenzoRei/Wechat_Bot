@@ -35,41 +35,30 @@ class QueryStorageHandler(BaseHandler):
 
 
 class QueryStorageHistoryHandler(BaseHandler):
-    """view_storage_history — requires_confirmation=false, executes immediately."""
+    """
+    view_storage_history — requires_confirmation=false, executes immediately.
+
+    The chat reply (core/result_message.py) caps its detail list to the
+    latest 10 movements -- WeCom Kefu's hard 2048-UTF-8-byte send_text
+    limit made an uncapped reply for any range with real activity a 100%
+    silent delivery failure. export_detail (optional field, V18 migration)
+    lets a customer explicitly ask for the complete record instead,
+    delivered as a spreadsheet via _try_build_workbook_and_link below
+    (Smart Robot) or export_detail_requested in the returned result
+    (Kefu -- see core/kefu_turn_apply.py's query_storage_history branch,
+    which attaches the same workbook as a native chat file since
+    response_url can't carry one).
+    """
 
     def handle(self, context: dict, config: dict, db) -> dict:
-        import calendar
-        from datetime import date, timedelta, timezone, datetime
-        from models.uchoice import UchoiceStorageTxn
+        from core.uchoice_storage_history_export import query_storage_history_rows
 
         fields = context.get("collected_fields", {})
         warehouse_code = fields.get("warehouse_code")
-
         start_month = fields.get("start_month", "")
         end_month = fields.get("end_month", start_month)
-        start_year, start_mo = (int(p) for p in start_month.split("-"))
-        end_year, end_mo = (int(p) for p in end_month.split("-"))
-        start = date(start_year, start_mo, 1)
-        month_end = date(end_year, end_mo, calendar.monthrange(end_year, end_mo)[1])
 
-        # Cap the range at today when it reaches into the current, still-
-        # in-progress month — there's no data past today regardless, but the
-        # *displayed* range should say so rather than claiming a range that
-        # hasn't happened yet.
-        today = datetime.now(timezone.utc).date()
-        range_end = min(month_end, today) if (end_year, end_mo) == (today.year, today.month) else month_end
-        end_exclusive = range_end + timedelta(days=1)
-
-        rows = (
-            db.query(UchoiceStorageTxn)
-            .filter(
-                UchoiceStorageTxn.warehouse_code == warehouse_code,
-                UchoiceStorageTxn.created_at >= start,
-                UchoiceStorageTxn.created_at < end_exclusive,
-            )
-            .order_by(UchoiceStorageTxn.created_at)
-            .all()
-        )
+        rows, start, range_end = query_storage_history_rows(db, warehouse_code, start_month, end_month)
 
         # structured, not pre-formatted — core/result_message.py's builder
         # resolves sku_code -> product name and txn_type -> Chinese label
@@ -83,11 +72,55 @@ class QueryStorageHistoryHandler(BaseHandler):
             }
             for r in rows
         ]
-        return {
+        result = {
             "history_rows": history_rows,
             "range_start": start.isoformat(),
             "range_end": range_end.isoformat(),
         }
+
+        export_detail_requested = bool(fields.get("export_detail"))
+        result["export_detail_requested"] = export_detail_requested
+        # Smart Robot's own delivery is a download link in the text reply
+        # (response_url can't carry a file). Kefu sends the workbook as a
+        # native chat file instead, built by core/kefu_turn_apply.py's
+        # query_storage_history branch off export_detail_requested above --
+        # building a download link here too would put a raw, unrendered
+        # markdown link string in Kefu's plain-text reply on top of the
+        # actual file attachment.
+        if export_detail_requested and context.get("source_channel") != "kefu":
+            download_url = self._try_build_workbook_and_link(context, db, warehouse_code, start_month, end_month)
+            if download_url:
+                result["download_url"] = download_url
+
+        return result
+
+    @staticmethod
+    def _try_build_workbook_and_link(context: dict, db, warehouse_code: str, start_month: str, end_month: str) -> str | None:
+        """Smart Robot's own delivery: a short-lived download link embedded
+        in the text reply, matching ComputeInvoiceHandler's identical
+        pattern. Best-effort -- never allowed to fail the main text
+        response."""
+        try:
+            import config
+            from core.uchoice_storage_history_export import build_storage_history_workbook
+            from core.download_tokens import create_token
+
+            data = build_storage_history_workbook(db, warehouse_code, start_month, end_month)
+            filename = f"storage_history_{warehouse_code}_{start_month}_{end_month or start_month}.xlsx"
+            token = create_token(
+                data, filename,
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            base_url = getattr(config, "SERVER_BASE_URL", "https://wechat-bot-atse.onrender.com")
+            return f"{base_url}/files/download/{token}"
+        except Exception as e:
+            # Same non-fatal contract as ComputeInvoiceHandler's identical
+            # helper -- a DB-level failure here must not abort the
+            # already-successful text reply, and must not leave this
+            # session's transaction aborted for the step after it.
+            db.rollback()
+            print(f"[uchoice] storage history workbook build failed (non-fatal): {e}", flush=True)
+            return None
 
 
 class ComputeInvoiceHandler(BaseHandler):

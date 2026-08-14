@@ -43,6 +43,13 @@ def load_artifact(request_log_id: UUID, doc_type: str, artifact_key: str) -> Art
             mapping = build_invoice_artifact(
                 db, fields.get("warehouse_code"), fields.get("start_month"), fields.get("end_month"), log.log_id
             )
+        elif doc_type == "storage_history_workbook":
+            from core.uchoice_storage_history_export import build_storage_history_artifact
+
+            fields = session.collected_fields or {}
+            mapping = build_storage_history_artifact(
+                db, fields.get("warehouse_code"), fields.get("start_month"), fields.get("end_month"), log.log_id
+            )
         else:
             raise ValueError(f"unsupported durable artifact doc_type: {doc_type}")
         if mapping is None:
