@@ -20,4 +20,10 @@ Use PostgreSQL as the primary database.
 
 ## Consequences
 - Requires a running PostgreSQL instance in all environments (local, production)
-- Schema changes require migration files (managed via Alembic)
+- Schema changes require migration files. In practice the project uses
+  hand-rolled, sequentially numbered SQL files under `db/migrations/`
+  (`V1__...sql` through `V16__...sql` as of 2026-08), not Alembic —
+  corrected 2026-08-14; this ADR and ADR-003 originally said Alembic, which
+  was never actually adopted. There is currently no migration-runner tooling
+  or applied-migration ledger in the repository; see the signed cross-review
+  plan (`docs/audit_20260814/`) Section C6 for the follow-up to add one.

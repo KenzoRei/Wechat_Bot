@@ -369,17 +369,14 @@ def _last_admin_protection(context: dict, collected_fields: dict, db: DBSession)
     if not target_role or target_role.name != "admin":
         return None  # target isn't currently an admin — nothing to protect
 
-    admin_role = db.query(Role).filter_by(name="admin").first()
-    if not admin_role:
-        return None
+    from core.admin_invariants import would_remove_last_admin
 
-    smart_robot_admin_count = db.query(GroupMember).filter_by(
-        group_id=group_id, role_id=admin_role.role_id, is_active=True
-    ).count()
-    kefu_admin_count = db.query(KefuStaff).filter_by(
-        group_id=group_id, role_id=admin_role.role_id, is_active=True
-    ).count()
-    if (smart_robot_admin_count + kefu_admin_count) <= 1:
+    if would_remove_last_admin(
+        db, group_id,
+        is_currently_active_admin=True,
+        new_role_name=collected_fields.get("new_role"),
+        new_is_active=None,
+    ):
         return "无法将该成员的角色改为非管理员——该群组当前仅剩一名管理员。"
     return None
 

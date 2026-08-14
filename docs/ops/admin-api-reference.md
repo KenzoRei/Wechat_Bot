@@ -5,14 +5,15 @@
 
 **Auth header required on all `/admin` endpoints:**
 ```
-X-Admin-Key: REDACTED
+X-Admin-Key: <your ADMIN_API_KEY>
 ```
 
 **PowerShell shorthand** (paste at start of session):
 ```powershell
 $base = "https://wechat-bot-atse.onrender.com"
-$h    = @{"X-Admin-Key"="REDACTED"}
+$h    = @{"X-Admin-Key"="<your ADMIN_API_KEY>"}
 ```
+Redacted 2026-08-14 — this previously contained the real, live `ADMIN_API_KEY` in plaintext. Rotate it (change `ADMIN_API_KEY` in the deployment environment) if you haven't already.
 
 ---
 
@@ -171,11 +172,11 @@ Invoke-RestMethod "$base/admin/groups/{group_id}/services" -Method POST -Headers
     "service_type_id": "a1b2c3d4-0001-0000-0000-000000000001",
     "workflow_id":     "af000001-0000-0000-0000-000000000005",
     "config": {
-      "ydd_cust_id":    "REDACTED",
-      "ydd_api_key":    "REDACTED",
+      "ydd_cust_id":    "<ydd-customer-id>",
+      "ydd_api_key":    "<ydd-api-key>",
       "ydd_channel_id": "Fedex home delivery 洛杉矶渠道",
-      "oms_app_key":    "REDACTED",
-      "oms_app_secret": "REDACTED",
+      "oms_app_key":    "<oms-app-key>",
+      "oms_app_secret": "<oms-app-secret>",
       "oms_wh_code":    "DE19713"
     }
   }'

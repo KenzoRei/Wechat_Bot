@@ -4,7 +4,9 @@ from sqlalchemy.orm import Session as DBSession
 from models.session import ConversationSession
 from models.service import ServiceType
 from models.group import GroupConfig
+from models.kefu import KefuStaff
 from core import request_logger
+from core.kefu_delivery import enqueue_text
 from clients.wechat_client import send_group_webhook_message
 
 
@@ -55,6 +57,16 @@ def _expire_session(db: DBSession, session: ConversationSession) -> None:
         if owns_log:
             request_logger.mark_timed_out(db, session.request_log_id)
 
+    # Notification is channel-aware from here (signed cross-review plan,
+    # Section C2): the state transition above already applies to both
+    # channels identically -- only how (and whether) the owner is told
+    # branches by source_channel. Kefu must never fall through to the
+    # Smart Robot group-webhook path, which assumes wechat_openid and would
+    # otherwise post "用户ID：None" for a Kefu session.
+    if session.source_channel == "kefu":
+        _notify_kefu_expiry(db, session)
+        return
+
     # response_url is single-use and tied to the message that triggered it —
     # it isn't stored on the session and would likely be stale by the time a
     # session actually expires anyway. group_robot_webhook_url is persistent,
@@ -74,3 +86,35 @@ def _expire_session(db: DBSession, session: ConversationSession) -> None:
         # notification failure must not crash the job —
         # session is already closed in DB regardless
         pass
+
+
+def _notify_kefu_expiry(db: DBSession, session: ConversationSession) -> None:
+    """
+    Kefu's durable outbound queue (core/kefu_delivery.py), not a Smart-Robot-
+    style webhook -- delivered whenever the staff member's reply window is
+    next open, same as any other Kefu reply. No group-wide broadcast exists
+    for Kefu (each case belongs to one staff member), so a session with no
+    bound staff member (opened_by_staff_id is None, shouldn't happen in
+    practice but is not guaranteed by a DB constraint) is deliberately
+    suppressed rather than guessed at -- documented interim rule per the
+    signed plan, not a crash.
+    """
+    if session.opened_by_staff_id is None:
+        return
+    staff = db.query(KefuStaff).filter_by(staff_id=session.opened_by_staff_id).first()
+    if staff is None or not staff.is_active:
+        return
+
+    try:
+        enqueue_text(
+            db,
+            recipient_staff_id=staff.staff_id,
+            idempotency_key=f"session-expiry:{session.session_id}",
+            text_content="本次会话因长时间未操作已自动取消。如需继续，请重新发起申请。",
+            session_id=session.session_id,
+        )
+        db.commit()
+    except Exception:
+        # notification failure must not crash the job —
+        # session is already closed in DB regardless
+        db.rollback()

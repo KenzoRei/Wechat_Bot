@@ -14,9 +14,9 @@ from sqlalchemy.orm import Session as DBSession
 
 import config
 from core import pre_confirm_validators
-from core.confirmation import build_confirmation_message, build_display_name, build_sections
+from core.confirmation import build_confirmation_message, build_display_name, build_confirmation_sections
 from core.uchoice_rates import CHARGE_TYPE_DESCRIPTIONS
-from core.workflow_engine import _sanitize_extracted_fields_before_persistence
+from core.uchoice_field_sanitization import sanitize_extracted_fields_before_persistence
 
 
 # Built from CHARGE_TYPE_DESCRIPTIONS (core/uchoice_rates.py) so the actual
@@ -464,7 +464,7 @@ def _render_confirmation(db: DBSession, service: dict, session, log) -> str:
     return build_confirmation_message(
         serial_number=log.serial_number if log else "",
         service_display_name=build_display_name(service["name"], session.collected_fields or {}),
-        sections=build_sections(service["name"], session.collected_fields or {}, db),
+        sections=build_confirmation_sections(service["name"], session.collected_fields or {}, db),
         note=service_type.confirmation_note if service_type is not None else None,
     )
 
@@ -684,7 +684,7 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
 
     _set_context_for_session(context, session, log)
     if ai_response.extracted_fields:
-        extracted = _sanitize_extracted_fields_before_persistence(
+        extracted = sanitize_extracted_fields_before_persistence(
             service["name"], ai_response.extracted_fields, db, context.get("group_id")
         )
         session.collected_fields = {**(session.collected_fields or {}), **extracted}

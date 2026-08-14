@@ -6,16 +6,11 @@ from sqlalchemy.orm import Session as DBSession
 from database import SessionLocal
 from core import webhook_receiver, access_control, session_manager, workflow_engine, self_registration
 from clients.wechat_client import send_message
-from ai.chain import AIProviderChain
-from ai.claude_provider import ClaudeProvider
-from ai.openai_provider import OpenAIProvider
+from ai.chain import build_default_chain
 
 router = APIRouter()
 
-ai_chain = AIProviderChain(providers=[
-    OpenAIProvider(),
-    ClaudeProvider(),
-])
+ai_chain = build_default_chain()
 
 # ── Deduplication ─────────────────────────────────────────────────────────────
 import time as _time

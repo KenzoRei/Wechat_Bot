@@ -47,9 +47,7 @@ from typing import Callable
 
 from sqlalchemy.orm import Session as DBSession
 
-from ai.chain import AIProviderChain
-from ai.claude_provider import ClaudeProvider
-from ai.openai_provider import OpenAIProvider
+from ai.chain import build_default_chain
 from clients.kefu_client import KefuAPIError, KefuClient
 from core import access_control, kefu_admin_purge, kefu_completion_notice, kefu_registration, kefu_turn_apply, session_manager
 from core.kefu_outcomes import (
@@ -83,10 +81,7 @@ from core.kefu_delivery import (
     send_reply,
 )
 
-_ai_chain = AIProviderChain(providers=[
-    OpenAIProvider(),
-    ClaudeProvider(),
-])
+_ai_chain = build_default_chain()
 
 _OPEN_SESSION_STATUSES = ("active", "pending_confirmation")
 

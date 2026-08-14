@@ -14,9 +14,11 @@ Use SQLAlchemy as the ORM (Object Relational Mapper).
 - FastAPI + SQLAlchemy is the industry standard pairing — extensive documentation, tutorials, and community support
 - Allows writing database queries in Python rather than raw SQL strings, reducing errors and improving readability
 - Supports JSONB columns natively for PostgreSQL
-- Works alongside Alembic for database migration management
 - Developer's existing PostgreSQL knowledge transfers directly — SQLAlchemy is a Python interface to the same database concepts already understood
 
 ## Consequences
 - Adds a layer of abstraction over SQL — developers must understand both SQLAlchemy syntax and the underlying SQL it generates
-- Alembic required for schema migrations (added as a project dependency)
+- Schema migrations are hand-rolled sequential SQL files under `db/migrations/`,
+  not Alembic — corrected 2026-08-14; Alembic was never actually adopted
+  despite this ADR originally saying it was required. Models here are used
+  for querying/persistence, not schema generation.

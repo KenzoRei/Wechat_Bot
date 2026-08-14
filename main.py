@@ -1,3 +1,30 @@
+"""
+Signed cross-review plan, Section C3: this process owns the only
+BackgroundScheduler for the whole deployment. Running more than one
+web/worker process against the same database at once will duplicate every
+scheduled job below (session expiry, uChoice reports, Kefu polling) --
+there is no leader election or cross-process coordination. Keep this a
+single-instance deployment (Render: one instance, no horizontal scaling)
+until that coordination exists.
+
+RUN_SCHEDULER (config.py) defaults true and is a useful immediate seam, but
+it is NOT automatically enforced across instances -- two processes can each
+independently default it to true and both start a scheduler (Codex round-3
+review). Operationally:
+  - Set RUN_SCHEDULER explicitly in Render's environment even for today's
+    single instance, so it's a deliberate, visible choice rather than an
+    unset default.
+  - If a second instance/replica is ever added, exactly one may have
+    RUN_SCHEDULER=true; every other one must be explicitly false.
+  - /health/ready reports RUN_SCHEDULER per-instance, so a misconfigured
+    topology (zero or multiple scheduler owners) is at least observable.
+  - If real horizontal scaling is needed later, prefer moving the scheduler
+    into its own separate worker process/service rather than continuing to
+    coordinate this flag by hand across web instances.
+"""
+import os
+import uuid
+
 from fastapi import FastAPI
 from apscheduler.schedulers.background import BackgroundScheduler
 from contextlib import asynccontextmanager
@@ -7,8 +34,8 @@ from database import SessionLocal
 from jobs.session_expiry import run_expiry_check
 from jobs.uchoice_daily import run_uchoice_daily
 from jobs.uchoice_invoice import run_uchoice_invoice
-from api import health, webhook, labels, admin_panel, file_download
-from api.admin import groups, members, services, reference, logs, sessions, roles, invoices
+from api import health, labels, admin_panel, file_download
+from api.admin import groups, members, services, reference, logs, sessions, roles, invoices, kefu_staff
 
 
 # ── Scheduler setup ───────────────────────────────────────────────────────────
@@ -38,32 +65,66 @@ def _run_uchoice_invoice_job():
         db.close()
 
 
+# Instance-unique worker identity (Section C3) -- set WORKER_INSTANCE_ID
+# explicitly in the deployment environment if you ever do run more than one
+# instance, so leases/logs are attributable; falls back to a random ID per
+# process start so a single-instance deployment still isn't hardcoded.
+_WORKER_INSTANCE_ID = os.getenv("WORKER_INSTANCE_ID") or f"worker-{uuid.uuid4().hex[:8]}"
+
+# max_instances=1 + coalesce=True on every job below: a slow run must never
+# overlap with the next tick of the same job, and if ticks were missed
+# (e.g. a deploy restart), catch up with a single run rather than a burst.
 scheduler = BackgroundScheduler()
-scheduler.add_job(_run_expiry_job, "interval", minutes=5, id="session_expiry")
+scheduler.add_job(
+    _run_expiry_job, "interval", minutes=5, id="session_expiry",
+    max_instances=1, coalesce=True, misfire_grace_time=60,
+)
 # kefu-migration-plan.md Sec 7: these stay registered and running as long as
 # Smart Robot is enabled -- no change to their scheduling from this
 # migration. Their own queries are additionally filtered to
 # source_channel='smart_robot' (jobs/uchoice_daily.py, jobs/uchoice_invoice.py).
 if config.SMART_ROBOT_ENABLED:
-    scheduler.add_job(_run_uchoice_daily_job, "cron", hour=8, id="uchoice_daily")
-    scheduler.add_job(_run_uchoice_invoice_job, "cron", day=1, hour=9, id="uchoice_invoice")
+    scheduler.add_job(
+        _run_uchoice_daily_job, "cron", hour=8, id="uchoice_daily",
+        max_instances=1, coalesce=True, misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _run_uchoice_invoice_job, "cron", day=1, hour=9, id="uchoice_invoice",
+        max_instances=1, coalesce=True, misfire_grace_time=3600,
+    )
+
+
+# ── Smart Robot wiring (feature-gated) ─────────────────────────────────────────
+# Unlike Kefu's callback, Smart Robot's webhook has no analogous "verify the
+# URL before a secret is issued" bootstrap requirement, so there is no reason
+# for its route (or the AI providers api/webhook.py constructs at import
+# time) to exist at all when the channel is disabled -- the whole module is
+# only imported when enabled.
+_smart_robot_router = None
+if config.SMART_ROBOT_ENABLED:
+    from api import webhook as _webhook
+    _smart_robot_router = _webhook.router
 
 
 # ── Kefu wiring (feature-gated, Codex round-88's "application wiring") ────────
-# Callback crypto stays wired so WeCom can verify the URL before issuing the
-# API Secret. KEFU_ENABLED gates clients, processing, and scheduled work.
-from core.WXBizXmlMsgCrypt import WXBizXmlMsgCrypt
-from api.kefu_callback import create_kefu_callback_router
+# Two independent modes (Codex's round-2 review of this same plan): callback
+# verification/crypto/route (KEFU_CALLBACK_ENABLED, needed before WeCom will
+# issue the API Secret) is now separate from business processing
+# (KEFU_ENABLED, clients/workers/scheduled jobs). A Smart-Bot-only
+# deployment can set both false and needs none of the Kefu credentials --
+# config.py enforces KEFU_ENABLED implies KEFU_CALLBACK_ENABLED.
+_kefu_router = None
+if config.KEFU_CALLBACK_ENABLED:
+    from core.WXBizXmlMsgCrypt import WXBizXmlMsgCrypt
+    from api.kefu_callback import create_kefu_callback_router
 
-_kefu_crypt = WXBizXmlMsgCrypt(
-    config.WECHAT_KEFU_TOKEN, config.WECHAT_KEFU_ENCODING_AES_KEY, config.WECHAT_CORP_ID
-)
+    _kefu_crypt = WXBizXmlMsgCrypt(
+        config.WECHAT_KEFU_TOKEN, config.WECHAT_KEFU_ENCODING_AES_KEY, config.WECHAT_CORP_ID
+    )
 
-
-def _on_kefu_sync_event(event):
-    """Acknowledge verified callbacks while business processing is disabled."""
-    print("[main] Kefu callback verified; processing is disabled", flush=True)
-
+    def _on_kefu_sync_event(event):
+        """Acknowledge verified callbacks while business processing is disabled."""
+        print("[main] Kefu callback verified; processing is disabled", flush=True)
 
 if config.KEFU_ENABLED:
     from clients.kefu_client import KefuClient
@@ -86,7 +147,7 @@ if config.KEFU_ENABLED:
             print(f"[main] Kefu sync failed: {e}", flush=True)
 
     def _run_kefu_worker_job():
-        kefu_sync.run_worker_once(SessionLocal, _kefu_processor, worker_id="kefu-worker-1")
+        kefu_sync.run_worker_once(SessionLocal, _kefu_processor, worker_id=_WORKER_INSTANCE_ID)
 
     def _run_kefu_delivery_job():
         kefu_delivery_worker.run_delivery_sweep(SessionLocal, _kefu_client, kefu_artifact_loader.load_artifact)
@@ -95,19 +156,32 @@ if config.KEFU_ENABLED:
     # Sec 11.3) govern how many messages can be sent per window, not how
     # often we're allowed to poll; there's no WeCom-imposed floor on these.
     # Tightened from 15s/20s after live latency observed as slow.
-    scheduler.add_job(_run_kefu_worker_job, "interval", seconds=3, id="kefu_worker")
-    scheduler.add_job(_run_kefu_delivery_job, "interval", seconds=2, id="kefu_delivery")
+    # max_instances=1 matters most here: at a 2-3s interval, an occasional
+    # slow run must not stack a second overlapping run on top of itself.
+    scheduler.add_job(
+        _run_kefu_worker_job, "interval", seconds=3, id="kefu_worker",
+        max_instances=1, coalesce=True, misfire_grace_time=5,
+    )
+    scheduler.add_job(
+        _run_kefu_delivery_job, "interval", seconds=2, id="kefu_delivery",
+        max_instances=1, coalesce=True, misfire_grace_time=5,
+    )
 
-_kefu_router = create_kefu_callback_router(_kefu_crypt, _on_kefu_sync_event)
+if config.KEFU_CALLBACK_ENABLED:
+    _kefu_router = create_kefu_callback_router(_kefu_crypt, _on_kefu_sync_event)
 
 
 # ── App lifecycle ─────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    scheduler.start()
+    if config.RUN_SCHEDULER:
+        scheduler.start()
+    else:
+        print("[main] RUN_SCHEDULER=false -- this process will not run scheduled jobs", flush=True)
     yield
-    scheduler.shutdown()
+    if config.RUN_SCHEDULER:
+        scheduler.shutdown()
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -120,11 +194,13 @@ app = FastAPI(
 
 # public routes
 app.include_router(health.router)
-app.include_router(webhook.router)
+if _smart_robot_router is not None:
+    app.include_router(_smart_robot_router)
 app.include_router(labels.router)
 app.include_router(file_download.router)
 app.include_router(admin_panel.router)  # public route — the page itself prompts for the admin key client-side
-app.include_router(_kefu_router)
+if _kefu_router is not None:
+    app.include_router(_kefu_router)
 
 # admin routes
 app.include_router(groups.router)
@@ -135,3 +211,4 @@ app.include_router(logs.router)
 app.include_router(sessions.router)
 app.include_router(roles.router)
 app.include_router(invoices.router)
+app.include_router(kefu_staff.router)

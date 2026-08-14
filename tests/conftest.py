@@ -44,6 +44,26 @@ def pytest_configure(config):
             f"an unrecognized database. Got: {db_url!r}"
         )
 
+    # Codex round-3 review of the signed cross-review plan's implementation:
+    # a hostname-fragment match is not "an unmistakable test database
+    # marker" -- this repository has no separate test database (documented
+    # in tests/kefu_integration/test_kefu_admin_purge.py's own docstring,
+    # including a real incident where an unscoped test cancelled a live
+    # customer case). Until a genuinely isolated test database/schema is
+    # provisioned, running this suite against the shared production
+    # database must be an explicit, conscious choice every time, not merely
+    # possible because DATABASE_URL happens to already point there.
+    if "sqlite" not in db_url and os.environ.get("ALLOW_PRODUCTION_DB_TESTS") != "1":
+        raise pytest.UsageError(
+            "DATABASE_URL points at the shared production database, and no "
+            "isolated test database is configured. Refusing to run by "
+            "default -- set ALLOW_PRODUCTION_DB_TESTS=1 to confirm you "
+            "understand these tests will create, mutate, and delete rows "
+            "in the real production database (see "
+            "tests/kefu_integration/test_kefu_admin_purge.py's docstring "
+            "for why this matters), and accept the risk for this run."
+        )
+
 
 @pytest.fixture(autouse=True)
 def block_operational_clients(monkeypatch):

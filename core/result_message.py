@@ -471,6 +471,6 @@ def _default_sections_builder(context: dict, db: DBSession) -> list[dict]:
     return [{"label": None, "type": "kv", "items": items}]
 
 
-def build_sections(service_type_name: str | None, context: dict, db: DBSession) -> list[dict]:
+def build_result_sections(service_type_name: str | None, context: dict, db: DBSession) -> list[dict]:
     builder = RESULT_BUILDERS.get(service_type_name, _default_sections_builder) if service_type_name else _default_sections_builder
     return builder(context, db)

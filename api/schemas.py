@@ -79,6 +79,36 @@ class RoleResponse(BaseModel):
     name:        str
     description: str | None
     created_at:  datetime
+    # True iff this role is in core.uchoice_constants.ASSIGNABLE_ROLE_NAMES --
+    # the same allowlist api/admin/kefu_staff.py and api/admin/members.py
+    # enforce server-side. Lets the admin panel filter its role dropdown to
+    # only options that won't 400 when saved (Codex round-3 review: the UI
+    # previously offered every role, including "pending", which the
+    # assignable-role APIs correctly reject).
+    assignable:  bool
+
+
+# ── Kefu Staff ────────────────────────────────────────────────────────────────
+
+class KefuStaffUpdate(BaseModel):
+    role:           str | None = None
+    is_active:      bool | None = None
+    warehouse_code: str | None = None   # required if role becomes "warehouseman", enforced in the route
+    display_name:   str | None = None
+
+
+class KefuStaffResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    staff_id:        UUID
+    open_kfid:       str
+    external_userid: str
+    group_id:        UUID
+    role:            str
+    display_name:    str | None
+    warehouse_code:  str | None
+    is_active:       bool
+    created_at:      datetime
 
 
 class GroupServiceRoleGrant(BaseModel):

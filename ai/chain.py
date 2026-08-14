@@ -21,3 +21,19 @@ class AIProviderChain:
                 print(f"[ai_chain] {provider.name} failed: {e}")
                 continue
         raise RuntimeError(f"All AI providers failed. Last error: {last_error}")
+
+
+def build_default_chain() -> AIProviderChain:
+    """
+    Single construction point (signed cross-review plan, Section C4) --
+    previously duplicated identically in api/webhook.py and
+    core/kefu_case_adapter.py. Provider order (OpenAI primary, Claude
+    fallback) is unchanged from both prior call sites.
+    """
+    from ai.claude_provider import ClaudeProvider
+    from ai.openai_provider import OpenAIProvider
+
+    return AIProviderChain(providers=[
+        OpenAIProvider(),
+        ClaudeProvider(),
+    ])

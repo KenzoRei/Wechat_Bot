@@ -1,6 +1,6 @@
 from handlers.base import BaseHandler
 from clients.wechat_client import send_message
-from core.result_message import build_result_message, build_result_title, build_sections
+from core.result_message import build_result_message, build_result_title, build_result_sections
 
 
 class ReplyWeChatHandler(BaseHandler):
@@ -26,7 +26,7 @@ class ReplyWeChatHandler(BaseHandler):
         serial_number = context.get("serial_number", "")
         service_type_name = self._resolve_service_type_name(context, db)
 
-        sections = build_sections(service_type_name, context, db)
+        sections = build_result_sections(service_type_name, context, db)
         title = build_result_title(service_type_name, context)
         content = build_result_message(title, serial_number, sections)
 

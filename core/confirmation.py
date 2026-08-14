@@ -516,6 +516,6 @@ CONFIRMATION_BUILDERS: dict[str, Callable[[dict, DBSession], list[dict]]] = {
 }
 
 
-def build_sections(service_type_name: str, collected_fields: dict, db: DBSession) -> list[dict]:
+def build_confirmation_sections(service_type_name: str, collected_fields: dict, db: DBSession) -> list[dict]:
     builder = CONFIRMATION_BUILDERS.get(service_type_name, _default_sections_builder)
     return builder(collected_fields, db)

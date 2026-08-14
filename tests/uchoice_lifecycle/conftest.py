@@ -9,12 +9,8 @@ import pytest
 # the offline suite import models without using any real credential or URL.
 _REQUIRED_TEST_ENV = {
     "WECHAT_CORP_ID": "offline-test",
-    "WECHAT_SECRET": "offline-test",
-    "WECHAT_AGENT_ID": "offline-test",
     "WECHAT_TOKEN": "offline-test",
     "WECHAT_ENCODING_AES_KEY": "offline-test",
-    "WECHAT_BOT_ID": "offline-test",
-    "WECHAT_BOT_SECRET": "offline-test",
     "YIDIDA_BASE_URL": "https://blocked.invalid",
     "OMS_BASE_URL": "https://blocked.invalid",
     "CLAUDE_API_KEY": "offline-test",

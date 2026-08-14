@@ -1,6 +1,6 @@
 """
-Read-only admin/dev panel — a single self-contained HTML page served
-directly by the app (no separate hosting, no build step, no framework).
+Admin/dev panel — a single self-contained HTML page served directly by the
+app (no separate hosting, no build step, no framework).
 
 Deliberately NOT behind verify_admin_key at the route level — a browser has
 to be able to load the page itself before it has a key to send. The page's
@@ -8,6 +8,11 @@ own JS prompts for the admin key once, stores it in sessionStorage, and
 sends it as X-Admin-Key on every call to the already-protected /admin/*
 endpoints (same auth as PowerShell/curl usage — this page has no elevated
 access of its own, it's just a thin client over the existing admin API).
+
+Mostly read-only, with one write action: assigning a role to a Kefu staff
+member (PATCH /admin/kefu-staff/{staff_id}) — the most urgent operational
+gap this panel exists to close, since Kefu self-registration leaves new
+staff stuck in the "pending" role until an admin promotes them.
 """
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
@@ -144,7 +149,7 @@ _PANEL_HTML = """<!doctype html>
 
 <div id="app">
   <h1>WeChat Bot — Admin Panel</h1>
-  <div class="subtitle">Read-only view over the existing admin API. No write actions happen from this page.</div>
+  <div class="subtitle">Thin client over the existing admin API. Read-only except Kefu staff role assignment below.</div>
 
   <div class="toolbar">
     <button onclick="loadAll()">↻ Refresh</button>
@@ -165,6 +170,24 @@ _PANEL_HTML = """<!doctype html>
       <div class="label">Total members</div>
       <div class="value" id="memberCount">–</div>
     </div>
+    <div class="stat">
+      <div class="label">Pending Kefu staff</div>
+      <div class="value" id="kefuPendingCount">–</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <h3>Kefu Staff</h3>
+        <div class="meta">Assign a role to promote a staff member out of "pending". Warehouseman requires a warehouse code.</div>
+      </div>
+    </div>
+    <table>
+      <thead><tr><th>Name</th><th>external_userid</th><th>Role</th><th>Warehouse</th><th>Status</th><th>Registered</th><th></th></tr></thead>
+      <tbody id="kefuStaffRows"></tbody>
+    </table>
+    <div class="error" id="kefuStaffError"></div>
   </div>
 
   <div id="groups"></div>
@@ -190,15 +213,28 @@ function saveKeyAndLoad() {
   loadAll();
 }
 
-async function authedFetch(path) {
-  const resp = await fetch(path, { headers: { "X-Admin-Key": getKey() } });
+async function authedFetch(path, options) {
+  const resp = await fetch(path, {
+    ...options,
+    headers: { "X-Admin-Key": getKey(), ...(options && options.headers) },
+  });
   if (resp.status === 401) {
     throw new Error("UNAUTHORIZED");
   }
   if (!resp.ok) {
-    throw new Error(`${path} -> HTTP ${resp.status}`);
+    let detail = `HTTP ${resp.status}`;
+    try { detail = (await resp.json()).detail || detail; } catch {}
+    throw new Error(`${path} -> ${detail}`);
   }
   return resp.json();
+}
+
+async function authedPatch(path, body) {
+  return authedFetch(path, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 function escapeHtml(s) {
@@ -211,6 +247,82 @@ function escapeHtml(s) {
 function fmtDate(iso) {
   if (!iso) return "";
   try { return new Date(iso).toLocaleString(); } catch { return iso; }
+}
+
+let _rolesCache = null;
+
+async function getRoles() {
+  if (_rolesCache) return _rolesCache;
+  const resp = await authedFetch("/admin/roles");
+  _rolesCache = resp.data || [];
+  return _rolesCache;
+}
+
+function kefuRoleRowHtml(s, roles) {
+  // Only assignable roles are offered as targets (Codex round-3 review:
+  // the dropdown previously offered every role, including "pending",
+  // which api/admin/kefu_staff.py's PATCH correctly rejects with a 400).
+  // The row's OWN current role is always included even when not
+  // assignable, so a pending member's dropdown accurately shows "pending"
+  // as selected rather than silently defaulting to whatever assignable
+  // role happens to sort first.
+  const assignableNames = roles.filter(r => r.assignable).map(r => r.name);
+  const optionNames = assignableNames.includes(s.role) ? assignableNames : [s.role, ...assignableNames];
+  const options = optionNames.map(r =>
+    `<option value="${escapeHtml(r)}" ${r === s.role ? "selected" : ""}>${escapeHtml(r)}</option>`
+  ).join("");
+  const isWarehouseman = s.role === "warehouseman";
+  return `
+    <tr id="kefu-row-${s.staff_id}">
+      <td>${escapeHtml(s.display_name || "(no name)")}</td>
+      <td>${escapeHtml(s.external_userid)}</td>
+      <td><select id="kefu-role-${s.staff_id}" onchange="onKefuRoleChange('${s.staff_id}')">${options}</select></td>
+      <td><input type="text" id="kefu-wh-${s.staff_id}" value="${escapeHtml(s.warehouse_code || "")}"
+            style="width:90px;${isWarehouseman ? "" : "display:none"}" placeholder="warehouse"></td>
+      <td>${s.is_active ? '<span class="badge ok">active</span>' : '<span class="badge bad">suspended</span>'}</td>
+      <td>${fmtDate(s.created_at)}</td>
+      <td><button onclick="saveKefuRole('${s.staff_id}')">Save</button></td>
+    </tr>
+  `;
+}
+
+function onKefuRoleChange(staffId) {
+  const role = document.getElementById(`kefu-role-${staffId}`).value;
+  document.getElementById(`kefu-wh-${staffId}`).style.display = role === "warehouseman" ? "" : "none";
+}
+
+async function saveKefuRole(staffId) {
+  document.getElementById("kefuStaffError").textContent = "";
+  const role = document.getElementById(`kefu-role-${staffId}`).value;
+  const warehouseInput = document.getElementById(`kefu-wh-${staffId}`);
+  const body = { role };
+  if (role === "warehouseman") {
+    if (!warehouseInput.value.trim()) {
+      document.getElementById("kefuStaffError").textContent = "Warehouse code is required for role=warehouseman.";
+      return;
+    }
+    body.warehouse_code = warehouseInput.value.trim();
+  }
+  try {
+    await authedPatch(`/admin/kefu-staff/${staffId}`, body);
+    await loadKefuStaff();
+  } catch (e) {
+    if (e.message === "UNAUTHORIZED") throw e;
+    document.getElementById("kefuStaffError").textContent = "Save failed: " + e.message;
+  }
+}
+
+async function loadKefuStaff() {
+  const roles = await getRoles();
+  const resp = await authedFetch("/admin/kefu-staff");
+  const staff = resp.data || [];
+  const pendingCount = staff.filter(s => s.role === "pending").length;
+  document.getElementById("kefuPendingCount").textContent = pendingCount;
+
+  const rowsEl = document.getElementById("kefuStaffRows");
+  rowsEl.innerHTML = staff.length
+    ? staff.map(s => kefuRoleRowHtml(s, roles)).join("")
+    : '<tr><td colspan="7" class="empty">No Kefu staff registered yet.</td></tr>';
 }
 
 async function loadAll() {
@@ -228,6 +340,8 @@ async function loadAll() {
       badge.textContent = "unreachable";
       badge.className = "badge bad";
     }
+
+    await loadKefuStaff();
 
     const groupsResp = await authedFetch("/admin/groups");
     const groups = groupsResp.data || [];
