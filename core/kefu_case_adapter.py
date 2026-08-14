@@ -102,6 +102,13 @@ _KEFU_ENABLED_SERVICES = frozenset({
     "uchoice_inbound_request", "uchoice_outbound_request", "upsert_address",
     "confirm_inbound_completion", "confirm_outbound_completion",
     "adjust_storage", "recount_storage", "move_storage",
+    # role_change already has the full generic pipeline (sanitization,
+    # confirmation builder, pre-confirm last-admin check) plus a
+    # Kefu-identity-aware handler (handlers/uchoice/role_change.py) --
+    # it was simply never added here, leaving it usable in Smart Robot's
+    # group chat but silently denied through Kefu with no functional
+    # difference to justify the gap.
+    "role_change",
 })
 
 # purge_kefu_sessions is DELIBERATELY absent from the set above. It's
