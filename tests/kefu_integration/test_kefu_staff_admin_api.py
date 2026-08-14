@@ -1,6 +1,6 @@
 """
-Route-level coverage for api/admin/kefu_staff.py -- the new privileged write
-surface Codex's review correctly flagged as untested. Runs the router
+Route-level coverage for the privileged api/admin/kefu_staff.py write surface.
+Runs the router
 mounted standalone on a minimal FastAPI app (same isolation pattern as
 tests/kefu/test_kefu_callback.py) against real Postgres, scoped to rows
 this file creates itself (tests/kefu_integration/test_kefu_admin_purge.py's

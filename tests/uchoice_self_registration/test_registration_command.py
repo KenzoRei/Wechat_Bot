@@ -1,6 +1,5 @@
 """
-phase4-self-registration.md Sec 3 + Sec 8 -- exact-command recognition,
-normalization, and precise duplicate/error semantics.
+Exact-command recognition, normalization, and duplicate/error semantics.
 """
 import pytest
 from sqlalchemy.exc import OperationalError
@@ -93,8 +92,8 @@ def test_brand_new_sender_registers_into_pending():
 
 
 def test_same_sender_registers_independently_in_two_groups():
-    """Codex round-39 minor wording note: the precondition is the sender's
-    absence from group_member in each group, not prior cross-group state."""
+    """The sender's absence from each group's membership is the precondition;
+    prior cross-group state is irrelevant."""
     db_a = MockDB(existing_member_role=None)
     db_a.wechat_group_id = "wxgroup-A"
     db_b = MockDB(existing_member_role=None)
@@ -117,7 +116,7 @@ def test_missing_pending_role_fails_controlled_not_silent_success():
     assert db.rollback_count == 1
 
 
-# ── retry / duplicate / error semantics (Codex round-37/39) ────────────────
+# ── retry / duplicate / error semantics ───────────────────────────────────
 
 def test_pending_retry_gets_awaiting_assignment_reply():
     db = MockDB(existing_member_role="pending")

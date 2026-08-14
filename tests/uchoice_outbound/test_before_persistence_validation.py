@@ -1,6 +1,6 @@
 """
-Codex round-28 finding 3: fabricated/malformed sku_lines must not merge
-into persisted collected_fields at all -- not just get caught later at
+Fabricated or malformed sku_lines must not merge into persisted
+collected_fields; catching them only later at
 pre-confirm time. A bad entry that's already stored could be re-serialized
 into the next turn's AI prompt even if it's never shown to the customer.
 """
@@ -83,8 +83,7 @@ def test_fabricated_sku_line_never_persisted_on_new_request(db):
 
 @pytest.mark.parametrize("malformed_value", ["not a list", {"sku_code": "s1"}, None, 42])
 def test_malformed_non_list_sku_lines_never_persisted(db, malformed_value):
-    """Codex round-30 finding 3: a non-list sku_lines shape must be omitted
-    entirely, not merged into collected_fields unchanged."""
+    """A non-list sku_lines shape is omitted rather than persisted unchanged."""
     existing = db.execute(text(
         "select session_id from conversation_session where wechat_openid = :o "
         "and status in ('active','pending_confirmation')"

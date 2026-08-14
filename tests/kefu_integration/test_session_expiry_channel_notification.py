@@ -1,6 +1,6 @@
 """
-Real-Postgres coverage for the signed cross-review plan's Section C2 fix:
-jobs/session_expiry.py's per-session notification must branch by
+Real-PostgreSQL coverage ensuring jobs/session_expiry.py branches notification
+by
 source_channel, never falling through to the Smart Robot group-webhook path
 (which assumes wechat_openid) for a Kefu session.
 

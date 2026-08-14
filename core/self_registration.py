@@ -1,6 +1,5 @@
 """
-Phase 4 self-registration (docs/ai-collaboration/phase4-self-registration.md,
-jointly signed by Claude Code round 42 / Codex round 43). Registration is a
+Self-registration is a
 deterministic pre-access system command, not an AI-routed business service --
 it does not participate in the normal service/workflow/confirmation
 machinery, and never touches conversation_session or request_log.
@@ -9,9 +8,8 @@ Two independent entry points, called from api/webhook.py:
 
 - try_handle_registration_command: runs BEFORE access_control.check_access,
   with its own group/membership lookup. This is the only place the exact
-  command is recognized -- there is no second, post-access copy of this
-  check (that would be the round-38 contradiction Codex's round-39 review
-  caught). Handles both brand-new registration and a retry by an
+  command is recognized; there is no second, post-access copy of this check.
+  Handles both brand-new registration and a retry by an
   already-registered sender (pending or operational).
 - pending_short_circuit_reply: runs AFTER check_access succeeds, only for
   non-command messages from a sender whose resolved role is "pending".
@@ -31,7 +29,7 @@ PENDING_SHORT_CIRCUIT_REPLY = "您的注册申请正在等待管理员分配角�
 
 
 def _normalize(text: str) -> str:
-    """NFKC + outer-whitespace strip, per Codex round-37 Sec 3 -- exact
+    """NFKC plus outer-whitespace stripping; exact
     equality is checked against this normalized form. Bot-mention prefixes
     are already stripped upstream by core/webhook_receiver.py."""
     return unicodedata.normalize("NFKC", text or "").strip()
@@ -94,8 +92,8 @@ def _register(db: DBSession, wechat_openid: str, group_id) -> str:
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        # Per Codex round-39 finding 3: only the composite-PK violation on
-        # group_member's (wechat_openid, group_id) counts as a duplicate.
+        # Only the composite-PK violation on group_member's
+        # (wechat_openid, group_id) counts as a duplicate.
         # Everything else (FK violation, other integrity error) is a real
         # failure, not a false "already registered" success.
         constraint_name = getattr(getattr(getattr(exc, "orig", None), "diag", None), "constraint_name", None)

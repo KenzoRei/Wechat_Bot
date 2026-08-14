@@ -1,11 +1,10 @@
 """
-The only operational-text renderer for Kefu (kefu-deterministic-response-plan
-.md Sec 4/5). Pure functions of already-validated, already-labeled facts --
-this module never queries or mutates the database (plan Sec 12's integration
-contract: Codex's orchestration resolves labels via existing db-touching
-helpers first, then constructs a KefuOutcome; this module only formats it).
+The only operational-text renderer for Kefu. It uses pure functions over
+already-validated and labeled facts, never querying or mutating the database.
+Orchestration resolves labels before constructing a KefuOutcome; this module
+only formats it.
 
-Two published entry points, per plan Sec 12:
+Two published entry points:
     validate_address_match(ai_response, candidates) -> AddressDecision
     render_kefu_outcome(outcome: KefuOutcome) -> str
 """
@@ -63,8 +62,7 @@ class AddressDecision:
     """
     The backend's OWN decision about an AI-reported address match, after
     validating every candidate ID against the exact list supplied for this
-    turn (plan Sec 1 invariant 4: AI candidate IDs are untrusted until
-    validated). `status` is one of:
+    turn. AI candidate IDs are untrusted until validated. `status` is one of:
       "matched"      -- exactly one candidate ID, and it's real.
       "ambiguous"     -- two or more candidate IDs, all real.
       "unmatched"     -- the AI reported no match; sanitized company_name/
@@ -116,8 +114,8 @@ def validate_address_match(ai_response, candidates: list[dict]) -> AddressDecisi
         return AddressDecision(status="invalid")
 
     if match.status == "ambiguous":
-        # Codex round-119 finding: every reported ID must be turn-local (not
-        # just "at least two of them are"), and they must be distinct -- a
+        # Every reported ID must be turn-local, not merely two of them, and
+        # they must be distinct; a
         # partially hallucinated list, or a real ID repeated to reach a count
         # of two, is not genuine ambiguity between two options. Order is
         # preserved (a plain set would scramble display order); "seen"

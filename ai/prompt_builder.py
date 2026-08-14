@@ -11,13 +11,12 @@ _WEEKDAY_CN = ["星期一", "星期二", "星期三", "星期四", "星期五", 
 
 def _address_matching_instructions(is_kefu: bool) -> str:
     """
-    kefu-deterministic-response-plan.md Sec 3/5: Kefu gets a structured-only
+    Kefu uses a structured-only
     contract (AddressMatch), never writing destination_address_id/
     unmatched_new_address directly and never narrating a pivot/cancellation
     that only the backend can know actually happened. Smart Robot keeps its
-    exact pre-existing legacy instruction, unchanged, per the plan's explicit
-    compatibility rule (Sec 2) -- Smart Robot's own reply/pivot path is a
-    documented non-goal of this phase.
+    existing legacy instruction unchanged because Smart Robot owns its own
+    reply and pivot path.
     """
     if is_kefu:
         return (
@@ -98,8 +97,8 @@ def build_system_prompt(context: dict) -> str:
             "用户询问某个计费类型是什么意思、或几种类型有什么区别时，据此如实解释，不要凭空编造标准。\n"
         )
 
-    # kefu-deterministic-response-plan.md Sec 2/3: channel mode determines the
-    # structured-vs-legacy AI contract. Smart Robot (default when absent, e.g.
+    # Channel mode determines the structured-versus-legacy AI contract. Smart
+    # Robot (the default when absent, e.g.
     # offline tests building context dicts by hand) keeps its exact existing
     # behavior; only source_channel=="kefu" gets the structured-only contract.
     is_kefu = context.get("source_channel") == "kefu"
@@ -188,10 +187,10 @@ def build_system_prompt(context: dict) -> str:
     today = datetime.now(timezone.utc).date()
     today_str = f"{today.isoformat()}（{_WEEKDAY_CN[today.weekday()]}）"
 
-    # kefu-deterministic-response-plan.md Sec 3: Kefu's response schema swaps
+    # Kefu's response schema swaps
     # unmatched_new_address for address_match and adds semantic_issues; reply
     # is relabeled internal-only. Smart Robot's schema/wording is byte-for-
-    # byte the original, unaffected by this phase (Sec 2 compatibility rule).
+    # byte the original.
     if is_kefu:
         response_format_block = """{
   "intent": "<意图>",
@@ -321,7 +320,7 @@ def _parse_semantic_issues(raw_issues) -> tuple[SemanticIssue, ...]:
     Defensive structural parsing only -- this is NOT where candidate IDs get
     validated against the real candidate set (that's
     core/kefu_response_renderer.validate_address_match and its future
-    field-level counterparts, kefu-deterministic-response-plan.md Sec 3-4).
+    field-level counterparts).
     A malformed entry is dropped, not raised -- one bad item must not corrupt
     the rest of the response.
     """

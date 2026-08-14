@@ -1,7 +1,6 @@
 """
-Tagged target-identity contract for role_change (kefu-migration-plan.md
-Sec 2.3, Codex round-68 finding 4: "identifiers can collide across
-GroupMember and kefu_staff" -- dispatch must be explicit, never inferred
+Tagged target-identity contract for role_change. Identifiers can collide across
+GroupMember and kefu_staff, so dispatch must be explicit and never inferred
 by checking which table happens to contain a matching raw string).
 
 A candidate's identity is always one of:

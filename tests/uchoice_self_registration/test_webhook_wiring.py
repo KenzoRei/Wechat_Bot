@@ -1,6 +1,5 @@
 """
-Verifies api/webhook.py's _process_message actually wires the two Phase 4
-branches in the order the signed design requires:
+Verifies api/webhook.py wires self-registration branches in the required order:
   1. registration command recognized before access_control.check_access;
   2. pending short circuit fires after check_access but before
      resolve_session / build_context / ai_chain.process.

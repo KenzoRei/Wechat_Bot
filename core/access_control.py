@@ -17,8 +17,7 @@ class AccessResult:
     allowed_services:  list[dict]
     group_context:     dict | None    # location presets, aliases — passed to AI
     group_description: str | None     # human label for the group — used in keHuDanHao
-    # kefu-migration-plan.md Sec 2.3 -- default preserves Smart Robot's
-    # existing shape exactly; only check_kefu_access sets these.
+    # Defaults preserve Smart Robot's shape; only check_kefu_access sets these.
     source_channel:    str = "smart_robot"
     staff_id:          UUID | None = None
 
@@ -134,8 +133,8 @@ def check_kefu_access(
     external_userid: str,
 ) -> AccessResult | AccessDenied:
     """
-    kefu-migration-plan.md Sec 2.3: the Kefu-side equivalent of
-    check_access(), reached via kefu_staff instead of GroupMember.
+    Kefu-side equivalent of check_access(), reached through kefu_staff rather
+    than GroupMember.
     (open_kfid, external_userid) -> kefu_staff row -> kefu_staff.group_id
     + role_id -> the same group_service_role grant table Smart Robot
     already uses -- no new grant table, same deny-by-default mechanism.

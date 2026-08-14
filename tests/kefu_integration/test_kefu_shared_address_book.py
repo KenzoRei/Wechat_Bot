@@ -1,6 +1,5 @@
 """
-Real-Postgres tests for the shared U-Choice address book
-(kefu-deterministic-response-plan.md Sec 5). Distinct from
+Real-PostgreSQL tests for the shared U-Choice address book. Distinct from
 test_kefu_customer_selection.py, which covers the customer-lock interaction;
 this file covers address-sharing mechanics on their own: null/varied
 customer_id are all matchable, upsert_address gets the same candidate list
@@ -97,8 +96,8 @@ def test_upsert_address_receives_the_same_shared_candidate_list(kefu_access):
     """
     Previously a real gap: only uchoice_outbound_request triggered address
     candidate injection, so upsert_address's own matched_address_id
-    create-vs-update resolution had nothing to match against. Sec 5.1
-    requires both.
+    create-versus-update resolution had nothing to match against. Both are
+    required.
     """
     access, db = kefu_access
     names = {s["name"] for s in access.allowed_services}

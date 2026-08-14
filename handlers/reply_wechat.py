@@ -11,8 +11,8 @@ class ReplyWeChatHandler(BaseHandler):
     real name, resolved once from context["service_type_id"], not by
     sniffing which keys happen to be present in context["result"].
 
-    kefu-migration-plan.md / Codex round-88 finding 2: this step is the one
-    remaining exit path that wrote straight to the Smart Robot client
+    This step was the remaining exit path that wrote directly to the Smart
+    Robot client
     instead of the channel-neutral context["_reply"] convention every other
     exit path (core/workflow_engine.py's own send_message()) already uses --
     a successful Kefu workflow would finish with an empty case result since

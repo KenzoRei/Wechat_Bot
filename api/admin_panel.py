@@ -259,9 +259,8 @@ async function getRoles() {
 }
 
 function kefuRoleRowHtml(s, roles) {
-  // Only assignable roles are offered as targets (Codex round-3 review:
-  // the dropdown previously offered every role, including "pending",
-  // which api/admin/kefu_staff.py's PATCH correctly rejects with a 400).
+  // Offer only roles accepted by the PATCH endpoint; internal roles such as
+  // "pending" are not assignable.
   // The row's OWN current role is always included even when not
   // assignable, so a pending member's dropdown accurately shows "pending"
   // as selected rather than silently defaulting to whatever assignable

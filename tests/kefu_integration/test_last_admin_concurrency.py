@@ -1,7 +1,6 @@
 """
-Real concurrency coverage for the last-admin invariant (Codex round-4
-review of the signed cross-review plan's implementation): proves
-lock_group_admin_invariant actually serializes at the PostgreSQL level,
+Real concurrency coverage for the last-admin invariant, proving
+lock_group_admin_invariant serializes at the PostgreSQL level,
 not just "the code path calls it." Each side of every test opens its own
 real database connection via SessionLocal() and runs in its own OS thread,
 synchronized with a threading.Barrier so both threads reach the advisory
@@ -13,8 +12,8 @@ Covers both gaps the review named explicitly:
 - REST-vs-chat: one REST kefu_staff PATCH racing one RoleChangeHandler
   demotion in the same group.
 
-Codex round-4 review, finding 2: an earlier version of this file selected
-an EXISTING (possibly real, production) group and assumed the two
+An earlier version selected an existing, possibly operational group and
+assumed the two
 synthetic admins it added were that group's only active admins -- invalid
 if the real group already had active admins, and it temporarily altered a
 real group's authorization population. Every test here now creates its own
@@ -116,8 +115,8 @@ def _count_active_admins(group_id, admin_role_id):
 
 def _run_and_join(threads: list[threading.Thread], *, timeout: float = 15) -> None:
     """
-    Codex round-5 review: a hung thread must never leave cleanup racing a
-    still-open session holding the advisory lock, and must never keep the
+    A hung thread must never leave cleanup racing an open session holding the
+    advisory lock or keep the
     test process alive after pytest itself has moved on. daemon=True means
     a thread that outlives its join timeout can't block process exit;
     asserting liveness after join (rather than silently falling through

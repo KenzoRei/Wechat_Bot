@@ -17,7 +17,7 @@ class AIProviderChain:
                 return provider.process(context)
             except Exception as e:
                 last_error = e
-                # TODO: replace with structured logger in Phase 6
+                # TODO: replace this print with structured logging.
                 print(f"[ai_chain] {provider.name} failed: {e}")
                 continue
         raise RuntimeError(f"All AI providers failed. Last error: {last_error}")
@@ -25,8 +25,8 @@ class AIProviderChain:
 
 def build_default_chain() -> AIProviderChain:
     """
-    Single construction point (signed cross-review plan, Section C4) --
-    previously duplicated identically in api/webhook.py and
+    Single construction point; this was previously duplicated in
+    api/webhook.py and
     core/kefu_case_adapter.py. Provider order (OpenAI primary, Claude
     fallback) is unchanged from both prior call sites.
     """

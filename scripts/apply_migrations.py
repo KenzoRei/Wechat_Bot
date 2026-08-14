@@ -1,8 +1,7 @@
 """
-Migration runner + ledger -- closes the gap flagged repeatedly across the
-cross-review (docs/ai-collaboration/audit_20260814/): this project has 16
-hand-rolled SQL files under db/migrations/ but no tool that applies them in
-order or records which ones a given database has already seen.
+Migration runner and ledger for the sequential SQL files under db/migrations/.
+It applies files in numeric order and records which versions each database has
+already seen.
 
 Usage:
     python scripts/apply_migrations.py --database-url postgresql://...

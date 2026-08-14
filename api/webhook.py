@@ -107,8 +107,8 @@ def _process_message(message: dict) -> None:
 
     db: DBSession = SessionLocal()
     try:
-        # Phase 4 self-registration: the exact command is recognized here,
-        # before check_access, since the population this serves -- a sender
+        # Recognize the exact self-registration command before check_access,
+        # since the population this serves -- a sender
         # with no group_member row -- would otherwise get AccessDenied and
         # never reach anything gated behind a successful access resolution.
         # Also handles retries by already-registered (pending or

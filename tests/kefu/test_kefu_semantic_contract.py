@@ -1,6 +1,6 @@
 """
-kefu-deterministic-response-plan.md Sec 3: structured AI contract offline
-tests -- parsing, channel-mode prompt split, and validate_address_match's
+Offline tests for the structured AI contract: parsing, channel-mode prompt
+split, and validate_address_match's
 untrusted-candidate-ID enforcement. No DB needed.
 """
 from ai.base import AddressMatch, AIResponse, SemanticIssue
@@ -145,7 +145,7 @@ def test_parse_response_absent_structured_fields_default_empty():
 
 # ---------------------------------------------------------------------------
 # validate_address_match: untrusted-candidate-ID enforcement
-# (kefu-deterministic-response-plan.md Sec 1 invariant 4)
+# Candidate IDs remain untrusted until validated.
 # ---------------------------------------------------------------------------
 
 def _resp(address_match):
@@ -193,8 +193,8 @@ def test_ambiguous_with_one_real_one_hallucinated_is_rejected():
 
 def test_ambiguous_two_real_plus_one_hallucinated_is_rejected_wholesale():
     """
-    Codex round-119 finding: filtering out just the hallucinated ID and
-    accepting the remaining two real ones is wrong -- a partially
+    Filtering out only a hallucinated ID and accepting the remaining real IDs
+    is wrong; a partially
     hallucinated list means the AI's output as a whole isn't trustworthy,
     not that the bad entry can be silently dropped.
     """
@@ -206,8 +206,8 @@ def test_ambiguous_two_real_plus_one_hallucinated_is_rejected_wholesale():
 
 def test_ambiguous_with_a_duplicated_real_id_is_rejected_not_two_options():
     """
-    Codex round-119 finding: the same real ID reported twice is one
-    candidate, not two -- it must not be accepted as genuine ambiguity.
+    The same real ID reported twice is one candidate, not two, and must not be
+    accepted as genuine ambiguity.
     """
     decision = validate_address_match(
         _resp(AddressMatch(status="ambiguous", candidate_ids=("addr-1", "addr-1"))), _CANDIDATES

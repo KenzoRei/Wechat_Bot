@@ -82,9 +82,8 @@ class RoleResponse(BaseModel):
     # True iff this role is in core.uchoice_constants.ASSIGNABLE_ROLE_NAMES --
     # the same allowlist api/admin/kefu_staff.py and api/admin/members.py
     # enforce server-side. Lets the admin panel filter its role dropdown to
-    # only options that won't 400 when saved (Codex round-3 review: the UI
-    # previously offered every role, including "pending", which the
-    # assignable-role APIs correctly reject).
+    # only options accepted by the assignable-role APIs; internal roles such
+    # as "pending" must never appear here.
     assignable:  bool
 
 

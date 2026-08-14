@@ -424,8 +424,8 @@ def _explain_service_sections_builder(context: dict, db: DBSession) -> list[dict
 
 def _pending_digest_sections_builder(context: dict, db: DBSession) -> list[dict]:
     """
-    view_pending_digest (kefu-migration-plan.md Sec 7) -- the same content
-    jobs/uchoice_daily.py pushes on a schedule, rendered on demand. A ⚠️
+    view_pending_digest renders on demand the content jobs/uchoice_daily.py
+    pushes on a schedule. A ⚠️
     marker on anything within a day of the retirement threshold mirrors the
     scheduled digest's own marker exactly, so the two surfaces never
     disagree about which requests are close to going stale.

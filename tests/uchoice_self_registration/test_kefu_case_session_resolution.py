@@ -1,12 +1,11 @@
 """
-core.kefu_case_adapter._resolve_kefu_session -- case_number_hint priority
-over the staff's current-case binding, per-turn reauthorization (Codex
-round-90 finding 5), and unknown/closed/unauthorized-case denial. Mock DB
+core.kefu_case_adapter._resolve_kefu_session: case_number_hint priority over
+the staff's current-case binding, per-turn reauthorization, and denial of
+unknown, closed, or unauthorized cases. Mock DB
 only; the full _process_turn path (AI chain + workflow_engine) is
 intentionally NOT covered here -- see this module's own docstring note in
-core/kefu_case_adapter.py about limited test coverage on the end-to-end
-orchestration path, flagged to Codex rather than silently claimed as
-fully tested.
+core/kefu_case_adapter.py documents the limited end-to-end orchestration
+coverage.
 """
 from types import SimpleNamespace
 

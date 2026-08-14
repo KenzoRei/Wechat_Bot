@@ -67,8 +67,7 @@ def create_session(
     source_channel: str = "smart_robot",
     opened_by_staff_id: UUID | None = None,
 ) -> ConversationSession:
-    # kefu-migration-plan.md Sec 2.4 / Codex round-90 finding 4: set at
-    # creation, not patched in by a later, separate transaction -- see
+    # Set provenance at creation rather than in a later transaction; see
     # request_logger.create_log()'s identical note.
     session = ConversationSession(
         wechat_openid=wechat_openid,
@@ -121,8 +120,7 @@ def close_session(
     commit=False lets a caller (core.workflow_engine's atomic DB phase) fold
     this status change into the same transaction as the storage deltas and
     mark_success/mark_failed call that surround it, so the whole unit commits
-    or rolls back together (systemic-validation-addendum.md Sec 3b/Codex
-    round-28 finding 1).
+    or rolls back together.
     """
     session.status = status
     session.updated_at = datetime.now(timezone.utc)
@@ -147,8 +145,7 @@ def build_context(
         "allowed_services":  access.allowed_services,
         "group_context":     access.group_context,
         "group_description": access.group_description,
-        # kefu-migration-plan.md Sec 2.4 / Codex round-90 finding 4 --
-        # carried through so create_session/create_log can set the right
+        # Carried through so create_session/create_log can set provenance
         # provenance at creation time instead of defaulting to
         # 'smart_robot' and needing a later patch-up.
         "source_channel":        access.source_channel,
@@ -161,7 +158,7 @@ def build_context(
         "service_type_id":      str(session.service_type_id) if session and session.service_type_id else None,
         "conversation_history": session.conversation_history if session else [],
         "collected_fields":     session.collected_fields if session else {},
-        # kefu-migration-plan.md Sec 6.2: the case's own locked customer
+        # The case's own locked customer
         # (None until resolved -- see core/uchoice_customer.py). Read by
         # handlers/uchoice/address.py; unaffected for Smart Robot, which has
         # no customer_id concept and never sets session.customer_id at all.
@@ -233,9 +230,8 @@ def _build_uchoice_candidates(
         # will actually end up defaulting to.
         candidates["skus"] = uchoice_context.sku_catalog(db, scope_warehouse or "JFK")
 
-    # kefu-migration-plan.md Sec 6.2 (superseded): customer selection used to
-    # be required for Kefu inbound/outbound requests. The user corrected this
-    # directly: every current U-Choice service is performed on behalf of
+    # Customer selection was once required for Kefu inbound/outbound requests,
+    # but every current U-Choice service is performed on behalf of
     # U-Choice itself (the sole platform tenant today) -- `customer_id`
     # identifies a future second TENANT (the role group_id plays for Smart
     # Robot), not "which address-book company is this for". No current
@@ -245,8 +241,8 @@ def _build_uchoice_candidates(
     # real second tenant exists (see docs/ai-collaboration/decisions.md's
     # "Superseded or challenged assumptions").
 
-    # kefu-deterministic-response-plan.md Sec 5: the shared U-Choice address
-    # book is injected immediately for every authorized service that can
+    # Inject the shared U-Choice address book immediately for every authorized
+    # service that can
     # match against it, on BOTH channels, never filtered/withheld by
     # customer_id. Round 99 built the opposite rule (withhold until a
     # customer is locked, then filter to it) on the mistaken belief that

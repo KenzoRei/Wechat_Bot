@@ -2,12 +2,8 @@
 Cross-channel administrative invariants shared by every place a member's
 role or active status can change: the conversational role_change service
 (core/pre_confirm_validators.py's _last_admin_protection) and the REST admin
-APIs (api/admin/members.py, api/admin/kefu_staff.py). Extracted per the
-cross-review findings on the new Kefu admin API (signed plan follow-up,
-2026-08-14) -- api/admin/members.py had the identical gap already, from
-before this session; both are fixed together here since the invariant is
-explicitly cross-channel (kefu-migration-plan.md Sec 2.3: admin is an
-ASSIGNABLE_ROLE_NAMES role reachable by either channel).
+APIs (api/admin/members.py and api/admin/kefu_staff.py). The invariant is
+cross-channel because admin is assignable through either channel.
 """
 from sqlalchemy import text
 from sqlalchemy.orm import Session as DBSession
@@ -19,9 +15,9 @@ from models.role import Role
 
 def lock_group_admin_invariant(db: DBSession, group_id) -> None:
     """
-    Transaction-scoped PostgreSQL advisory lock, serializing last-admin
-    invariant checks for one group (Codex round-3 review: without this, two
-    concurrent requests -- e.g. one against api/admin/members.py and one
+    Transaction-scoped PostgreSQL advisory lock serializing last-admin checks
+    for one group. Without this, two concurrent requests, such as one against
+    api/admin/members.py and one
     against api/admin/kefu_staff.py -- can each count 2 admins before either
     commits, both independently decide a demotion/deactivation is safe, and
     the group ends up with zero). Callers must acquire this BEFORE counting

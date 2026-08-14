@@ -1,14 +1,12 @@
 """
-Kefu-side self-registration -- kefu-migration-plan.md Sec 2.3 / Codex
-round-88 finding 1. Mirrors core/self_registration.py's exact pattern
+Kefu-side self-registration mirrors core/self_registration.py's pattern
 (deterministic pre-access system command, own membership lookup, pending
 role, admin promotes later) but against kefu_staff instead of
 group_member, since Kefu's 1:1-per-account model doesn't fit the WeCom
 group-shaped table. group_id is never chosen by the staff member or
 inferred from anything about the message -- it is always
-config.KEFU_GROUP_ID, the single fixed open_kfid -> group_id mapping
-this deployment is configured with (Sec 2.3's explicit one-tenant scope
-limit for this migration).
+config.KEFU_GROUP_ID, the deployment's single fixed open_kfid-to-group_id
+mapping.
 """
 import unicodedata
 
@@ -78,8 +76,8 @@ def _register(db: DBSession, identity: KefuIdentity) -> str:
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        # Same discipline as core/self_registration.py's round-39 finding 3:
-        # only the composite-uniqueness violation on kefu_staff's
+        # As in core/self_registration.py, only the composite-uniqueness
+        # violation on kefu_staff's
         # (open_kfid, external_userid) counts as a duplicate. Anything else
         # (FK violation, other integrity error) is a real failure, not a
         # false "already registered" success.

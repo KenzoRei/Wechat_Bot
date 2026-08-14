@@ -213,8 +213,8 @@ def _inbound_sections_builder(collected_fields: dict, db: DBSession) -> list[dic
         formatted.append(f"{label}：{qty}")
 
     warehouse_code = collected_fields.get("warehouse_code", "?")
-    # kefu-migration-plan.md Sec 3: inbound now defaults warehouse_code to
-    # JFK when unstated, same as outbound -- same auto-default flag/note.
+    # Inbound and outbound both default an unstated warehouse_code to JFK and
+    # expose the same auto-default note.
     warehouse_note = "，系统默认，如有误请更正" if collected_fields.get("_warehouse_auto_default") else ""
     sections = [{"label": f"入库明细（{warehouse_code} 仓{warehouse_note}）", "type": "list", "items": formatted}]
 

@@ -1,6 +1,6 @@
 """
-Shared pre-persistence field sanitization (signed cross-review plan,
-Section C4): both core/workflow_engine.py (Smart Robot) and
+Shared pre-persistence field sanitization: both core/workflow_engine.py
+(Smart Robot) and
 core/kefu_turn_apply.py (Kefu) call this before merging AI-extracted fields
 into persisted collected_fields. Previously defined inside workflow_engine.py
 with kefu_turn_apply.py reaching into it via a private cross-module import;
@@ -11,15 +11,13 @@ it no longer looks like it's reaching into another module's private
 internals. workflow_engine.py imports it under its old private name as a
 compatibility alias so every existing monkeypatch target
 (`workflow_engine._sanitize_extracted_fields_before_persistence` etc.) keeps
-working unchanged (Codex's review of the first pass at this move flagged
-the still-private-looking name).
+working unchanged.
 """
 from sqlalchemy.orm import Session as DBSession
 
 _SKU_LINES_FIELD_BY_SERVICE = {
-    # Phase 1 (agreed-plan.md): uchoice_outbound_request.
-    # Phase 2 (systemic-validation-addendum.md): all six additional services
-    # now share the same catalog boundary before model output can merge into
+    # All listed services share the same catalog boundary before model output
+    # can merge into
     # persisted collected_fields. Their service-specific pre-confirm checks
     # remain as defense in depth.
     "uchoice_outbound_request": "sku_lines",
@@ -34,9 +32,8 @@ _SKU_LINES_FIELD_BY_SERVICE = {
 
 def sanitize_extracted_fields_before_persistence(service_name: str, extracted_fields: dict, db: DBSession, group_id: str | None = None) -> dict:
     """
-    Codex round-28 finding 3: the pre-confirm validators (_valid_outbound_sku_lines
-    etc.) are real, but they only run right before a confirmation is shown --
-    agreed-plan.md's actual design calls for the primary boundary to sit
+    Pre-confirm validators run only immediately before confirmation. The
+    primary boundary must sit
     before model output ever merges into persisted collected_fields, since
     otherwise invalid state is still stored and can be re-serialized into a
     later turn's prompt. This is that boundary for the one field class this
@@ -46,8 +43,7 @@ def sanitize_extracted_fields_before_persistence(service_name: str, extracted_fi
     core.uchoice_validation.validate_sku_lines -- missing/invalid sku_code,
     or a non-dict line -- rather than rejecting the whole merge, so a
     message with one valid line and one fabricated one still saves the
-    valid one (matches the T10a "preserve valid progress" pattern already
-    established for Phase 2's mixed-line handling). The pre-confirm
+    valid one, preserving valid progress from mixed-line input. The pre-confirm
     validators remain as defense in depth for anything this doesn't cover.
     """
     if service_name == "role_change":
@@ -61,8 +57,8 @@ def sanitize_extracted_fields_before_persistence(service_name: str, extracted_fi
 
     lines = extracted_fields[field_name]
     if not isinstance(lines, list):
-        # Codex round-30 finding 3: a malformed non-list shape (a string,
-        # dict, null, etc.) used to fall through this check unchanged and
+        # A malformed non-list shape (string, dict, null, etc.) must not pass
+        # through unchanged and
         # get persisted as-is. Omit the whole field instead of merging
         # garbage -- collected_fields simply won't have field_name at all
         # this turn, which _outbound_required_fields_present and the
@@ -94,8 +90,7 @@ def sanitize_extracted_fields_before_persistence(service_name: str, extracted_fi
 
 def _sanitize_role_change_fields_before_persistence(extracted_fields: dict, db: DBSession, group_id: str | None) -> dict:
     """
-    phase4-self-registration.md Sec 4 boundary 1 (Codex round-37/round-41):
-    target_openid is a candidate-backed identifier exactly like sku_code --
+    target_openid is a candidate-backed identifier like sku_code:
     accept it only if it names a current group_member of this group. Accept
     new_role only if it's in the server allowlist (core.uchoice_constants
     .ASSIGNABLE_ROLE_NAMES -- an explicit allowlist, not "anything but
@@ -114,10 +109,8 @@ def _sanitize_role_change_fields_before_persistence(extracted_fields: dict, db: 
 
     result = dict(extracted_fields)
 
-    # kefu-migration-plan.md Sec 2.3: dispatch on the tagged identity kind,
-    # never by probing which table happens to contain a matching raw
-    # string (Codex round-68 finding 4 -- identifiers can collide across
-    # GroupMember and kefu_staff).
+    # Dispatch on the tagged identity kind, never by probing for a matching
+    # raw string; identifiers can collide across GroupMember and kefu_staff.
     target_openid = result.get("target_openid")
     if target_openid is not None:
         identity = parse_target_identity(target_openid)

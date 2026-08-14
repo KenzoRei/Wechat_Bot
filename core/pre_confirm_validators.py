@@ -64,7 +64,7 @@ def _typed_line_issues(lines, checker) -> list[str]:
 
 def _valid_adjust_storage_lines(context: dict, collected_fields: dict, db: DBSession) -> str | None:
     """
-    adjust_storage's typed contract (systemic-validation-addendum.md Sec 3a):
+    adjust_storage's typed contract:
     valid positive bucket dimensions, non-zero integer delta. "No negative
     resulting balance" is authoritative-state-dependent -- already enforced
     at execution time by core.uchoice_storage.apply_storage_delta's own
@@ -102,7 +102,7 @@ def _valid_recount_storage_lines(context: dict, collected_fields: dict, db: DBSe
     direct read that handlers.uchoice.storage_txns.RecountStorageHandler
     builds `reported` via a dict comprehension keyed on exactly that pair,
     which silently keeps only the last of any duplicates and discards the
-    rest of the customer's actual input (Codex round-32 finding).
+    rest of the customer's actual input.
     """
     del context
     field_name = "inventory_lines"
@@ -286,9 +286,8 @@ _valid_outbound_completion_skus = _valid_completion_sku_lines("fulfillment_lines
 
 def _valid_role_change_target_and_role(context: dict, collected_fields: dict, db: DBSession) -> str | None:
     """
-    role_change pre-confirm boundary 2 (phase4-self-registration.md Sec 4,
-    Codex round-37/round-41): recheck target membership, recheck new_role is
-    in the server allowlist (pending excluded per Sec 5), and require a
+    At the role_change pre-confirm boundary, recheck target membership and
+    ensure new_role is in the server allowlist (with pending excluded). Require a
     valid non-blank warehouse_code when promoting to warehouseman. Backstops
     the before-persistence boundary in core/workflow_engine.py -- this runs
     again here since pre-confirm can be reached via a continuation turn that
@@ -330,8 +329,8 @@ def _last_admin_protection(context: dict, collected_fields: dict, db: DBSession)
     role_change: reject demoting the group's only remaining active admin.
     Promotions (new_role == 'admin') never trip this check.
 
-    kefu-migration-plan.md Sec 2.3: admin is an ASSIGNABLE_ROLE_NAMES role
-    reachable by either channel, so both the target lookup and the "how
+    Admin is assignable through either channel, so both the target lookup and
+    the "how
     many admins remain" count must span GroupMember and kefu_staff
     together -- counting only one table would let the last real admin be
     demoted as long as an admin existed in the other table, or the
@@ -365,8 +364,7 @@ def _last_admin_protection(context: dict, collected_fields: dict, db: DBSession)
 
     from core.admin_invariants import would_remove_last_admin
 
-    # Codex round-4 review: this previously treated ANY current admin as
-    # "currently active" regardless of target.is_active, so demoting an
+    # Check target activity explicitly; demoting an
     # already-inactive admin was wrongly rejected whenever exactly one
     # OTHER admin was active -- would_remove_last_admin's count only ever
     # counted active admins, but this call site claimed the target was one
@@ -541,8 +539,8 @@ _valid_outbound_sku_quantities = _valid_sku_line_quantities("sku_lines")
 def _valid_outbound_sku_lines(context: dict, collected_fields: dict, db: DBSession) -> str | None:
     """uchoice_outbound_request: reject missing or uncataloged line SKUs (Sev 2).
 
-    Reuses the same shared primitive Codex's Phase 2 validators use, applied
-    here for Phase 1 -- a fabricated/missing sku_code on an outbound line
+    Reuse the shared SKU validator: a fabricated or missing sku_code on an
+    outbound line
     (e.g. {"box_count": 30} with no product identified at all) must not
     reach confirmation as "?", the same way a bad destination_address_id
     must not reach it either.

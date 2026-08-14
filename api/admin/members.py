@@ -14,9 +14,8 @@ router = APIRouter(prefix="/admin/groups", dependencies=[Depends(verify_admin_ke
 
 def _resolve_assignable_role(db: Session, role_name: str) -> Role:
     """
-    Restricted to ASSIGNABLE_ROLE_NAMES, matching api/admin/kefu_staff.py's
-    identical helper (Codex round-3 review: the two admin APIs had drifted --
-    Kefu correctly restricted this, Smart Bot's endpoint didn't). "pending"
+    Restricted to ASSIGNABLE_ROLE_NAMES, matching api/admin/kefu_staff.py.
+    "pending"
     is deliberately excluded here too: the pre-assignment state new
     self-registrations start in, not a target an admin assigns someone to.
     """

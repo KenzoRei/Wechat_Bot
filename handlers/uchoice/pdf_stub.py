@@ -3,7 +3,7 @@ from handlers.base import BaseHandler
 
 def _artifact_key(request_log_id, doc_type: str) -> str:
     """
-    kefu-migration-plan.md Sec 11.2: stable idempotency identity -- the same
+    Stable idempotency identity: the same
     logical document (same request, same doc_type) always produces the same
     key, so a regenerated artifact for a deferred Kefu delivery is
     recognizable as "the same document" rather than a new one.
@@ -13,12 +13,11 @@ def _artifact_key(request_log_id, doc_type: str) -> str:
 
 def _wrap_artifact_for_smart_robot(artifact: dict) -> dict:
     """
-    kefu-migration-plan.md Sec 4: the handler itself only produces a
+    The handler only produces a
     channel-neutral Artifact (bytes/filename/content_type/artifact_key);
     wrapping it into a short-lived download token is Smart Robot's own
     delivery mechanism, unchanged from before this refactor. Kefu's path
-    (not yet wired -- Codex's transport, per Sec 11.2/11.3) uploads the same
-    Artifact via its own media API instead of calling this.
+    uploads the same Artifact through its media API instead of calling this.
     """
     import config as app_config
     from core.download_tokens import create_token
@@ -48,8 +47,8 @@ class GeneratePdfStubHandler(BaseHandler):
             artifact = self._build_outbound_instruction_artifact(context, db)
         elif doc_type == "delivery_confirmation":
             # Legacy completion-time path -- retained only in case an old
-            # deployed workflow_step row still references it; Phase 3's
-            # migration removes this step from confirm_outbound_completion
+            # deployed workflow_step row still references it; the migration
+            # removes this step from confirm_outbound_completion
             # going forward. New requests use "outbound_instruction" above.
             artifact = self._build_delivery_order_artifact(context, db)
         else:
@@ -63,8 +62,8 @@ class GeneratePdfStubHandler(BaseHandler):
     @staticmethod
     def _build_outbound_instruction_artifact(context: dict, db) -> dict | None:
         """
-        Phase 3 (phase3-outbound-pdf-timing.md): the pickup/delivery
-        instruction PDF, generated once at outbound-request creation time --
+        The pickup/delivery instruction PDF is generated once at outbound
+        request creation time,
         not at warehouse completion. Runs in the post-commit side-effect
         phase (core/workflow_engine.py's _SIDE_EFFECT_STEP_TYPES), so a
         failure here must never roll back or relabel the already-successful
@@ -78,10 +77,9 @@ class GeneratePdfStubHandler(BaseHandler):
         Logical idempotency: delivery_date is read from the persisted
         RequestLog.created_at (never datetime.now()), so calling this
         handler again for the same request -- e.g. a retry, or a Kefu
-        deferred-delivery regeneration (plan Sec 11.3) -- produces
-        content-identical output regardless of when the retry happens. See
-        phase3-outbound-pdf-timing.md Sec 3.5 for why delivery-wrapper
-        freshness (e.g. a new download token) isn't a second logical
+        deferred-delivery regeneration, produces identical content regardless
+        of retry time. Delivery-wrapper freshness (such as a new download
+        token) does not create a second logical
         document.
         """
         try:

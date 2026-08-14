@@ -1,8 +1,8 @@
 """
-Codex round-30 finding 2: adjust_storage/move_storage/recount_storage had
-zero registered PRE_CONFIRM_VALIDATORS entries. Confirms the new entries
+Confirms adjust_storage/move_storage/recount_storage have registered
+PRE_CONFIRM_VALIDATORS entries that
 reject a fabricated/missing sku_code and accept a real one, for each of the
-three services Claude Code owns in Phase 2.
+three services.
 """
 import pytest
 

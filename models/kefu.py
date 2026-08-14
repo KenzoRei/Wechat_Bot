@@ -9,10 +9,9 @@ from datetime import datetime
 class UchoiceCustomer(Base):
     """
     Real customer-directory entity, promoted from what was previously
-    implicit in uchoice_address.company_name (kefu-migration-plan.md
-    Sec 2.1). Includes non-customer-specific entries like "JFK Warehouse"/
-    "散客" as real rows -- there is no global/unscoped address category
-    (Sec 2.2, per the user's explicit correction in round 62).
+    implicit in uchoice_address.company_name. Includes non-customer-specific
+    entries like "JFK Warehouse"/
+    "散客" as real rows; there is no global or unscoped address category.
     """
     __tablename__ = "uchoice_customer"
 
@@ -27,8 +26,8 @@ class UchoiceCustomer(Base):
 
 class KefuStaff(Base):
     """
-    A staff member's Kefu identity (kefu-migration-plan.md Sec 2.3).
-    Reuses Phase 4's self-registration pattern (pending role, admin
+    A staff member's Kefu identity. Reuses the self-registration pattern
+    (pending role, admin
     promotes) -- not the group_member table, which is WeCom-group-shaped
     and doesn't fit Kefu's 1:1 model. group_id is fixed per open_kfid at
     deployment time, never chosen by staff or inferred from a message.
@@ -49,11 +48,11 @@ class KefuStaff(Base):
 
 class CaseTurn(Base):
     """
-    Durable per-turn actor audit (kefu-migration-plan.md Sec 2.5). Distinct
+    Durable per-turn actor audit. Distinct
     from interaction_log, which keeps its own existing funnel/efficiency
     purpose. source_message_id's uniqueness is what makes a duplicate Kefu
-    msgid answerable from stored data instead of ever re-running
-    extraction/mutation/execution (round-70 finding 1's fix) -- reply_text
+    msgid answerable from stored data instead of re-running extraction,
+    mutation, or execution; reply_text
     etc. are persisted here specifically so that replay is possible.
     """
     __tablename__ = "case_turn"
@@ -81,10 +80,10 @@ class CaseTurn(Base):
 
 class CaseExecution(Base):
     """
-    Durable execution ledger (kefu-migration-plan.md Sec 2.5). Recovery
+    Durable execution ledger. Recovery
     distinguishes what's actually provable: db_committed_at is only ever
-    set in the same transaction as the business DB mutation it certifies
-    (round-70 finding 2's atomicity invariant), so a claim that never
+    set in the same transaction as the business DB mutation it certifies, so
+    a claim that never
     reached db_committed can be safely retried, while one that did must
     only ever resume the post-commit side-effect phase, never re-run the
     DB mutation.
@@ -95,8 +94,7 @@ class CaseExecution(Base):
     )
 
     execution_id:     Mapped[uuid.UUID]      = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
-    # kefu-migration-plan.md Sec 2.5 / Codex round-92: nullable -- a
-    # brand-new case has no session yet when this row is first claimed;
+    # Nullable because a brand-new case has no session when first claimed;
     # populated once the session becomes known (V12 migration).
     session_id:       Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("conversation_session.session_id", ondelete="CASCADE"))
     execution_key:    Mapped[str]            = mapped_column(String(128), nullable=False, unique=True)
@@ -112,8 +110,7 @@ class CaseExecution(Base):
 
 class KefuStaffCaseContext(Base):
     """
-    Staff -> current-case binding (kefu-migration-plan.md Sec 2.5, added
-    round 72/73). Lets an unqualified follow-up message continue whatever
+    Staff-to-current-case binding. Lets an unqualified follow-up continue the
     case a staff member is currently bound to, without repeating the case
     number every turn. customer_id is never copied here -- it stays
     locked on the case itself (conversation_session.customer_id) so there
@@ -128,9 +125,7 @@ class KefuStaffCaseContext(Base):
 
 class KefuSyncCursor(Base):
     """
-    Per-kf-account sync_msg cursor (kefu-migration-plan.md Sec 2.6). Schema
-    owned by Claude Code; the receiver/worker code that reads and writes
-    this table is Codex's separate single-writer scope.
+    Per-kf-account sync_msg cursor used by the single-writer receiver/worker.
     """
     __tablename__ = "kefu_sync_cursor"
 
@@ -141,10 +136,8 @@ class KefuSyncCursor(Base):
 
 class KefuInboundMessage(Base):
     """
-    Durable inbound message queue with lease-based claim recovery
-    (kefu-migration-plan.md Sec 2.6, corrected through rounds 68/72/74/76
-    to genuinely serialize per-identity claims). Schema owned by Claude
-    Code; the claim/processing logic is Codex's separate scope.
+    Durable inbound message queue with lease-based claim recovery and
+    serialized per-identity claims.
     """
     __tablename__ = "kefu_inbound_message"
     __table_args__ = (
@@ -167,15 +160,14 @@ class KefuInboundMessage(Base):
 
 class KefuOutboundDelivery(Base):
     """
-    Durable outbound delivery tracking (kefu-migration-plan.md Sec 2.6).
+    Durable outbound delivery tracking.
     recipient_staff_id is immutable at creation time -- never derived from
     session.opened_by_staff_id at send time, since any authorized staff
-    member may be the one whose turn produced a given response (round-70
-    finding 3). text_content/artifact_* give deferred (window-closed)
+    member may produce a given response. text_content/artifact_* give deferred
+    (window-closed)
     deliveries a durable payload that survives a process restart -- a file
     delivery is regenerated on demand from (request_log_id, doc_type)
-    rather than storing raw bytes, reusing Phase 3's already-signed PDF
-    generation idempotency guarantee.
+    rather than storing raw bytes, preserving PDF-generation idempotency.
     """
     __tablename__ = "kefu_outbound_delivery"
     __table_args__ = (

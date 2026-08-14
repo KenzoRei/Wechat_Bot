@@ -31,8 +31,8 @@ from models.service import ServiceType
 
 def _session_provenance_kwargs(context: dict) -> dict:
     """
-    kefu-migration-plan.md Sec 2.4 / Codex round-90 finding 4: explicit at
-    session-creation time -- context["source_channel"]/["submitted_by_staff_id"]
+    Capture source_channel and submitted_by_staff_id explicitly at
+    session-creation time. These values
     come from session_manager.build_context() (from AccessResult), defaulting
     to Smart Robot's existing shape when absent (offline tests build context
     dicts by hand without these keys).
@@ -238,8 +238,7 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
             **_log_provenance_kwargs(context),
         )
         session.request_log_id = log.log_id
-        # kefu-migration-plan.md Sec 2.4: the one durable link
-        # get_original_fields() now uses to find this request's own
+        # Durable link used by get_original_fields() to find this request's
         # originating session -- channel-agnostic, set once, here, at
         # creation, never inferred from actor identity afterward.
         log.origin_session_id = session.session_id
@@ -333,8 +332,8 @@ def _autoresolve_single_candidate(context: dict, service: dict, session, db: DBS
     return True
 
 
-# Moved to core/uchoice_field_sanitization.py (signed cross-review plan,
-# Section C4) so core/kefu_turn_apply.py no longer privately reaches into
+# Shared from core/uchoice_field_sanitization.py so core/kefu_turn_apply.py
+# does not privately reach into
 # this module for it. Imported (not re-defined) so every existing
 # monkeypatch target of the form `workflow_engine._sanitize_..._persistence`
 # keeps resolving correctly, and so the bare calls below still pick up a
@@ -398,7 +397,7 @@ def _outbound_required_fields_present(service: dict, session) -> bool:
     # a real product. A line with a missing/blank sku_code (e.g. the AI
     # extracted a quantity but never resolved what it was for) must not
     # count as "collected," or it reaches confirmation as "?". A malformed
-    # non-dict line (Codex round-28 finding 3) must be treated as
+    # non-dict line must be treated as
     # not-yet-collected too, not crash this check via .get() on a non-dict.
     if any(not isinstance(line, dict) or not (line.get("sku_code") or "").strip() for line in sku_lines):
         return False
@@ -515,12 +514,10 @@ def _resolve_outbound_warehouse_default(context: dict, session, db: DBSession) -
 
 def _resolve_inbound_warehouse_default(context: dict, session, db: DBSession) -> None:
     """
-    kefu-migration-plan.md Sec 3 (round 64 -- the user's final answer):
-    inbound also defaults warehouse_code to JFK when unstated, same
+    Inbound defaults warehouse_code to JFK when unstated, using the same
     two-tier rule as outbound's _resolve_outbound_warehouse_default above
-    (explicit when stated, JFK otherwise, no third tier). This is new
-    code, not a reuse of the outbound resolver -- Codex round-62 finding
-    3 confirmed the outbound one is outbound-specific by name and
+    (explicit when stated, JFK otherwise, no third tier). This is separate
+    from the outbound resolver, which is outbound-specific by name and
     confirmation-flow position; inbound previously had no such default at
     all (warehouse_code was a hard-required schema field). The
     corresponding service_type.input_schema migration moves
@@ -920,20 +917,19 @@ def _execute_workflow_and_finish(context: dict, session, db: DBSession) -> None:
     service_for_split_check = _find_service_by_type_id(context, session.service_type_id)
     service_name_for_split_check = service_for_split_check["name"] if service_for_split_check else None
 
-    # Phase 2 atomicity fix (systemic-validation-addendum.md Sec 3b) only
-    # applies to the named U-Choice services it actually covers. Every other
+    # The atomic transaction split applies only to explicitly named U-Choice
+    # services. Every other
     # service -- FedEx, UPS, OMS, upsert_address, anything else -- runs
-    # through the single-phase path below unchanged, exactly as before
-    # Phase 2. Deliberately an explicit service-name allowlist, not
+    # through the single-phase path. Use an explicit service-name allowlist,
+    # not
     # step-type inference: the first version of this fix inferred
-    # eligibility from step *types* present in the workflow (Codex round-28
-    # finding 2 -- create_fedex_label/create_ups_label/oms_create_workorder
+    # eligibility from step types present in the workflow;
+    # create_fedex_label/create_ups_label/oms_create_workorder
     # got misclassified as side effects that way, marking FedEx/UPS/OMS
     # requests successful before the label/work order ever ran). An
-    # allowlist by service name can't accidentally net an unrelated service
-    # the same way a step-type-presence check can. Extended (Codex round 30)
-    # to adjust_storage/move_storage/recount_storage, which the signed
-    # addendum's Sec 3b/exposure table also names but the original
+    # allowlist by service name cannot accidentally include an unrelated
+    # service. It includes adjust_storage/move_storage/recount_storage, which
+    # the original
     # step-type-based check missed entirely (their workflows are just
     # {*_storage_txn -> reply_wechat}, with no generate_pdf_stub/
     # complete_existing_request step to trigger on) -- without this, a
@@ -974,7 +970,7 @@ def _execute_workflow_and_finish(context: dict, session, db: DBSession) -> None:
     # one real transaction, together with the success/failure status change
     # and the session close -- commit=False on every call below defers all
     # of them to the single db.commit() (or db.rollback()) at the end of
-    # this block, closing Codex round-28 finding 1 (mark_success/
+    # this block. mark_success and
     # close_session used to commit independently, so a failure between them
     # could leave storage changes durable but the session/log inconsistent).
     try:
@@ -1054,18 +1050,16 @@ def _handle_unrecognized(context: dict, ai_response: AIResponse) -> None:
 
 # ── Workflow step runner ──────────────────────────────────────────────────────
 
-# Step types the Phase 2 DB-phase/post-commit-side-effect split actually
-# targets (systemic-validation-addendum.md Sec 3b, Phase 3's PDF timing).
+# Step types targeted by the DB-phase/post-commit-side-effect split.
 # Deliberately narrow: create_fedex_label/create_ups_label/oms_create_workorder
 # are NOT here even though they're real external calls too, because for
 # those services the label/work order IS the required operational work, not
 # a best-effort delivery-notification concern -- treating them as
 # non-fatal "side effects" would mark a request successful before the label
-# was ever created (Codex round-28 finding 2, a real regression the first
-# version of this fix introduced). _execute_workflow_and_finish only invokes
+# was created. _execute_workflow_and_finish only invokes
 # this split at all for workflows that contain one of these two step types;
-# every other workflow (FedEx, UPS, OMS, everything else) runs unaffected
-# through the single-phase path, unchanged from before Phase 2.
+# every other workflow (FedEx, UPS, OMS, everything else) uses the single-phase
+# path.
 _SIDE_EFFECT_STEP_TYPES = {
     "generate_pdf_stub",
     "complete_existing_request",   # cross-group webhook
@@ -1080,11 +1074,11 @@ def _run_workflow_steps(context: dict, session, db: DBSession, phase: str) -> No
     Results are accumulated in context["result"] for subsequent steps to read.
 
     phase="all": every step, in order -- the original, single-phase
-    behavior, used for every workflow the Sec 3b split doesn't apply to.
+    behavior, used when the transaction split does not apply.
     phase="db": every step NOT in _SIDE_EFFECT_STEP_TYPES -- pure DB reads/
     writes, safe to run inside one transaction with row locks held.
     phase="side_effect": only steps in _SIDE_EFFECT_STEP_TYPES -- run after
-    the DB phase's transaction has already committed, per Sec 3b's rule that
+    the DB phase's transaction has already committed, because
     a delivery failure here must never roll back or relabel already-committed
     inventory/business state.
 

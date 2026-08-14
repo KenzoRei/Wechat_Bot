@@ -1,6 +1,6 @@
 """
-Real-Postgres regression tests for Codex round-90 findings 1, 2, and 6.
-A mock DB session can't prove any of these -- they're about what actually
+Real-PostgreSQL regression tests for durable turns, replay, and notice claims.
+A mock DB session cannot prove these because they concern what actually
 survives a commit/session-close, and what two genuinely concurrent
 transactions see -- so this uses the real database, same practice as
 tests/uchoice_storage_atomicity/.
@@ -114,7 +114,7 @@ def cleanup():
 
 
 def test_durable_reply_survives_session_close(db, cleanup):
-    """Codex round-90 finding 1."""
+    """A durable reply remains available after its session closes."""
     group_id = _real_group_id(db)
     role_id = _real_role_id(db)
     staff = _make_kefu_staff(db, group_id, role_id)
@@ -130,8 +130,8 @@ def test_durable_reply_survives_session_close(db, cleanup):
     )
     assert case_number  # a brand-new case got a real case_number
     assert revision == 1
-    # _finalize_turn no longer commits itself (Codex round-94: the caller
-    # owns the single commit boundary for the whole turn) -- this direct-
+    # _finalize_turn does not commit itself; the caller owns the turn's single
+    # commit boundary. This direct-
     # call test commits on its own behalf to prove persistence.
     db.commit()
     db.close()
@@ -151,7 +151,7 @@ def test_durable_reply_survives_session_close(db, cleanup):
 
 
 def test_replay_payload_lives_on_msgid_bearing_row(db, cleanup):
-    """Codex round-90 finding 2."""
+    """Replay data is stored on the row bearing the provider msgid."""
     group_id = _real_group_id(db)
     role_id = _real_role_id(db)
     staff = _make_kefu_staff(db, group_id, role_id)
@@ -179,7 +179,7 @@ def test_replay_payload_lives_on_msgid_bearing_row(db, cleanup):
 
 
 def test_concurrent_transactions_never_claim_the_same_notice(db, cleanup):
-    """Codex round-90 finding 6 -- the signed simultaneous/no-repeat test."""
+    """Concurrent transactions cannot claim the same notice twice."""
     from models.request_log import RequestLog
     from datetime import datetime, timezone
 

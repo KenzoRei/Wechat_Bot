@@ -1,10 +1,9 @@
 """
-Kefu case-turn adapter -- implements core.kefu_contracts.CaseTurnProcessor,
-bridging Codex's transport (core/kefu_sync.py's run_worker_once) to
-Claude's owned session/case pipeline.
+Kefu case-turn adapter implementing core.kefu_contracts.CaseTurnProcessor and
+bridging core/kefu_sync.py's worker to the session/case pipeline.
 
-Codex round-94: for the currently-enabled Kefu allowlist, this
-module does NOT call core/workflow_engine.py at all -- that engine's
+For the currently enabled Kefu allowlist, this module does not call
+core/workflow_engine.py; that engine's
 helpers (session_manager.create_session, request_logger.create_log,
 etc.) each commit independently, which is correct for Smart Robot but
 cannot give a Kefu turn a genuine atomic boundary. Business-state
@@ -20,8 +19,8 @@ reason about for this path. The customer-scoped inbound, outbound, and
 address services now add a native pending-confirmation state machine and
 logical confirmation claim; unrelated mutations remain gated.
 
-Built per docs/ai-collaboration/discussion.md round 88's four integration
-requirements: registration intake (core/kefu_registration.py), channel-
+Its integration boundaries are registration intake (core/kefu_registration.py),
+channel-
 neutral final rendering (handlers/reply_wechat.py's _reply fix),
 Kefu-only startup (config.py's feature-flag fix), completion-notice
 audience tracking (core/kefu_completion_notice.py).
@@ -29,8 +28,8 @@ audience tracking (core/kefu_completion_notice.py).
 A real case reply is enqueued durably via core/kefu_delivery.enqueue_text
 (session-scoped), not sent directly -- core/kefu_delivery_worker.py's
 scheduled job (wired in main.py) is what actually calls deliver_one()
-against each pending row, which is what gives a reply Sec 11.3's
-closed-window deferral/retry/quota handling instead of being silently
+against each pending row, providing closed-window deferral, retry, and quota
+handling instead of silently
 lost if the 48h window happens to be closed right now. Only pre-case
 messages (registration prompts/results, access-denied/pending/stale
 notices -- nothing to hang a durable row off yet) are sent directly,
@@ -66,8 +65,8 @@ from core.kefu_contracts import (
     CaseTurnSuccess,
     KefuIdentity,
 )
-# CaseTurnStale is deliberately never produced by this module (Codex
-# round-90 finding 5): it's reserved for a genuine revision-CAS conflict,
+# CaseTurnStale is deliberately never produced here. It is reserved for a
+# genuine revision-CAS conflict,
 # which the current KefuInboundTurn/case_number_hint contract (a bare
 # string, no expected-revision field) can't express yet. Unknown/closed/
 # unauthorized cases all return CaseTurnDenied instead.
@@ -163,8 +162,8 @@ class KefuTurnInProgress(RuntimeError):
 
 def _acquire_execution(db: DBSession, execution_key: str) -> tuple[str, object]:
     """
-    Codex round-94 findings 3/4: a REAL guarded claim/lease decision, not
-    "return whatever row already exists and let the caller maybe look at
+    Make a guarded claim/lease decision instead of returning any existing row
+    and leaving the caller to inspect
     it." A Postgres advisory lock scoped to execution_key (matching
     core/kefu_sync.py's own claim pattern) is held for the rest of the
     CURRENT transaction, genuinely serializing every concurrent attempt
@@ -329,8 +328,8 @@ def make_case_turn_processor(client: KefuClient, db_factory: Callable[[], DBSess
             # kefu_inbound_message's audit trail. CaseTurnError is left
             # defined in the return type for a future caller that wants
             # errors modeled as data (e.g. a synchronous path) but isn't
-            # produced by this worker-facing entry point today -- flagged
-            # to Codex as an explicit open question, not a settled choice.
+            # produced by this worker-facing entry point today. Keep this
+            # behavior explicit until a synchronous path needs it.
             db.rollback()
             raise
         finally:
@@ -348,7 +347,7 @@ def _direct_send(client: KefuClient, identity: KefuIdentity, delivery_key: str, 
     row off yet. Mirrors core/self_registration.py's identical precedent
     for Smart Robot: that flow also sends directly, never through
     conversation_session/request_log machinery. Accepts the same
-    documented at-least-once risk as every other Kefu send (plan Sec 2.5).
+    documented at-least-once risk as every other Kefu send.
     """
     try:
         state = client.get_service_state(
@@ -437,13 +436,13 @@ def _process_turn(
     from models.kefu import CaseTurn, KefuStaff
     staff = db.get(KefuStaff, access.staff_id)
 
-    # Codex round-94: a REAL guarded claim, not "insert-or-return-whatever-
-    # exists." Held for the rest of this transaction via an advisory lock
+    # Guard the claim with an advisory lock held for this transaction instead
+    # of accepting any existing row.
     # -- genuine mutual exclusion per msgid, and the caller now branches on
     # the ledger's own state (not request_log's) to decide recover-vs-new.
     #
-    # Codex round-96 finding 1: the replay lookup moved to AFTER acquiring
-    # this lock (it used to run before, letting a concurrent duplicate that
+    # Perform replay lookup after acquiring the lock. Looking it up before the
+    # lock lets a concurrent duplicate
     # then blocked on the lock see a stale "nothing here yet" read from
     # before it ever blocked). Now a duplicate that waits genuinely replays
     # the winner's committed result once it wakes up, instead of racing it.
@@ -490,8 +489,8 @@ def _process_turn(
     message = {"content": message_content, "msg_id": msgid, "response_url": ""}
 
     if action == "recover":
-        # Codex round-94 finding 4: recovery is now inferred from the
-        # LEDGER's own db_committed state, not by re-deriving it from
+        # Infer recovery from the ledger's own db_committed state, not by
+        # re-deriving it from
         # request_log. A prior attempt's business mutation is durable
         # (core/kefu_turn_apply.py flips this row to db_committed in the
         # SAME transaction/commit as the request_log/session it certifies
@@ -603,8 +602,8 @@ def _process_turn(
 
     new_session_id = context.get("session_id")
     if new_session_id and staff is not None:
-        # Codex round-90 findings 1/2/6: notice-claim, case_turn audit
-        # (reply stored on the msgid-bearing row), durable delivery
+        # Notice claim, case-turn audit (reply stored on the msgid-bearing
+        # row), durable delivery
         # enqueue, and the notice's shown-at mark all land in the SAME
         # final commit as this turn's business state and the execution
         # ledger's completion below -- a failure partway through rolls
@@ -648,8 +647,8 @@ def _process_turn(
 
 def _authorize_case(access, session) -> str | None:
     """
-    Codex round-90 finding 5: a resolved case must be reauthorized against
-    the CURRENT staff's actual grants on every turn -- their role/warehouse
+    Reauthorize a resolved case against the current staff grants on every
+    turn; their role or warehouse
     could have changed since the case was opened or last touched. Returns
     a denial reason, or None if authorized.
     """
@@ -672,18 +671,17 @@ def _resolve_kefu_session(db: DBSession, access, case_number_hint: str | None):
     CaseTurnDenied if an explicitly-referenced case_number_hint doesn't
     resolve to a live, authorized case for this staff member.
 
-    Codex round-90 finding 5's correction: unknown, terminal (closed), and
-    unauthorized (wrong group/service-grant/warehouse) cases are all
+    Unknown, terminal (closed), and unauthorized
+    (wrong group/service-grant/warehouse) cases are all
     Denied, not Stale -- Stale is reserved for a genuine revision-CAS
     conflict, which the current KefuInboundTurn/case_number_hint contract
     (a bare string, no expected-revision field) can't even express yet.
 
     Priority: an explicit case_number_hint (staff pasted "CASE-...") always
-    wins over the staff's own current-case binding -- deliberate, matches
-    plan Sec 2.5: an explicit reference is a stronger signal than whatever
+    wins over the staff's own current-case binding: an explicit reference is
+    a stronger signal than whatever
     the staff happened to be working on last. No hint falls back to
-    kefu_staff_case_context.active_session_id (Sec 2.5's unqualified-
-    follow-up mechanism), reauthorized identically on every turn.
+    kefu_staff_case_context.active_session_id, reauthorized on every turn.
     """
     from models.session import ConversationSession
 
@@ -732,9 +730,8 @@ def _finalize_turn(
     (genuine CAS), a claimed completion notice, the msgid-bearing case_turn
     audit row, the staff's case-context binding, and the durable delivery
     enqueue -- via db.add()/direct mutation only. Does NOT commit: the
-    caller (_process_turn) commits exactly once, bundling this together
-    with the execution ledger's completion, per Codex round-94's "explicit
-    atomic boundaries" requirement. Any exception here propagates all the
+    caller (_process_turn) commits exactly once, bundling this with execution
+    ledger completion. Any exception here propagates all the
     way up uncaught -- make_case_turn_processor's outer except rolls back
     the whole unit (nothing partial survives, including the notice claim)
     and re-raises, which is what surfaces it to core/kefu_sync.py's
@@ -757,11 +754,11 @@ def _finalize_turn(
 
     # source_channel/opened_by_staff_id are set at session-creation time
     # (session_manager.create_session, via context["source_channel"]/
-    # ["submitted_by_staff_id"] -- Codex round-90 finding 4), not patched
+    # ["submitted_by_staff_id"]), not patched
     # in here after the fact.
     #
-    # Codex round-92: genuine revision-CAS, not a plain ORM increment --
-    # two staff members can both reference the same case_number (an
+    # Use a genuine revision CAS rather than a plain ORM increment. Two staff
+    # members can both reference the same case_number (an
     # explicit hint is not staff-exclusive) and both reach this point
     # concurrently. The guarded UPDATE...WHERE case_revision=:expected
     # only succeeds for whichever transaction commits first; the loser's

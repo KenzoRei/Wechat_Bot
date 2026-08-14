@@ -227,8 +227,8 @@ def deliver_one(
 
     The database transaction intentionally remains open across the provider call:
     the advisory lock prevents two workers sending the same idempotency key at
-    once. A lost provider response still has the signed plan's narrow duplicate
-    risk on retry, so this is at-least-once rather than exactly-once delivery.
+    once. A lost provider response still creates a narrow duplicate risk on
+    retry, so delivery is at-least-once rather than exactly-once.
     """
     delivery = db.execute(
         select(KefuOutboundDelivery)

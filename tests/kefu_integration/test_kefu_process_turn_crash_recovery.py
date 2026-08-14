@@ -1,20 +1,18 @@
 """
-Real-Postgres, real-orchestration-path tests for Codex round-94's explicit
-requests: failure-injection through the actual core.kefu_case_adapter
+Real-PostgreSQL orchestration tests with failure injection through the actual
+core.kefu_case_adapter
 processor (make_case_turn_processor -> _process_turn), a two-worker
 overlapping-msgid test, and a cross-staff same-case-revision race test --
 none of which a sequential mock or an isolated-helper test can prove.
 
-Architecture under test (round-94's actual fix, not round-93's "mitigated"
-version): core/kefu_turn_apply.py builds a turn's business state via
+Architecture under test: core/kefu_turn_apply.py builds a turn's business state
+through
 db.add()/db.flush() only, never commits; core/kefu_case_adapter.py's
 _process_turn commits EXACTLY ONCE per turn, bundling business state +
 execution-ledger completion + case_turn audit + delivery enqueue together.
 A crash anywhere before that single commit now leaves NOTHING durable at
 all (full rollback) -- there is no more "partially committed" state to
-recover from for this read-only-allowlist path, which is a stronger
-guarantee than round-93's two-phase design, not merely a smaller version
-of the same gap.
+recover from for this read-only allowlist path.
 
 The AI provider chain is monkeypatched to a canned, counting stub -- no
 real LLM call. view_storage is used as the exercised service: it's in
@@ -118,8 +116,8 @@ def _canned_ai_response(reply="正在查询库存"):
 
 def test_crash_before_final_commit_leaves_nothing_durable_and_retry_succeeds_cleanly(monkeypatch, staff):
     """
-    Codex round-94: with the real single-transaction fix, a crash anywhere
-    before _process_turn's one commit must leave ZERO durable trace (full
+    With a single transaction, a crash anywhere before _process_turn's commit
+    must leave zero durable trace: full
     rollback, including the execution-ledger row itself, which was only
     ever flushed, never committed) -- not a "recovered with a generic
     reply" partial state. Retry then runs the full turn cleanly from
@@ -233,8 +231,8 @@ def test_duplicate_msgid_after_completion_replays_without_rerunning_ai_or_apply(
 
 def test_multi_turn_history_ordered_no_duplication_on_replay(monkeypatch, staff):
     """
-    Codex round-96 finding 2: the Kefu-native apply path must mirror
-    workflow_engine._handle_continuation's conversation_history semantics
+    The Kefu-native apply path must mirror workflow_engine continuation-history
+    semantics
     -- append the user's message once per turn, then the assistant's reply
     (clarifying question or final answer) once per turn -- not silently
     drop either side. Uses view_storage_history (requires warehouse_code +
@@ -318,15 +316,15 @@ def test_multi_turn_history_ordered_no_duplication_on_replay(monkeypatch, staff)
 
 def test_two_concurrent_attempts_for_the_same_msgid_only_one_creates_the_business_row(monkeypatch, staff):
     """
-    Codex round-94's explicit ask: a genuine two-worker overlapping-msgid
-    test, not a sequential simulation. Two real threads, each with its own
+    Genuine two-worker overlapping-msgid test rather than a sequential
+    simulation. Two real threads, each with its own
     DB session, call the processor for the SAME msgid at (as close as
     possible to) the same time. The AI stub sleeps briefly to widen the
     race window between _acquire_execution's advisory lock and the final
     commit.
 
-    Codex round-96 finding 1: the advisory lock (pg_advisory_xact_lock, not
-    a try-variant) always BLOCKS a second attempt rather than failing it
+    The blocking advisory lock, rather than a try-lock variant, makes a second
+    attempt wait instead of failing it
     outright, and the replay lookup now runs after acquiring that lock (see
     core/kefu_case_adapter.py's _process_turn). So the only correct outcome
     is "waits, then replays": both attempts must succeed with an identical
@@ -399,8 +397,8 @@ def test_two_concurrent_attempts_for_the_same_msgid_only_one_creates_the_busines
 
 def test_cross_staff_revision_cas_prevents_lost_update(monkeypatch):
     """
-    Codex round-94's explicit ask: a cross-staff same-case race, proving
-    the CAS loser leaves no residue. Two DIFFERENT staff members both
+    Cross-staff same-case race proving the CAS loser leaves no residue. Two
+    different staff members both
     reference the same open case (via case_number_hint) concurrently;
     the guarded UPDATE...WHERE case_revision=:expected in _finalize_turn
     means only one can win, and the loser's whole unit rolls back --
@@ -485,8 +483,8 @@ def test_cross_staff_revision_cas_prevents_lost_update(monkeypatch):
         try:
             from models.kefu import CaseTurn, KefuOutboundDelivery
             from models.session import ConversationSession
-            # Codex round-96: tightened from a "<= successes + 1" tolerance
-            # (which permitted a rolled-back loser's user turn to survive
+            # A rolled-back loser's user turn must not survive in history;
+            # allowing one extra turn would hide
             # undetected) to exact equality -- the pre-seeded session has no
             # prior turns, so every persisted msgid-bearing user turn,
             # delivery, and revision increment must correspond 1:1 to an

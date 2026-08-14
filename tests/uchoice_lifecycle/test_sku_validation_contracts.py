@@ -1,4 +1,4 @@
-"""Contracts for Codex-owned Phase 2 lifecycle services."""
+"""SKU validation contracts for U-Choice lifecycle services."""
 
 from types import SimpleNamespace
 

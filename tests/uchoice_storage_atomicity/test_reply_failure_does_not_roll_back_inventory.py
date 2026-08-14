@@ -1,6 +1,6 @@
 """
-Codex round-30 finding 1: adjust_storage/move_storage/recount_storage were
-still excluded from the DB-phase/side-effect split (their workflows are
+Regression coverage ensuring adjust_storage/move_storage/recount_storage use
+the DB-phase/side-effect split. Their workflows are
 just {*_storage_txn -> reply_wechat}, with no generate_pdf_stub/
 complete_existing_request step to trigger the original, narrower
 eligibility check on). Without the split, reply_wechat ran inside the same

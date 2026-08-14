@@ -14,8 +14,8 @@ predicate at all -- deleting only the AI flag would have stranded FedEx/UPS
 and most other services, since neither of the other two disjuncts
 (auto_resolved, _outbound_required_fields_present) apply to them. This
 module tests the new _all_required_fields_present predicate and its wiring
-into both branch points, isolated with fake session/db objects per the
-signed plan -- no real Postgres, no external API calls.
+into both branch points using fake session and database objects, with no real
+PostgreSQL or external API calls.
 """
 from types import SimpleNamespace
 

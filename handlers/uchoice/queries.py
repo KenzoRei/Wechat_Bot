@@ -170,8 +170,8 @@ class QueryPendingDigestHandler(BaseHandler):
     """
     view_pending_digest — requires_confirmation=false, executes immediately.
 
-    kefu-migration-plan.md Sec 7: "pull, not push" -- the same pending-
-    request digest content jobs/uchoice_daily.py already pushes on a
+    Pull rather than push: render on demand the same pending-request digest
+    that jobs/uchoice_daily.py sends on a
     schedule, but on-demand, for whoever asks. Scoped to the caller's own
     group_id (context["group_id"]) so it never leaks another tenant's
     pending requests; this naturally also scopes it correctly once Kefu is

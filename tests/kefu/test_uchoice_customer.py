@@ -1,6 +1,5 @@
 """
-core/uchoice_customer.py — pure-logic resolve/lock behavior, no DB needed.
-kefu-migration-plan.md Sec 6.2 / discussion.md round 98.
+core/uchoice_customer.py pure-logic resolve/lock behavior; no DB needed.
 """
 from types import SimpleNamespace
 
@@ -40,8 +39,8 @@ def test_rejects_a_hallucinated_customer_id_not_in_the_real_candidate_list():
 def test_already_locked_customer_id_is_returned_and_never_overwritten():
     session = _session(customer_id="11111111-1111-1111-1111-111111111111")
     # Even though this turn's extracted_fields names a DIFFERENT valid
-    # customer, the already-locked one wins -- round 98: locked once, never
-    # re-resolved or drifted by a later turn.
+    # customer, the already-locked one wins. It is never re-resolved or drifted
+    # by a later turn.
     result = resolve_and_lock_customer(session, {"customer_id": _CANDIDATES[1]["customer_id"]}, _CANDIDATES)
     assert result == "11111111-1111-1111-1111-111111111111"
     assert str(session.customer_id) == "11111111-1111-1111-1111-111111111111"

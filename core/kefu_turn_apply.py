@@ -106,8 +106,8 @@ def _resolve_reference_serial(context: dict, session, service: dict) -> str | No
     request candidate list, never left as a bare "请提供申请编号" prompt
     with no information about what the options even are. The AI's own
     candidate-listing instructions (ai/prompt_builder.py's candidates_block)
-    live entirely in its `reply` field, which is never sent for Kefu
-    (kefu-deterministic-response-plan.md Sec 3) -- this is the deterministic
+    live entirely in its `reply` field, which Kefu never sends; this is the
+    deterministic
     replacement, observed missing live when multiple pending inbound
     requests existed and confirm_inbound_completion just asked for a bare
     serial number.

@@ -4,13 +4,12 @@ from handlers.base import BaseHandler
 class RoleChangeHandler(BaseHandler):
     """
     role_change — the pre-confirm validators already ran before this ever
-    got to a confirmation template, but per phase4-self-registration.md
-    Sec 4 boundary 3 (Codex round-37/round-41) this repeats the
-    authoritative checks immediately before mutation, so the handler fails
+    reached confirmation, but this repeats authoritative checks immediately
+    before mutation so the handler fails
     safe even if invoked outside the normal confirm-turn path.
 
-    kefu-migration-plan.md Sec 2.3: target_openid may be a tagged
-    "kefu:<staff_id>" identifier (core/role_identity.py) as well as a bare
+    target_openid may be a tagged `kefu:<staff_id>` identity
+    (core/role_identity.py) or a bare
     Smart Robot wechat_openid -- dispatch is always by the explicit tag,
     never by probing which table happens to contain a matching raw string.
     """
@@ -50,8 +49,8 @@ class RoleChangeHandler(BaseHandler):
         if role is None:
             raise RuntimeError(f"未知角色：{new_role_name}")
 
-        # Codex's third-round review: core/pre_confirm_validators.py's
-        # _last_admin_protection runs earlier, before the user ever sees a
+        # _last_admin_protection runs before confirmation, but this mutation
+        # boundary still
         # confirmation prompt -- unlocked, and with a real time gap (the
         # user has to actually confirm) during which a concurrent REST
         # admin-API call or another chat confirmation could change the

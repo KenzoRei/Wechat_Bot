@@ -1,6 +1,6 @@
 """
-kefu-deterministic-response-plan.md Sec 5: core.uchoice_context
-.address_candidates()'s customer_id-filter-optional behavior. A minimal,
+Tests core.uchoice_context.address_candidates() with optional customer
+filtering. A minimal,
 purpose-built mock DB -- this function's query shape is simple enough that
 the shared tests/uchoice_self_registration/_kefu_mock_db.py machinery (built
 for staff/role lookups) isn't a good fit. Real-database sharing/scoping
@@ -57,8 +57,7 @@ def test_explicit_customer_filter_still_works_for_legacy_callers():
 
 
 def test_returned_shape_omits_customer_id_field():
-    """The candidate payload sent to the AI must never carry customer_id
-    (kefu-deterministic-response-plan.md Sec 5.3) -- only display fields."""
+    """Candidate payloads sent to the AI contain display fields, not customer_id."""
     db = _FakeDB([_addr("a1", "cust-1")])
     result = address_candidates(db)
     assert set(result[0].keys()) == {"address_id", "company_name", "charge_type", "addr", "warehouse_code", "note"}

@@ -1,24 +1,22 @@
 """
-Closed set of deterministic Kefu operational outcomes
-(kefu-deterministic-response-plan.md Sec 4).
+Closed set of deterministic Kefu operational outcomes.
 
 Every `KefuOutcome` is a frozen dataclass of already-resolved, display-ready
 facts -- Chinese labels, counts, pre-built text blocks, serial numbers --
 never raw database rows, ORM objects, or bare UUIDs meant for a later lookup.
 This is deliberate: `core/kefu_response_renderer.py` renders from these
-payloads alone and never touches the database (plan Sec 12's integration
-contract). Codex's orchestration constructs a `KefuOutcome` from real
+payloads alone and never touches the database. Orchestration constructs a
+`KefuOutcome` from real
 orchestration state (resolving labels via existing db-touching helpers like
 `core/confirmation.py`/`core/result_message.py` first) and passes the
 finished payload here.
 
 Each payload validates its own required facts in `__post_init__` --
 construction fails fast on missing/empty/contradictory data instead of
-letting a malformed outcome reach the renderer, per Sec 4's "no arbitrary
-strings, no best-effort prose" rule. Expected business outcomes are
+letting a malformed outcome reach the renderer. Expected business outcomes are
 committed as data by the caller; unexpected exceptions never become one of
-these (Sec 4's "expected outcomes versus exceptions" boundary) -- that split
-is enforced by the caller (Codex-owned orchestration), not by this module.
+these; the caller, not this module, enforces the boundary between expected
+outcomes and exceptions.
 """
 from __future__ import annotations
 
@@ -221,9 +219,9 @@ class AddressPivotUnavailableOutcome:
 @dataclass(frozen=True)
 class AddressPivotStartedOutcome:
     """Rendered ONLY after the caller's atomic pivot mutation has actually
-    committed (plan Sec 7 step 7: 'the response states that cancellation/
-    pivot happened only after these pending mutations are part of the
-    adapter-owned successful commit') -- this outcome existing at all is
+    committed. The response may state that cancellation or pivot occurred only
+    after the corresponding mutations are part of the successful commit; this
+    outcome existing at all is
     itself evidence the pivot is real, never a claim ahead of the fact."""
     code = OutcomeCode.ADDRESS_PIVOT_STARTED
     cancelled_serial_number: str
@@ -281,8 +279,8 @@ class InventoryInconsistentOutcome:
 class ConfirmationSummaryOutcome:
     """Wraps an already-built confirmation summary (core/confirmation.py's
     existing build_confirmation_message output) -- this renderer family does
-    not reconstruct confirmation text, it packages it (plan Sec 4 renderer
-    family 7: 'deterministic summary')."""
+    not reconstruct confirmation text; it packages it as a deterministic
+    summary."""
     code = OutcomeCode.CONFIRMATION_SUMMARY
     summary_text: str
 

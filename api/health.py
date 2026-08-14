@@ -28,8 +28,7 @@ def _live_body() -> dict:
 @router.get("/health/ready")
 def health_ready():
     """
-    Signed cross-review plan, Section C6: liveness split from readiness.
-    Checks the one dependency every request-handling path actually needs
+    Readiness checks the dependency every request-handling path needs
     (a working DB connection) and reports which channels are configured to
     run, so "is this deployment actually able to do its job" is answerable
     without reading logs.

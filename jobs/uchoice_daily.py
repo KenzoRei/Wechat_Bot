@@ -48,8 +48,8 @@ def _run_digest_and_retirement(db: DBSession) -> None:
         .filter(
             RequestLog.status == "processing",
             RequestLog.service_type_id.in_(service_type_ids),
-            # kefu-migration-plan.md Sec 7: this job stays fully live for
-            # Smart Robot as long as SMART_ROBOT_ENABLED -- scoped to its
+            # This job remains live while Smart Robot is enabled and is scoped
+            # to its
             # own channel so a Kefu-originated request never appears in a
             # digest pushed to a WeCom group Kefu never touches.
             RequestLog.source_channel == "smart_robot",

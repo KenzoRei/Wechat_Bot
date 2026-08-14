@@ -1,7 +1,6 @@
 """
-core.kefu_case_adapter._kefu_rollout_denial_reason -- Codex round-90
-finding 3 decision, updated after the Kefu-native atomic confirmation
-state machine landed: approved customer-scoped services are enabled while
+Coverage for core.kefu_case_adapter._kefu_rollout_denial_reason: approved
+customer-scoped services are enabled while
 unrelated mutations remain gated.
 """
 from types import SimpleNamespace

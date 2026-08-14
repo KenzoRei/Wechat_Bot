@@ -1,6 +1,5 @@
 """
-Signed cross-review plan, Section C3: this process owns the only
-BackgroundScheduler for the whole deployment. Running more than one
+This process owns the deployment's BackgroundScheduler. Running more than one
 web/worker process against the same database at once will duplicate every
 scheduled job below (session expiry, uChoice reports, Kefu polling) --
 there is no leader election or cross-process coordination. Keep this a
@@ -8,9 +7,8 @@ single-instance deployment (Render: one instance, no horizontal scaling)
 until that coordination exists.
 
 RUN_SCHEDULER (config.py) defaults true and is a useful immediate seam, but
-it is NOT automatically enforced across instances -- two processes can each
-independently default it to true and both start a scheduler (Codex round-3
-review). Operationally:
+it is not automatically enforced across instances: two processes can each
+default it to true and start a scheduler. Operationally:
   - Set RUN_SCHEDULER explicitly in Render's environment even for today's
     single instance, so it's a deliberate, visible choice rather than an
     unset default.
@@ -65,7 +63,7 @@ def _run_uchoice_invoice_job():
         db.close()
 
 
-# Instance-unique worker identity (Section C3) -- set WORKER_INSTANCE_ID
+# Instance-unique worker identity -- set WORKER_INSTANCE_ID
 # explicitly in the deployment environment if you ever do run more than one
 # instance, so leases/logs are attributable; falls back to a random ID per
 # process start so a single-instance deployment still isn't hardcoded.
@@ -79,9 +77,8 @@ scheduler.add_job(
     _run_expiry_job, "interval", minutes=5, id="session_expiry",
     max_instances=1, coalesce=True, misfire_grace_time=60,
 )
-# kefu-migration-plan.md Sec 7: these stay registered and running as long as
-# Smart Robot is enabled -- no change to their scheduling from this
-# migration. Their own queries are additionally filtered to
+# These jobs stay registered while Smart Robot is enabled. Their own queries
+# are additionally filtered to
 # source_channel='smart_robot' (jobs/uchoice_daily.py, jobs/uchoice_invoice.py).
 if config.SMART_ROBOT_ENABLED:
     scheduler.add_job(
@@ -106,8 +103,8 @@ if config.SMART_ROBOT_ENABLED:
     _smart_robot_router = _webhook.router
 
 
-# ── Kefu wiring (feature-gated, Codex round-88's "application wiring") ────────
-# Two independent modes (Codex's round-2 review of this same plan): callback
+# ── Kefu wiring (feature-gated) ──────────────────────────────────────────────
+# Two independent modes: callback
 # verification/crypto/route (KEFU_CALLBACK_ENABLED, needed before WeCom will
 # issue the API Secret) is now separate from business processing
 # (KEFU_ENABLED, clients/workers/scheduled jobs). A Smart-Bot-only
@@ -152,8 +149,8 @@ if config.KEFU_ENABLED:
     def _run_kefu_delivery_job():
         kefu_delivery_worker.run_delivery_sweep(SessionLocal, _kefu_client, kefu_artifact_loader.load_artifact)
 
-    # Short intervals -- Kefu's own reply-window/quota semantics (plan
-    # Sec 11.3) govern how many messages can be sent per window, not how
+    # Kefu's reply-window and quota semantics govern how many messages can be
+    # sent per window, not how
     # often we're allowed to poll; there's no WeCom-imposed floor on these.
     # Tightened from 15s/20s after live latency observed as slow.
     # max_instances=1 matters most here: at a 2-3s interval, an occasional

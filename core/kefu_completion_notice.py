@@ -1,6 +1,6 @@
 """
-Pending-completion-notice audience tracking (kefu-migration-plan.md Sec 7,
-Codex round-88 finding 4). A Kefu-originated inbound/outbound request's
+Pending-completion-notice audience tracking. A Kefu-originated inbound or
+outbound request's
 completion (warehouse confirms it) is surfaced to whichever staff member's
 next message touches that request's business/warehouse scope -- not only
 the original submitter -- exactly once, via
@@ -12,8 +12,8 @@ jobs/uchoice_daily.py's scheduled digest) -- those are push mechanisms for
 Smart Robot's WeCom groups; this is Kefu's pull-on-next-message mechanism,
 scoped to source_channel='kefu' only, per the "pull, not push" strategy.
 
-Codex round-90 finding 6: split into a lock phase (this module) and a
-commit phase (the caller, core/kefu_case_adapter.py) so the "shown" mark
+Split into a lock phase here and a commit phase in core/kefu_case_adapter.py so
+the "shown" mark
 lands in the SAME transaction/commit as the reply that actually carries
 it -- a delivery failure must not permanently lose the notice, and two
 concurrent turns must never both claim the same row. `SELECT ... FOR

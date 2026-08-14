@@ -1,6 +1,5 @@
 """
-Startup-mode truthfulness tests (signed cross-review plan, Section C1, plus
-two follow-up rounds of fixes from Codex's reviews of this file itself):
+Startup-mode truthfulness tests:
 
 - SMART_ROBOT_ENABLED=false must actually remove the Smart Bot route from
   the app, not just skip its cron jobs.
@@ -12,8 +11,8 @@ two follow-up rounds of fixes from Codex's reviews of this file itself):
   silently coerce to false.
 
 Route presence is checked via TestClient HTTP calls, not by introspecting
-`app.routes` directly (Codex round-3 review: the installed FastAPI/Starlette
-routing representation doesn't expose a flat `.path` on every entry the way
+`app.routes` directly because the installed FastAPI/Starlette routing
+representation does not expose a flat `.path` on every entry the way
 an earlier version of this file assumed, causing two false failures even
 though the routes were actually being gated correctly). A missing route
 returns 404; an existing route called without its required query params
@@ -21,9 +20,8 @@ returns 422 (FastAPI's own request-validation response) -- proving the
 route matched before failing, which is the strongest available signal
 short of a full valid request.
 
-Restoration snapshots and restores the exact original env var values
-itself (see Codex's round-2 review, which caught the previous version of
-this fixture relying on monkeypatch's teardown ordering, which pytest does
+Restoration snapshots and restores the exact original environment values
+itself. Relying on monkeypatch teardown ordering does
 not guarantee across two independently-requested function-scoped fixtures
 with no explicit dependency between them).
 

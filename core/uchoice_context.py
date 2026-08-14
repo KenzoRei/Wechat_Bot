@@ -65,8 +65,8 @@ def sku_label_map(db: DBSession) -> dict[str, str]:
 
 def address_candidates(db: DBSession, customer_id=None, source_warehouse_code=None) -> list[dict]:
     """
-    kefu-deterministic-response-plan.md Sec 5: the U-Choice address book is
-    shared across every authorized U-Choice service -- `customer_id` is
+    The U-Choice address book is shared across every authorized U-Choice
+    service; `customer_id` is
     provenance/reporting metadata only, never an address visibility ACL.
     Neither current caller (Smart Robot's own uchoice_outbound_request path,
     or Kefu's session_manager._build_uchoice_candidates) passes a
@@ -74,10 +74,9 @@ def address_candidates(db: DBSession, customer_id=None, source_warehouse_code=No
 
     The optional customer_id filter itself is kept, not removed, for any
     future legacy/reporting caller that genuinely wants a customer-scoped
-    subset -- it is no longer how visibility/matching is gated for any
-    request-submission path (round-99's opposite design -- withhold until a
-    customer is locked, then filter to it -- was reverted after a live
-    incident showed it contradicted the actual business rule; see
+    subset. It does not gate visibility or matching for request submission;
+    withholding addresses until customer lock was reverted after a live
+    incident showed that behavior contradicted the business rule. See
     docs/ai-collaboration/decisions.md's "Superseded or challenged
     assumptions").
 
@@ -121,8 +120,8 @@ def address_candidates(db: DBSession, customer_id=None, source_warehouse_code=No
 
 def customer_candidates(db: DBSession) -> list[dict]:
     """
-    kefu-migration-plan.md Sec 6.2: the full active customer directory, for
-    the AI to fuzzy-match a Kefu staff member's free-text customer
+    Full active customer directory for matching a Kefu staff member's
+    free-text customer
     description against -- same pattern as sku_catalog()/address_candidates()
     above. Cheap, full-table query (the directory is small); no scoping
     needed since this IS the thing being scoped by (nothing to filter it by
@@ -248,8 +247,8 @@ def get_original_fields(db: DBSession, target) -> dict:
     (execution-time) and core/confirmation.py's completion builders
     (confirm-time display) so both resolve the original request identically.
 
-    kefu-migration-plan.md Sec 2.4: resolves via request_log.origin_session_id
-    directly -- a stable FK set once, at request-creation time, instead of
+    Resolve through request_log.origin_session_id, a stable FK set once at
+    request creation, instead of
     disambiguating by matching wechat_openid (which correctly identified
     the original session over a same-account completion session for Smart
     Robot, but is null/unused for Kefu-originated requests, so that match
@@ -284,8 +283,8 @@ def resolve_completion_target(db: DBSession, reference_serial: str | None):
 
 def member_candidates(db: DBSession, group_id) -> list[dict]:
     """
-    kefu-migration-plan.md Sec 2.3: includes both GroupMember and
-    kefu_staff rows for the same group, so an admin can see and promote a
+    Includes both GroupMember and kefu_staff rows for the group, so an admin
+    can see and promote a
     pending Kefu staff member the same way they promote a pending group
     member today. target_identity is the tagged string role_change's
     three boundaries dispatch on (core/role_identity.py) -- a bare

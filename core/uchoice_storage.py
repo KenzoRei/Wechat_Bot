@@ -147,8 +147,8 @@ def apply_storage_delta(
         note=note,
         created_by=created_by,
     ))
-    # No db.commit() here (Phase 2 atomicity fix, systemic-validation-addendum.md
-    # Sec 3b) -- a multi-delta operation (move_storage's 4 calls/line, any
+    # No db.commit() here: a multi-delta operation (move_storage's four calls
+    # per line, or any
     # multi-line adjust/recount/completion) must succeed or fail as one unit.
     # Committing per-call let an earlier delta survive a later one's failure,
     # a real partial-write/inventory-loss risk. flush() still surfaces this

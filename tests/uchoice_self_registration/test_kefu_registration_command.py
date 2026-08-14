@@ -1,6 +1,6 @@
 """
-kefu-migration-plan.md Sec 2.3 / Codex round-88 finding 1 -- Kefu-side
-registration intake. Mirrors test_registration_command.py's coverage
+Kefu-side registration intake, mirroring test_registration_command.py's
+coverage
 against core.kefu_registration instead of core.self_registration.
 """
 import pytest
@@ -73,8 +73,8 @@ def test_brand_new_identity_registers_into_pending():
 
 
 def test_registration_always_uses_fixed_configured_group_id_never_from_message():
-    """plan Sec 2.3: group_id is never chosen by staff or inferred from a
-    message -- always the fixed deployment mapping."""
+    """group_id always comes from the fixed deployment mapping, never staff
+    input or message inference."""
     db = KefuMockDB(existing_member_role=None)
     kefu_registration.try_handle_kefu_registration_command(db, IDENTITY, "注册成员")
     assert db.added[0].group_id == "kefu-group-uuid-1"

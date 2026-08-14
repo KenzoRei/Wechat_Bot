@@ -1,6 +1,6 @@
 """
-Codex round-32 finding 1: the adjust/move/recount validators previously
-only checked SKU membership, not the signed typed contracts (valid bucket
+The adjust/move/recount validators must enforce typed contracts, not merely
+SKU membership: valid bucket
 dimensions, non-zero/non-negative counts, unique bucket keys for recount,
 box-count-vs-source-dimension ordering for move).
 
@@ -93,8 +93,8 @@ def test_recount_storage_accepts_zero_count(db):
 
 
 def test_recount_storage_rejects_duplicate_bucket_keys(db):
-    """Codex round-32: RecountStorageHandler's dict comprehension silently
-    overwrites duplicate (sku_code, boxes_per_pallet) keys -- must be
+    """RecountStorageHandler's dict comprehension would silently overwrite
+    duplicate (sku_code, boxes_per_pallet) keys, so they must be
     rejected before it ever reaches that handler."""
     error = pre_confirm_validators.run(
         "recount_storage", {},

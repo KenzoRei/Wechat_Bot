@@ -1,6 +1,6 @@
 """
-phase4-self-registration.md Sec 4/5/8 -- role_change's three-boundary
-hardening (before-persistence, pre-confirm, execution) and the pending-
+role_change's three-boundary hardening (before-persistence, pre-confirm, and
+execution) plus the pending-
 exclusion invariant. Mock DB only, per current DB-test-policy restriction.
 """
 from types import SimpleNamespace
@@ -170,8 +170,8 @@ def test_last_admin_protection_still_holds():
 
 def test_last_admin_protection_allows_reassigning_an_already_inactive_admin():
     """
-    Codex round-4 review: an admin who is currently is_active=False must
-    not be treated as "the last active admin" -- they aren't active at
+    An admin with is_active=False must not be treated as the last active admin;
+    they are not active at
     all, so reassigning their role removes nothing from the active count.
     """
     db = _MockDB(members={

@@ -28,8 +28,8 @@ def create_log(
     transitions to 'processing' on confirm, then 'success'/'failed' once the
     workflow finishes, or 'cancelled'/'timed_out'/'stale' if abandoned.
 
-    kefu-migration-plan.md Sec 2.4 / Codex round-90 finding 4: source_channel/
-    submitted_by_staff_id must be explicit at creation time, not defaulted
+    source_channel and submitted_by_staff_id must be explicit at creation, not
+    defaulted
     and patched in later -- a Kefu-originated request that briefly carried
     source_channel='smart_robot' would already be wrong for the window
     between creation and any later fix-up (included in Smart Robot's own
@@ -65,9 +65,7 @@ def mark_success(
     commit=False lets a caller (core.workflow_engine's atomic DB phase) fold
     this status change into the same transaction as the storage deltas that
     preceded it, so a failure between this call and the caller's own commit
-    rolls back both together instead of leaving mark_success's change
-    already durable on its own (systemic-validation-addendum.md Sec 3b/
-    Codex round-28 finding 1).
+    rolls back both together instead of leaving mark_success durable alone.
     """
     log = db.query(RequestLog).filter_by(log_id=log_id).first()
     if log is None:

@@ -33,9 +33,8 @@ def db():
 
 # Track exact rows this test module creates -- never bulk-delete/cancel by
 # the shared wechat_openid, which would touch other concurrent test runs'
-# or real data for this same identity (flagged correctly by Codex's
-# cross-review; a fail-closed, exact-row cleanup replaces the earlier
-# broad-by-identity approach).
+# or real data for this same identity. Fail-closed, exact-row cleanup avoids
+# that broad-by-identity risk.
 _created_session_ids: list = []
 _created_log_ids: list = []
 

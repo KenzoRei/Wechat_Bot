@@ -15,8 +15,8 @@ class UpsertAddressHandler(BaseHandler):
 
         fields = context.get("collected_fields", {})
         matched_id = fields.get("matched_address_id")
-        # kefu-migration-plan.md Sec 2.2/6.2: customer_id is authoritative
-        # context (the case's own locked customer, never a model-generated
+        # customer_id is authoritative context: the case's locked customer,
+        # never a model-generated
         # company_name string) -- present only for Kefu-originated cases,
         # per the case-turn service. Smart Robot's existing pivot flow
         # (core/workflow_engine.py _maybe_pivot_to_add_address) has no

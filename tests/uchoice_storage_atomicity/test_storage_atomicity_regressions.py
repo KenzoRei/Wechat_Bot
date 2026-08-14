@@ -4,8 +4,7 @@ Regression coverage for atomic multi-delta storage operations.
 Uses the real dev Postgres DB directly -- SQLite (used by
 tests/uchoice_lifecycle/'s mocked suite) can't reproduce real multi-
 statement commit/rollback semantics, which is exactly what's under test
-here. A throwaway warehouse code (TESTWHX2, distinct from Phase 1's
-TESTWHX to avoid any cross-suite collision) isolates fixtures; only exact
+here. A throwaway warehouse code (TESTWHX2) isolates fixtures; only exact
 rows this module creates are ever deleted.
 
 The assertions protect against partial commits surviving a later failure.

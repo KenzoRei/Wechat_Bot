@@ -1,6 +1,6 @@
 """
-Phase 3 (phase3-outbound-pdf-timing.md) verification: the outbound pickup/
-delivery instruction PDF is generated at request-creation time, from the
+Verifies the outbound pickup/delivery instruction PDF is generated at request
+creation time from the
 request's own validated data, using a stable persisted date (not the wall
 clock) -- and confirm_outbound_completion no longer generates it.
 

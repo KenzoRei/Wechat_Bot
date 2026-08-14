@@ -22,8 +22,7 @@ class RequestLog(Base):
     wechat_msg_id:   Mapped[str | None]       = mapped_column(String(128), unique=True)
     created_at:      Mapped[datetime]         = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     completed_at:    Mapped[datetime | None]  = mapped_column(DateTime(timezone=True))
-    # WeChat Kefu migration (kefu-migration-plan.md Sec 2.4) -- actor/
-    # requester split: wechat_openid stays the Smart Robot actor;
+    # Actor/requester split: wechat_openid remains the Smart Robot actor;
     # submitted_by_staff_id is the Kefu actor; customer_id is who the
     # request is *for*, distinct from either. source_channel defaults to
     # 'smart_robot' so existing rows/callers are unaffected.
@@ -31,7 +30,6 @@ class RequestLog(Base):
     submitted_by_staff_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("kefu_staff.staff_id"))
     source_channel:        Mapped[str]              = mapped_column(String(20), nullable=False, default="smart_robot")
     origin_session_id:     Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("conversation_session.session_id"))
-    # kefu-migration-plan.md Sec 7 / Codex round-88 finding 4: set the
-    # moment a completion notice is actually delivered in a reply (never
+    # Set when a completion notice is actually delivered in a reply, never
     # at completion time) -- NULL means "not yet shown to anyone".
     completion_notice_shown_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

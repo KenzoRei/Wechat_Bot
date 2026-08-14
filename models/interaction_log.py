@@ -22,7 +22,7 @@ class InteractionLog(Base):
     service_type_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("service_type.service_type_id", ondelete="SET NULL"))
     request_log_id:  Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("request_log.log_id", ondelete="SET NULL"))
     created_at:      Mapped[datetime]         = mapped_column(DateTime(timezone=True), server_default=text("now()"))
-    # WeChat Kefu migration (kefu-migration-plan.md Sec 2.4)
+    # Customer attribution for Kefu-originated interactions.
     customer_id:           Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("uchoice_customer.customer_id"))
     submitted_by_staff_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("kefu_staff.staff_id"))
     source_channel:        Mapped[str]              = mapped_column(String(20), nullable=False, default="smart_robot")

@@ -1,6 +1,6 @@
 """
-kefu-deterministic-response-plan.md Sec 4: renderer exhaustiveness, no
-internal-ID/exception-text leakage, and payload validation. No DB needed --
+Renderer exhaustiveness, internal-ID and exception-text containment, and
+payload validation. No DB needed:
 core/kefu_response_renderer.py is a pure function of pre-resolved facts.
 """
 import typing
@@ -192,8 +192,7 @@ def test_candidate_ambiguous_outcome_rejects_fewer_than_two_options():
 
 
 def test_completion_notice_outcome_rejects_a_non_inbound_outbound_direction_label():
-    """This is exactly the round-102-incident bug class this phase fixes --
-    a generic/unknown direction label must never become a renderable
+    """A generic or unknown direction label must never become a renderable
     completion notice."""
     with pytest.raises(oc.KefuOutcomeError):
         oc.CompletionNoticeOutcome(serial_number="REQ-1", direction_label="请求")

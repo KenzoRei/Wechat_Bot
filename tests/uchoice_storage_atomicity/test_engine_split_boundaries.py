@@ -1,5 +1,5 @@
 """
-Regression tests for Codex round-28 findings 1 and 2 against
+Regression tests for transaction and side-effect boundaries in
 core.workflow_engine._execute_workflow_and_finish.
 
 Finding 1: mark_success/close_session used to commit independently of the

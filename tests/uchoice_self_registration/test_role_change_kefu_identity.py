@@ -1,9 +1,9 @@
 """
-kefu-migration-plan.md Sec 2.3 -- role_change's three hardened boundaries
+role_change's three hardened boundaries
 (before-persistence, pre-confirm, execution) plus last-admin-protection
 must dispatch on the tagged target identity ({kind, key}), never by
-probing which table happens to contain a matching raw string (Codex
-round-68 finding 4). Mock DB only, matching this project's existing
+probing which table contains a matching raw string. Mock DB only, matching
+this project's
 offline-test pattern.
 """
 from types import SimpleNamespace
@@ -187,8 +187,8 @@ def test_last_admin_protection_allows_demotion_when_another_admin_exists_in_othe
 
 def test_last_admin_protection_allows_reassigning_an_already_inactive_kefu_admin():
     """
-    Codex round-4 review: mirrors the Smart Robot case in
-    test_role_change_hardening.py -- an inactive Kefu admin isn't
+    Mirrors the Smart Robot case in test_role_change_hardening.py: an inactive
+    Kefu admin is not
     contributing to the active-admin count in the first place, so
     reassigning them removes nothing.
     """

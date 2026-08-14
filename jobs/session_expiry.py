@@ -57,8 +57,7 @@ def _expire_session(db: DBSession, session: ConversationSession) -> None:
         if owns_log:
             request_logger.mark_timed_out(db, session.request_log_id)
 
-    # Notification is channel-aware from here (signed cross-review plan,
-    # Section C2): the state transition above already applies to both
+    # Notification is channel-aware; the state transition above applies to both
     # channels identically -- only how (and whether) the owner is told
     # branches by source_channel. Kefu must never fall through to the
     # Smart Robot group-webhook path, which assumes wechat_openid and would
@@ -96,8 +95,8 @@ def _notify_kefu_expiry(db: DBSession, session: ConversationSession) -> None:
     for Kefu (each case belongs to one staff member), so a session with no
     bound staff member (opened_by_staff_id is None, shouldn't happen in
     practice but is not guaranteed by a DB constraint) is deliberately
-    suppressed rather than guessed at -- documented interim rule per the
-    signed plan, not a crash.
+    suppressed rather than guessed at; this is an interim business rule, not
+    an error.
     """
     if session.opened_by_staff_id is None:
         return

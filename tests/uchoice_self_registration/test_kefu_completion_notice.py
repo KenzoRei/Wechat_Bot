@@ -1,14 +1,13 @@
 """
-kefu-migration-plan.md Sec 7 / Codex round-90 finding 6 -- pending-
-completion-notice text formatting. Mock DB only, covering the pure-Python
+Pending-completion-notice text formatting. Mock DB only, covering the
+pure-Python
 labeling logic.
 
 lock_pending_completion_notice()'s actual locking/concurrency-safety
 (SELECT ... FOR UPDATE SKIP LOCKED) is NOT covered here -- mocking raw SQL
 faithfully enough to prove real row-lock behavior isn't meaningful; that
-guarantee is proven by a real-Postgres concurrency test instead (see
-tests/kefu_integration/), per Codex's own explicit request that "the
-sequential mock cannot prove it."
+guarantee is proven by a real-PostgreSQL concurrency test under
+tests/kefu_integration/ because a sequential mock cannot prove it.
 """
 from types import SimpleNamespace
 import pytest

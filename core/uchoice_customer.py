@@ -1,7 +1,6 @@
 """
-Customer selection/locking for Kefu-originated, customer-scoped requests
-(kefu-migration-plan.md Sec 6.2, docs/ai-collaboration/discussion.md round
-98). A shared Kefu account works cases for many different customers in one
+Customer selection and locking for Kefu-originated, customer-scoped requests.
+A shared Kefu account works cases for many customers in one
 conversation channel, so which customer a case is for has to be explicitly
 resolved from the AI's candidate match and then LOCKED on the case for the
 rest of its life -- never re-resolved or overwritten by a later turn, even
@@ -16,8 +15,8 @@ def resolve_and_lock_customer(session, collected_fields: dict, candidates: list[
     isn't resolved yet.
 
     Once `session.customer_id` is set, it is authoritative and returned
-    as-is -- any customer_id the AI extracts on a later turn is ignored,
-    by design (round 98: locked once, never drifts). Only while it is
+    as-is; any customer_id extracted on a later turn is ignored. Customer
+    identity locks once and never drifts. Only while it is
     still unset does a freshly-extracted customer_id get validated against
     the real candidate list (never trusted blindly -- the AI can
     hallucinate an id that isn't in the directory) and, if valid, written

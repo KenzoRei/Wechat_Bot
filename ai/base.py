@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 
-# kefu-deterministic-response-plan.md Sec 3: a stable code plus the field it
+# Stable code plus the field it
 # concerns and the evidence behind it, for AI-reported issues the backend
 # cannot resolve on its own (an ambiguous/unknown/contradictory value against
 # a supplied catalog or candidate set). Never used to compose reply text
@@ -16,7 +16,7 @@ class SemanticIssue:
     value: str | None = None          # the raw value that couldn't be resolved, when relevant
 
 
-# kefu-deterministic-response-plan.md Sec 3: semantic evidence for matching a
+# Semantic evidence for matching a
 # free-text destination description against the shared U-Choice address
 # candidates supplied for this turn. The backend (core/kefu_response_renderer
 # .validate_address_match) is the only thing that decides whether a match is
@@ -33,8 +33,7 @@ class AIResponse:
     intent:               str        # "new_request" | "continuation" | "confirm" |
                                      # "cancel" | "check_services" | "unrecognized"
     reply:                str        # Chinese message to send to the user.
-                                     # LEGACY, Smart Robot only (kefu-deterministic-
-                                     # response-plan.md Sec 3): Kefu must never
+                                     # Legacy Smart Robot field. Kefu must never
                                      # deliver this as an operational response --
                                      # every Kefu-owned orchestration file renders
                                      # from core/kefu_response_renderer.py instead.
@@ -53,8 +52,7 @@ class AIResponse:
     # `address_match.new_address` instead during the transition period and
     # afterward; this field is parsed only for Smart Robot.
     unmatched_new_address: dict | None = None
-    # Structured semantic evidence (kefu-deterministic-response-plan.md
-    # Sec 3). Populated for any provider response that includes them,
+    # Structured semantic evidence populated for any provider response,
     # regardless of channel -- Kefu orchestration is expected to consume
     # these; Smart Robot's legacy path ignores them.
     semantic_issues: tuple[SemanticIssue, ...] = ()
