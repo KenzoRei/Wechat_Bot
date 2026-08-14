@@ -311,3 +311,75 @@ def test_promoting_someone_new_to_admin_never_trips_the_invariant(client):
 def test_unknown_staff_id_returns_404(client):
     resp = client.patch(f"/admin/kefu-staff/{uuid.uuid4()}", json={"is_active": False}, headers=AUTH)
     assert resp.status_code == 404
+
+
+def test_refresh_names_without_kefu_configured_returns_503(client, monkeypatch):
+    monkeypatch.setattr(config, "WECHAT_KEFU_SECRET", None)
+    resp = client.post("/admin/kefu-staff/refresh-names", headers=AUTH)
+    assert resp.status_code == 503
+
+
+def test_refresh_names_updates_matched_and_skips_unmatched(client, monkeypatch):
+    monkeypatch.setattr(config, "WECHAT_CORP_ID", "test-corp")
+    monkeypatch.setattr(config, "WECHAT_KEFU_SECRET", "test-secret")
+
+    db = SessionLocal()
+    staff_ids = []
+    try:
+        group = db.query(GroupConfig).order_by(GroupConfig.created_at).first()
+        matched = _make_staff(db, group.group_id, "pending", display_name=None)
+        stale = _make_staff(db, group.group_id, "pending", display_name="Old Name")
+        unmatched = _make_staff(db, group.group_id, "pending", display_name=None)
+        staff_ids = [matched.staff_id, stale.staff_id, unmatched.staff_id]
+
+        from clients.kefu_client import KefuClient
+
+        def _fake_get_customer_basic_info(self, external_userids):
+            result = {}
+            if matched.external_userid in external_userids:
+                result[matched.external_userid] = "Matched Real Name"
+            if stale.external_userid in external_userids:
+                result[stale.external_userid] = "Refreshed Name"
+            return result
+
+        monkeypatch.setattr(KefuClient, "get_customer_basic_info", _fake_get_customer_basic_info)
+
+        resp = client.post("/admin/kefu-staff/refresh-names", headers=AUTH)
+        assert resp.status_code == 200
+        body = resp.json()["data"]
+        assert body["updated"] >= 2  # at least this test's two real updates
+
+        db.refresh(matched)
+        db.refresh(stale)
+        db.refresh(unmatched)
+        assert matched.display_name == "Matched Real Name"
+        assert stale.display_name == "Refreshed Name"
+        assert unmatched.display_name is None
+    finally:
+        _cleanup(db, staff_ids)
+        db.close()
+
+
+def test_refresh_names_surfaces_kefu_api_failure_as_502(client, monkeypatch):
+    monkeypatch.setattr(config, "WECHAT_CORP_ID", "test-corp")
+    monkeypatch.setattr(config, "WECHAT_KEFU_SECRET", "test-secret")
+
+    db = SessionLocal()
+    staff_ids = []
+    try:
+        group = db.query(GroupConfig).order_by(GroupConfig.created_at).first()
+        staff = _make_staff(db, group.group_id, "pending")
+        staff_ids = [staff.staff_id]
+
+        from clients.kefu_client import KefuClient, KefuTransportError
+
+        def _fake_failure(self, external_userids):
+            raise KefuTransportError("boom")
+
+        monkeypatch.setattr(KefuClient, "get_customer_basic_info", _fake_failure)
+
+        resp = client.post("/admin/kefu-staff/refresh-names", headers=AUTH)
+        assert resp.status_code == 502
+    finally:
+        _cleanup(db, staff_ids)
+        db.close()

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+import config
 from database import get_db
 from middleware.admin_auth import verify_admin_key
 from core.admin_invariants import lock_group_admin_invariant, would_remove_last_admin
@@ -118,3 +119,39 @@ def update_kefu_staff(staff_id: str, body: KefuStaffUpdate, db: Session = Depend
         role_name = db.query(Role).filter_by(role_id=staff.role_id).first().name
 
     return {"data": _to_response(staff, role_name)}
+
+
+@router.post("/refresh-names")
+def refresh_kefu_staff_names(db: Session = Depends(get_db)):
+    """
+    Backfills display_name for every registered Kefu staff member from
+    WeCom's real nickname, via kf/customer/batchget -- the only source of
+    truth for it, since nothing else in this app ever learns a Kefu
+    contact's actual name. Ids WeCom doesn't return a nickname for (left,
+    malformed, transient lookup miss) are left unchanged, not blanked.
+    """
+    if not config.WECHAT_CORP_ID or not config.WECHAT_KEFU_SECRET:
+        raise HTTPException(status_code=503, detail="Kefu is not configured on this deployment")
+
+    from clients.kefu_client import KefuClient, KefuTransportError, KefuAPIError
+
+    staff_rows = db.query(KefuStaff).all()
+    external_userids = sorted({s.external_userid for s in staff_rows})
+    if not external_userids:
+        return {"data": {"checked": 0, "updated": 0}}
+
+    client = KefuClient(config.WECHAT_CORP_ID, config.WECHAT_KEFU_SECRET)
+    try:
+        nicknames = client.get_customer_basic_info(external_userids)
+    except (KefuTransportError, KefuAPIError) as exc:
+        raise HTTPException(status_code=502, detail=f"Kefu lookup failed: {exc}") from exc
+
+    updated = 0
+    for staff in staff_rows:
+        nickname = nicknames.get(staff.external_userid)
+        if nickname and nickname != staff.display_name:
+            staff.display_name = nickname
+            updated += 1
+    db.commit()
+
+    return {"data": {"checked": len(external_userids), "updated": updated}}

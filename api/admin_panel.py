@@ -182,6 +182,7 @@ _PANEL_HTML = """<!doctype html>
         <h3>Kefu Staff</h3>
         <div class="meta">Assign a role to promote a staff member out of "pending". Warehouseman requires a warehouse code.</div>
       </div>
+      <button class="secondary" onclick="refreshKefuNames()">Refresh names from WeCom</button>
     </div>
     <table>
       <thead><tr><th>Name</th><th>external_userid</th><th>Role</th><th>Warehouse</th><th>Status</th><th>Registered</th><th></th></tr></thead>
@@ -234,6 +235,14 @@ async function authedPatch(path, body) {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+  });
+}
+
+async function authedPost(path, body) {
+  return authedFetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
   });
 }
 
@@ -292,6 +301,7 @@ function onKefuRoleChange(staffId) {
 
 async function saveKefuRole(staffId) {
   document.getElementById("kefuStaffError").textContent = "";
+  document.getElementById("kefuStaffError").style.color = "";
   const role = document.getElementById(`kefu-role-${staffId}`).value;
   const warehouseInput = document.getElementById(`kefu-wh-${staffId}`);
   const body = { role };
@@ -308,6 +318,21 @@ async function saveKefuRole(staffId) {
   } catch (e) {
     if (e.message === "UNAUTHORIZED") throw e;
     document.getElementById("kefuStaffError").textContent = "Save failed: " + e.message;
+  }
+}
+
+async function refreshKefuNames() {
+  document.getElementById("kefuStaffError").textContent = "";
+  try {
+    const resp = await authedPost("/admin/kefu-staff/refresh-names");
+    const { checked, updated } = resp.data;
+    document.getElementById("kefuStaffError").textContent = `Checked ${checked}, updated ${updated} name(s).`;
+    document.getElementById("kefuStaffError").style.color = "var(--muted)";
+    await loadKefuStaff();
+  } catch (e) {
+    if (e.message === "UNAUTHORIZED") throw e;
+    document.getElementById("kefuStaffError").style.color = "var(--bad)";
+    document.getElementById("kefuStaffError").textContent = "Refresh failed: " + e.message;
   }
 }
 

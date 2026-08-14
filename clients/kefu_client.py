@@ -240,6 +240,29 @@ class KefuClient:
             raise RuntimeError("Kefu account/add response omitted open_kfid")
         return str(open_kfid)
 
+    def get_customer_basic_info(self, external_userids: list[str]) -> dict[str, str]:
+        """
+        Returns {external_userid: nickname} for every id WeCom recognizes.
+        Ids it doesn't recognize (left the corp's reach, malformed, etc.)
+        are silently absent from the result rather than raising -- caller
+        decides what to do with a partial match. Chunks internally at
+        WeCom's 100-per-call limit on /cgi-bin/kf/customer/batchget.
+        """
+        nicknames: dict[str, str] = {}
+        for start in range(0, len(external_userids), 100):
+            chunk = external_userids[start:start + 100]
+            data = self._request(
+                "POST",
+                "/cgi-bin/kf/customer/batchget",
+                json={"external_userid_list": chunk},
+            )
+            for customer in data.get("customer_list") or []:
+                external_userid = customer.get("external_userid")
+                nickname = customer.get("nickname")
+                if external_userid and nickname:
+                    nicknames[str(external_userid)] = str(nickname)
+        return nicknames
+
     def send_file(self, *, open_kfid: str, external_userid: str, media_id: str, msgid: str) -> str:
         outbound_msgid = provider_msgid(msgid)
         data = self._request(
