@@ -8,8 +8,8 @@ import pytest
 # .env file. PostgreSQL tests must opt in through TEST_DATABASE_URL below.
 _OFFLINE_ENV = {
     "WECHAT_CORP_ID": "offline-test",
-    "WECHAT_TOKEN": "offline-test",
-    "WECHAT_ENCODING_AES_KEY": "offline-test",
+    "WECHAT_BOT_TOKEN": "offline-test",
+    "WECHAT_BOT_ENCODING_AES_KEY": "offline-test",
     "WECHAT_KEFU_TOKEN": "offline-test",
     "WECHAT_KEFU_ENCODING_AES_KEY": "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
     "YIDIDA_BASE_URL": "https://blocked.invalid",

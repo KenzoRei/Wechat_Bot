@@ -16,8 +16,8 @@ _RECEIVE_ID = ''
 
 def _get_crypt() -> WXBizJsonMsgCrypt:
     return WXBizJsonMsgCrypt(
-        config.WECHAT_TOKEN,
-        config.WECHAT_ENCODING_AES_KEY,
+        config.WECHAT_BOT_TOKEN,
+        config.WECHAT_BOT_ENCODING_AES_KEY,
         _RECEIVE_ID
     )
 

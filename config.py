@@ -76,11 +76,11 @@ else:
 # disabled, read without _require() so an unconfigured, disabled channel does
 # not fail startup. An enabled but incomplete channel must fail fast.
 if SMART_ROBOT_ENABLED:
-    WECHAT_TOKEN            = _require("WECHAT_TOKEN")
-    WECHAT_ENCODING_AES_KEY = _require("WECHAT_ENCODING_AES_KEY")
+    WECHAT_BOT_TOKEN            = _require("WECHAT_BOT_TOKEN")
+    WECHAT_BOT_ENCODING_AES_KEY = _require("WECHAT_BOT_ENCODING_AES_KEY")
 else:
-    WECHAT_TOKEN            = os.getenv("WECHAT_TOKEN")
-    WECHAT_ENCODING_AES_KEY = os.getenv("WECHAT_ENCODING_AES_KEY")
+    WECHAT_BOT_TOKEN            = os.getenv("WECHAT_BOT_TOKEN")
+    WECHAT_BOT_ENCODING_AES_KEY = os.getenv("WECHAT_BOT_ENCODING_AES_KEY")
 
 # WECHAT_SECRET/WECHAT_AGENT_ID/WECHAT_BOT_ID/WECHAT_BOT_SECRET (legacy 自建应用
 # credentials) were removed after confirming they had no consumers.
