@@ -65,6 +65,13 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="show what would run, apply nothing")
     parser.add_argument("--allow-production", action="store_true",
                          help="required to run against the known production database host")
+    parser.add_argument("--skip", action="append", type=int, default=[], metavar="VERSION",
+                         help="exclude this migration version from this run (repeatable). Not "
+                              "recorded in the ledger, so it stays pending and must be passed "
+                              "again on every future run against this database until you "
+                              "actually want it applied -- e.g. an environment-specific data "
+                              "seed (like a Kefu account's open_kfid) that should differ between "
+                              "a production and a testing database.")
     args = parser.parse_args()
 
     database_url = (
@@ -101,9 +108,15 @@ def main() -> int:
             cur.execute("SELECT version FROM public.schema_migrations")
             already_applied = {row[0] for row in cur.fetchall()}
 
-        pending = [(v, p) for v, p in migrations if v not in already_applied]
+        skip_set = set(args.skip)
+        pending = [(v, p) for v, p in migrations if v not in already_applied and v not in skip_set]
+        skipped = [(v, p) for v, p in migrations if v not in already_applied and v in skip_set]
+
+        if skipped:
+            print(f"Skipping (not applied, not recorded): {', '.join(f'V{v}' for v, _ in skipped)}")
+
         if not pending:
-            print(f"Up to date: all {len(migrations)} migrations already applied.")
+            print(f"Up to date: all {len(migrations) - len(skipped)} non-skipped migrations already applied.")
             return 0
 
         print(f"{len(already_applied)} already applied, {len(pending)} pending:")

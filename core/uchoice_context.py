@@ -29,7 +29,7 @@ def format_address_label(addr) -> str:
 
 def sku_catalog(db: DBSession, warehouse_code: str | None = None) -> list[dict]:
     """
-    All 8 U-Choice SKUs — cheap, full table every time (no scoping needed).
+    All U-Choice SKUs — cheap, full table every time (no scoping needed).
     Lets the AI resolve a free-text product description (e.g. "2寸透明胶带")
     to the real sku_code (e.g. "t4") instead of inventing one from the
     customer's own words.
