@@ -41,28 +41,28 @@ class GroupResponse(BaseModel):
 # ── Members ───────────────────────────────────────────────────────────────────
 
 class MemberCreate(BaseModel):
-    wechat_openid:  str
-    role:           str
-    display_name:   str | None = None
-    warehouse_code: str | None = None   # required if role == "warehouseman", enforced in the route
+    wechat_openid:   str
+    role:            str
+    display_name:    str | None = None
+    warehouse_codes: list[str] | None = None   # required if role == "warehouseman", enforced in the route
 
 
 class MemberUpdate(BaseModel):
-    role:           str | None = None
-    is_active:      bool | None = None
-    warehouse_code: str | None = None   # required if role becomes "warehouseman", enforced in the route
+    role:            str | None = None
+    is_active:       bool | None = None
+    warehouse_codes: list[str] | None = None   # required if role becomes "warehouseman", enforced in the route
 
 
 class MemberResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    wechat_openid:  str
-    group_id:       UUID
-    role:           str
-    display_name:   str | None
-    warehouse_code: str | None
-    is_active:      bool
-    joined_at:      datetime
+    wechat_openid:   str
+    group_id:        UUID
+    role:            str
+    display_name:    str | None
+    warehouse_codes: list[str] | None
+    is_active:       bool
+    joined_at:       datetime
 
 
 # ── Roles ─────────────────────────────────────────────────────────────────────
@@ -90,10 +90,10 @@ class RoleResponse(BaseModel):
 # ── Kefu Staff ────────────────────────────────────────────────────────────────
 
 class KefuStaffUpdate(BaseModel):
-    role:           str | None = None
-    is_active:      bool | None = None
-    warehouse_code: str | None = None   # required if role becomes "warehouseman", enforced in the route
-    display_name:   str | None = None
+    role:            str | None = None
+    is_active:       bool | None = None
+    warehouse_codes: list[str] | None = None   # required if role becomes "warehouseman", enforced in the route
+    display_name:    str | None = None
 
 
 class KefuStaffResponse(BaseModel):
@@ -105,7 +105,7 @@ class KefuStaffResponse(BaseModel):
     group_id:        UUID
     role:            str
     display_name:    str | None
-    warehouse_code:  str | None
+    warehouse_codes: list[str] | None
     is_active:       bool
     created_at:      datetime
 

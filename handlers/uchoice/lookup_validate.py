@@ -33,24 +33,64 @@ class LookupAndValidateCompletionHandler(BaseHandler):
     """
 
     def handle(self, context: dict, config: dict, db) -> dict:
+        from core.workflow_errors import TargetAlreadyResolvedError, TargetValidationError
+
         request_log_id = context.get("request_log_id")
         if not request_log_id:
-            raise RuntimeError("No target request resolved for this completion.")
+            raise TargetValidationError("No target request resolved for this completion.")
 
-        target = db.query(RequestLog).filter_by(log_id=request_log_id).first()
+        # Locked, refreshed fetch: populate_existing() is required, not
+        # optional -- this exact row was very likely already loaded earlier
+        # in the same turn (e.g. the unlocked pre-check in
+        # core/workflow_engine.py's _resolve_target_request), so without it
+        # SQLAlchemy's identity map would return the already-cached Python
+        # object without refreshing its attributes from this locked read --
+        # the SQL-level lock would still correctly serialize the
+        # transactions, but the losing transaction would see its own stale
+        # in-memory status instead of the winner's committed one, defeating
+        # the lock's entire purpose. Held only for the DB-phase transaction
+        # (see core/workflow_engine.py's split), released on that
+        # transaction's commit -- by which point the row's terminal status
+        # is already durable.
+        target = (
+            db.query(RequestLog)
+            .filter_by(log_id=request_log_id)
+            .populate_existing()
+            .with_for_update()
+            .first()
+        )
         if target is None:
-            raise RuntimeError("目标申请不存在。")
+            raise TargetValidationError("目标申请不存在。")
         if target.status != "processing":
-            raise RuntimeError(f"目标申请当前状态为「{target.status}」，无法处理。")
+            # A losing race against a concurrent completion/cancellation
+            # attempt on the same row -- a typed business conflict, not an
+            # operational failure. Must never mark the target itself
+            # failed; the caller (core/workflow_engine.py /
+            # core/kefu_turn_apply.py) catches this and leaves the target
+            # exactly as the winner left it.
+            raise TargetAlreadyResolvedError(target.status, target.serial_number)
 
+        # Every rejection from here on uses TargetValidationError, not a
+        # bare RuntimeError -- the shared exception handling treats any
+        # other exception as an operational failure and calls
+        # mark_failed() on session.request_log_id, which for this
+        # targets_existing_request session is this TARGET, not something
+        # this session owns. A warehouseman referencing the wrong serial
+        # (or one belonging to a warehouse they're not assigned to) must
+        # never mark that unrelated, perfectly valid target 'failed'.
         direction = config.get("direction")
         expected_name = _DIRECTION_SERVICE_NAMES.get(direction)
         if expected_name:
             target_service = db.query(ServiceType).filter_by(service_type_id=target.service_type_id).first()
-            if target_service and target_service.name != expected_name:
-                actual_label = _DIRECTION_LABELS.get(target_service.name, target_service.name)
+            # Fail closed: a target whose service_type row doesn't resolve
+            # at all must never be treated as direction-matching by
+            # omission.
+            if not target_service or target_service.name != expected_name:
+                actual_label = _DIRECTION_LABELS.get(
+                    target_service.name if target_service else None, "未知类型"
+                )
                 expected_label = _DIRECTION_LABELS.get(expected_name, expected_name)
-                raise RuntimeError(
+                raise TargetValidationError(
                     f"申请 {target.serial_number} 是{actual_label}申请，"
                     f"与当前操作（确认{expected_label}）方向不符，无法处理。"
                 )
@@ -58,10 +98,10 @@ class LookupAndValidateCompletionHandler(BaseHandler):
         original_fields = get_original_fields(db, target)
         warehouse_code = original_fields.get("warehouse_code")
 
-        caller_warehouse = context.get("warehouse_code")
-        if caller_warehouse and warehouse_code and caller_warehouse != warehouse_code:
-            raise RuntimeError(
-                f"该申请属于 {warehouse_code} 仓库，与您的仓库权限（{caller_warehouse}）不符。"
+        caller_warehouses = context.get("warehouse_codes")
+        if caller_warehouses is not None and warehouse_code and warehouse_code not in caller_warehouses:
+            raise TargetValidationError(
+                f"该申请属于 {warehouse_code} 仓库，与您的仓库权限（{'、'.join(caller_warehouses)}）不符。"
             )
 
         context["_uchoice_target"] = {

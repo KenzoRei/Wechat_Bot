@@ -60,14 +60,14 @@ def _real_inbound_service_type_id(db) -> str:
     return st.service_type_id
 
 
-def _make_kefu_staff(db, group_id, role_id, *, warehouse_code=None):
+def _make_kefu_staff(db, group_id, role_id, *, warehouse_codes=None):
     from models.kefu import KefuStaff
     staff = KefuStaff(
         open_kfid=f"kf-test-{uuid.uuid4().hex[:8]}",
         external_userid=f"staff-test-{uuid.uuid4().hex[:8]}",
         group_id=group_id,
         role_id=role_id,
-        warehouse_code=warehouse_code,
+        warehouse_codes=warehouse_codes,
     )
     db.add(staff)
     db.commit()
@@ -186,7 +186,7 @@ def test_concurrent_transactions_never_claim_the_same_notice(db, cleanup):
     group_id = _real_group_id(db)
     role_id = _real_role_id(db)
     service_type_id = _real_inbound_service_type_id(db)
-    staff = _make_kefu_staff(db, group_id, role_id, warehouse_code="JFK")
+    staff = _make_kefu_staff(db, group_id, role_id, warehouse_codes=["JFK"])
     cleanup["staff_ids"].append(staff.staff_id)
 
     log = RequestLog(

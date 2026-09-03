@@ -6,12 +6,12 @@ set lives here instead, with the job importing from this module rather than
 the other way around.
 """
 
-# The platform's two warehouses. No group-to-warehouse grant table exists in
+# The platform's warehouses. No group-to-warehouse grant table exists in
 # the schema (group_service_role grants services, not warehouses; group_config
 # .context is a location preset, not an authorization catalog) -- this is the
 # platform-wide set, confirmed against jobs/uchoice_daily.py's prior local
 # WAREHOUSES list before extraction.
-VALID_WAREHOUSE_CODES = frozenset({"JFK", "DE"})
+VALID_WAREHOUSE_CODES = frozenset({"JFK", "DE", "NJ"})
 
 # Explicit positive allowlist for role_change targets. An exclusion rule
 # ("every role except pending") would silently

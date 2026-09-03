@@ -66,9 +66,9 @@ def _session(session_id, *, status="active", case_number=None, revision=0,
     )
 
 
-def _access(staff_id="staff-1", group_id=GROUP_A, warehouse_code=None, allowed_services=None):
+def _access(staff_id="staff-1", group_id=GROUP_A, warehouse_codes=None, allowed_services=None):
     return SimpleNamespace(
-        staff_id=staff_id, group_id=group_id, warehouse_code=warehouse_code,
+        staff_id=staff_id, group_id=group_id, warehouse_codes=warehouse_codes,
         allowed_services=allowed_services or [{"service_type_id": SVC_INBOUND}, {"service_type_id": SVC_OUTBOUND}],
     )
 
@@ -125,7 +125,7 @@ def test_hint_to_case_in_different_warehouse_is_denied():
                  service_type_id=SVC_INBOUND, collected_fields={"warehouse_code": "DE"})
     db = MockDB(sessions={"sess-1": s})
 
-    result = _resolve_kefu_session(db, _access(warehouse_code="JFK"), "CASE-20260811-000001")
+    result = _resolve_kefu_session(db, _access(warehouse_codes=["JFK"]), "CASE-20260811-000001")
     assert isinstance(result, CaseTurnDenied)
     assert result.reason == "case_wrong_warehouse"
 
@@ -135,7 +135,7 @@ def test_hint_to_case_with_matching_warehouse_is_authorized():
                  service_type_id=SVC_INBOUND, collected_fields={"warehouse_code": "JFK"})
     db = MockDB(sessions={"sess-1": s})
 
-    result = _resolve_kefu_session(db, _access(warehouse_code="JFK"), "CASE-20260811-000001")
+    result = _resolve_kefu_session(db, _access(warehouse_codes=["JFK"]), "CASE-20260811-000001")
     assert result is s
 
 
@@ -145,7 +145,7 @@ def test_unscoped_staff_not_denied_by_warehouse():
                  service_type_id=SVC_INBOUND, collected_fields={"warehouse_code": "DE"})
     db = MockDB(sessions={"sess-1": s})
 
-    result = _resolve_kefu_session(db, _access(warehouse_code=None), "CASE-20260811-000001")
+    result = _resolve_kefu_session(db, _access(warehouse_codes=None), "CASE-20260811-000001")
     assert result is s
 
 

@@ -29,6 +29,20 @@ class UpsertAddressHandler(BaseHandler):
             addr = db.query(UchoiceAddress).filter_by(address_id=matched_id).first()
             if addr is None:
                 raise RuntimeError("待更新的地址不存在。")
+            # Execution-time backstop matching
+            # core.pre_confirm_validators._valid_upsert_address_warehouse_scope
+            # -- checks the EXISTING address's own warehouse, not just the
+            # requested one, since upsert_address's candidate list is
+            # intentionally unfiltered (the full address book), so a
+            # warehouseman could otherwise reach an address outside their
+            # assignment purely via matched_address_id.
+            allowed = context.get("warehouse_codes")
+            requested_warehouse = fields.get("warehouse_code", addr.warehouse_code)
+            if allowed is not None:
+                if addr.warehouse_code and addr.warehouse_code not in allowed:
+                    raise RuntimeError("该仓库不在您的权限范围内。")
+                if requested_warehouse and requested_warehouse not in allowed:
+                    raise RuntimeError("该仓库不在您的权限范围内。")
             addr.company_name   = fields.get("company_name", addr.company_name)
             addr.charge_type    = fields.get("charge_type", addr.charge_type)
             addr.addr           = fields.get("addr", addr.addr)

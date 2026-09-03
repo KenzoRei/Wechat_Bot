@@ -13,7 +13,7 @@ class AccessResult:
     role:              str            # role name, e.g. "admin" — resolved from role_id
     role_id:           UUID
     display_name:      str | None
-    warehouse_code:    str | None     # set only for role=warehouseman
+    warehouse_codes:   list[str] | None  # set only for role=warehouseman
     allowed_services:  list[dict]
     group_context:     dict | None    # location presets, aliases — passed to AI
     group_description: str | None     # human label for the group — used in keHuDanHao
@@ -120,7 +120,7 @@ def check_access(
         role=role.name,
         role_id=member.role_id,
         display_name=member.display_name,
-        warehouse_code=member.warehouse_code,
+        warehouse_codes=member.warehouse_codes,
         allowed_services=allowed_services,
         group_context=group.context,
         group_description=group.description,
@@ -211,7 +211,7 @@ def check_kefu_access(
         role=role.name,
         role_id=staff.role_id,
         display_name=staff.display_name,
-        warehouse_code=staff.warehouse_code,
+        warehouse_codes=staff.warehouse_codes,
         allowed_services=allowed_services,
         group_context=group.context,
         group_description=group.description,

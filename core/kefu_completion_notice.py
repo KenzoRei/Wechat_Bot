@@ -29,8 +29,9 @@ def lock_pending_completion_notice(db: DBSession, staff):
     """
     Locks (within the CALLER's still-open transaction -- does not commit)
     the oldest not-yet-notified Kefu-originated completed request scoped
-    to this staff member's own warehouse (unscoped for admin/accountant,
-    who see every pending notice). Returns the locked RequestLog row, or
+    to any of this staff member's own assigned warehouses (unscoped for
+    admin/accountant, who see every pending notice). Returns the locked
+    RequestLog row, or
     None if there's nothing pending or another transaction already holds
     the only matching row's lock. Caller is responsible for setting
     completion_notice_shown_at and committing, atomically with whatever
@@ -38,7 +39,7 @@ def lock_pending_completion_notice(db: DBSession, staff):
     """
     from models.request_log import RequestLog
 
-    if staff.warehouse_code is None:
+    if staff.warehouse_codes is None:
         row = db.execute(sql_text(
             """
             SELECT rl.log_id FROM request_log rl
@@ -61,12 +62,12 @@ def lock_pending_completion_notice(db: DBSession, staff):
               AND rl.completed_at IS NOT NULL
               AND rl.completion_notice_shown_at IS NULL
               AND st.name IN ('uchoice_inbound_request', 'uchoice_outbound_request')
-              AND rl.result ->> 'warehouse_code' = :wh
+              AND rl.result ->> 'warehouse_code' = ANY(:whs)
             ORDER BY rl.completed_at ASC
             LIMIT 1
             FOR UPDATE SKIP LOCKED
             """
-        ), {"wh": staff.warehouse_code}).first()
+        ), {"whs": staff.warehouse_codes}).first()
 
     if row is None:
         return None

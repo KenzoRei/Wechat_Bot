@@ -33,7 +33,7 @@ def test_successful_read_only_request_is_not_claimed_as_completion_notice():
         db.commit()
 
         claimed = kefu_completion_notice.lock_pending_completion_notice(
-            db, SimpleNamespace(warehouse_code="NOTICE-TEST")
+            db, SimpleNamespace(warehouse_codes=["NOTICE-TEST"])
         )
         assert claimed.service_type_id == service_ids["uchoice_inbound_request"]
         db.rollback()

@@ -24,7 +24,7 @@ def export_invoice(
     """
     Downloads an .xlsx with the full detail behind an invoice (Summary +
     one row per contributing transaction) — not just the totals the chat
-    response shows. warehouse_code: JFK or DE. start_month/end_month: 'YYYY-MM'.
+    response shows. warehouse_code: JFK, DE, or NJ. start_month/end_month: 'YYYY-MM'.
     """
     try:
         data = build_invoice_workbook(db, warehouse_code, start_month, end_month)

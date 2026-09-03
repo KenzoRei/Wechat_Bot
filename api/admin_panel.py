@@ -288,8 +288,8 @@ function kefuRoleRowHtml(s, roles) {
       <td>${escapeHtml(s.display_name || "(no name)")}</td>
       <td>${escapeHtml(s.external_userid)}</td>
       <td><select id="kefu-role-${s.staff_id}" onchange="onKefuRoleChange('${s.staff_id}')">${options}</select></td>
-      <td><input type="text" id="kefu-wh-${s.staff_id}" value="${escapeHtml(s.warehouse_code || "")}"
-            style="width:90px;${isWarehouseman ? "" : "display:none"}" placeholder="warehouse"></td>
+      <td><input type="text" id="kefu-wh-${s.staff_id}" value="${escapeHtml((s.warehouse_codes || []).join(", "))}"
+            style="width:120px;${isWarehouseman ? "" : "display:none"}" placeholder="JFK, DE"></td>
       <td>${s.is_active ? '<span class="badge ok">active</span>' : '<span class="badge bad">suspended</span>'}</td>
       <td>${fmtDate(s.created_at)}</td>
       <td class="actions">
@@ -312,11 +312,12 @@ async function saveKefuRole(staffId) {
   const warehouseInput = document.getElementById(`kefu-wh-${staffId}`);
   const body = { role };
   if (role === "warehouseman") {
-    if (!warehouseInput.value.trim()) {
-      document.getElementById("kefuStaffError").textContent = "Warehouse code is required for role=warehouseman.";
+    const codes = warehouseInput.value.split(/[,、]/).map(s => s.trim()).filter(Boolean);
+    if (codes.length === 0) {
+      document.getElementById("kefuStaffError").textContent = "At least one warehouse code is required for role=warehouseman.";
       return;
     }
-    body.warehouse_code = warehouseInput.value.trim();
+    body.warehouse_codes = codes;
   }
   try {
     await authedPatch(`/admin/kefu-staff/${staffId}`, body);
@@ -432,7 +433,7 @@ async function loadAll() {
           <td>${escapeHtml(m.display_name || "(no name)")}</td>
           <td>${escapeHtml(m.wechat_openid)}</td>
           <td>${escapeHtml(m.role)}</td>
-          <td>${escapeHtml(m.warehouse_code || "—")}</td>
+          <td>${escapeHtml((m.warehouse_codes || []).join(", ") || "—")}</td>
           <td>${m.is_active ? '<span class="badge ok">active</span>' : '<span class="badge bad">suspended</span>'}</td>
           <td>${fmtDate(m.joined_at)}</td>
         </tr>

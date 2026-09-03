@@ -317,9 +317,14 @@ def _valid_role_change_target_and_role(context: dict, collected_fields: dict, db
         return f"未知角色：{new_role}"
 
     if new_role == "warehouseman":
-        warehouse_code = collected_fields.get("warehouse_code")
-        if not warehouse_code or warehouse_code not in VALID_WAREHOUSE_CODES:
-            return "指派为仓库管理员需要提供有效的仓库代码（JFK 或 DE）。"
+        warehouse_codes = collected_fields.get("warehouse_codes")
+        if (
+            not isinstance(warehouse_codes, list)
+            or not warehouse_codes
+            or any(code not in VALID_WAREHOUSE_CODES for code in warehouse_codes)
+        ):
+            codes_list = "、".join(sorted(VALID_WAREHOUSE_CODES))
+            return f"指派为仓库管理员需要提供至少一个有效的仓库代码（{codes_list}）。"
 
     return None
 
@@ -615,6 +620,149 @@ def _valid_destination_address_required(context: dict, collected_fields: dict, d
     return None
 
 
+def _valid_caller_warehouse_scope(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """
+    Rejects an explicitly-named target warehouse the caller isn't assigned
+    to. A warehouseman restricted to a subset of warehouses (or, before this
+    array conversion, a single one) could previously name any warehouse
+    explicitly and reach the mutation/query anyway -- no existing validator
+    compared collected_fields["warehouse_code"] (which warehouse the
+    operation targets) against context["warehouse_codes"] (which
+    warehouse(s) the caller is actually assigned to). Composed into every
+    service whose collected_fields carries a warehouse_code naming which
+    warehouse the operation concerns. context["warehouse_codes"] is None for
+    a genuinely unscoped caller (customer/admin/accountant) -- never
+    restricted by this check.
+    """
+    allowed = context.get("warehouse_codes")
+    if allowed is None:
+        return None
+    requested = collected_fields.get("warehouse_code")
+    if requested and requested not in allowed:
+        return "该仓库不在您的权限范围内。"
+    return None
+
+
+def _valid_upsert_address_warehouse_scope(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """
+    upsert_address's own warehouse-scope check -- _valid_caller_warehouse_scope
+    above is not enough here, because that function only ever compares the
+    REQUESTED warehouse_code (the value being submitted) against the
+    caller's assignment. For an UPDATE (matched_address_id set), the
+    request submits whichever warehouse the caller intends the address to
+    end up at -- always one they're authorized for, since a warehouseman
+    would obviously only submit a code they themselves can use. The
+    address candidate list for upsert_address is intentionally the FULL,
+    unfiltered book (see core/session_manager.py's active_is_upsert_address
+    branch), so a JFK-only warehouseman could still have the AI match
+    matched_address_id to an existing DE-owned address purely by its text
+    description, then submit warehouse_code="JFK" -- passing the generic
+    check while actually reassigning a DE address they have no authority
+    over. This checks the EXISTING address's own current warehouse_code too,
+    not just the requested one.
+    """
+    allowed = context.get("warehouse_codes")
+    if allowed is None:
+        return None
+
+    matched_id = collected_fields.get("matched_address_id")
+    if matched_id:
+        from models.uchoice import UchoiceAddress
+        addr = db.query(UchoiceAddress).filter_by(address_id=matched_id).first()
+        if addr is not None and addr.warehouse_code and addr.warehouse_code not in allowed:
+            return "该仓库不在您的权限范围内。"
+
+    requested = collected_fields.get("warehouse_code")
+    if requested and requested not in allowed:
+        return "该仓库不在您的权限范围内。"
+    return None
+
+
+_CANCEL_DIRECTION_SERVICE_NAMES = {
+    "inbound":  "uchoice_inbound_request",
+    "outbound": "uchoice_outbound_request",
+}
+_CANCEL_DIRECTION_LABELS = {
+    "uchoice_inbound_request":  "入库",
+    "uchoice_outbound_request": "出库",
+}
+
+
+def _valid_cancel_target_and_owner(direction: str):
+    """
+    Factory for cancel_inbound_request/cancel_outbound_request's pre-confirm
+    boundary -- one closure per direction (matching this file's existing
+    _valid_completion_sku_lines("received_lines")-style factory idiom
+    above), since a single shared function has no other way to know which
+    direction it's being run as. Checks: the target must exist, still be
+    'processing', match the expected direction (fail-closed if the
+    target's own service_type row doesn't resolve at all -- an earlier
+    draft silently skipped this check when `target_service` was None,
+    which would have let a wrong-direction or orphaned-service-type target
+    through), belong to the caller's own group, and be cancellable by the
+    caller -- the request's original creator (channel-aware: Smart Robot by
+    wechat_openid, Kefu by staff_id, fail-closed on inconsistent
+    provenance) or an admin. Deliberately NOT warehouse-scoped -- unlike
+    every other service above, cancellation is scoped by ownership/admin
+    plus group_id, not by warehouse; a warehouseman isn't even among the
+    roles granted either cancel service. Re-checked, unlocked, at the
+    execution boundary (LookupAndValidateCancellationHandler, which holds
+    the real lock) as defense in depth -- this pre-confirm pass only avoids
+    showing a confirmation template for a request that was always going to
+    be rejected.
+    """
+
+    def validator(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+        from core.uchoice_context import resolve_completion_target
+        from models.service import ServiceType
+
+        reference_serial = collected_fields.get("reference_serial")
+        target, _ = resolve_completion_target(db, reference_serial)
+        if target is None:
+            return f"未找到申请编号 {reference_serial}" if reference_serial else "未能确定要取消的申请。"
+        if target.status != "processing":
+            return f"申请 {target.serial_number} 当前状态为「{target.status}」，无法取消。"
+
+        expected_name = _CANCEL_DIRECTION_SERVICE_NAMES[direction]
+        target_service = db.query(ServiceType).filter_by(service_type_id=target.service_type_id).first()
+        if not target_service or target_service.name != expected_name:
+            actual_label = _CANCEL_DIRECTION_LABELS.get(
+                target_service.name if target_service else None, "未知类型"
+            )
+            expected_label = _CANCEL_DIRECTION_LABELS[expected_name]
+            return (
+                f"申请 {target.serial_number} 是{actual_label}申请，"
+                f"与当前操作（取消{expected_label}）方向不符，无法处理。"
+            )
+
+        if str(target.group_id) != str(context.get("group_id")):
+            return "该申请不属于本群组，无法取消。"
+
+        is_admin = context.get("role") == "admin"
+        if not is_admin:
+            if context.get("source_channel") == "kefu":
+                is_owner = (
+                    target.source_channel == "kefu"
+                    and target.submitted_by_staff_id is not None
+                    and str(target.submitted_by_staff_id) == context.get("submitted_by_staff_id")
+                )
+            else:
+                is_owner = (
+                    target.source_channel == "smart_robot"
+                    and target.wechat_openid == context.get("wechat_openid")
+                )
+            if not is_owner:
+                return "您没有权限取消该申请，只有申请人本人或管理员可以取消。"
+
+        return None
+
+    return validator
+
+
+_valid_cancel_inbound_target_and_owner = _valid_cancel_target_and_owner("inbound")
+_valid_cancel_outbound_target_and_owner = _valid_cancel_target_and_owner("outbound")
+
+
 PRE_CONFIRM_VALIDATORS = {
     "role_change": _compose(
         _valid_role_change_target_and_role,
@@ -624,17 +772,30 @@ PRE_CONFIRM_VALIDATORS = {
         _valid_outbound_sku_lines,
         _valid_outbound_sku_quantities,
         _valid_destination_address_required,
+        _valid_caller_warehouse_scope,
     ),
     "uchoice_inbound_request": _compose(
         _valid_inbound_sku_lines,
         _valid_inbound_sku_quantities,
+        _valid_caller_warehouse_scope,
     ),
-    "adjust_storage": _valid_adjust_storage_lines,
+    "adjust_storage": _compose(
+        _valid_adjust_storage_lines,
+        _valid_caller_warehouse_scope,
+    ),
     "move_storage": _compose(
         _valid_move_storage_lines,
         _move_storage_stock_available,
+        _valid_caller_warehouse_scope,
     ),
-    "recount_storage": _valid_recount_storage_lines,
+    "recount_storage": _compose(
+        _valid_recount_storage_lines,
+        _valid_caller_warehouse_scope,
+    ),
+    "view_storage": _valid_caller_warehouse_scope,
+    "view_storage_history": _valid_caller_warehouse_scope,
+    "view_invoice": _valid_caller_warehouse_scope,
+    "upsert_address": _valid_upsert_address_warehouse_scope,
     "confirm_outbound_completion": _compose(
         _valid_outbound_completion_skus,
         _loose_outbound_pick_required,
@@ -643,6 +804,8 @@ PRE_CONFIRM_VALIDATORS = {
         _valid_inbound_completion_skus,
         _loose_inbound_restatement_required,
     ),
+    "cancel_inbound_request": _valid_cancel_inbound_target_and_owner,
+    "cancel_outbound_request": _valid_cancel_outbound_target_and_owner,
 }
 
 

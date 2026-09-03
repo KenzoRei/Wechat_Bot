@@ -134,4 +134,25 @@ def _sanitize_role_change_fields_before_persistence(extracted_fields: dict, db: 
         print(f"[workflow] dropped invalid role_change.new_role before persistence: {new_role!r}", flush=True)
         result.pop("new_role", None)
 
+    # warehouse_codes: same "preserve valid progress" pattern as sku_lines
+    # above -- first check the top-level value is actually a list (a
+    # malformed non-list AI-extracted value, e.g. a bare string, must not
+    # be iterated element-by-element as if it already were a list of codes,
+    # since Python happily iterates a string's characters), dropping the
+    # whole field if it isn't one; then drop any individual element not in
+    # VALID_WAREHOUSE_CODES rather than persisting a fabricated code.
+    warehouse_codes = result.get("warehouse_codes")
+    if warehouse_codes is not None:
+        from core.uchoice_constants import VALID_WAREHOUSE_CODES
+        if not isinstance(warehouse_codes, list):
+            print(f"[workflow] dropped malformed role_change.warehouse_codes "
+                  f"(not a list: {type(warehouse_codes).__name__}) before persistence", flush=True)
+            result.pop("warehouse_codes", None)
+        else:
+            cleaned = [c for c in warehouse_codes if c in VALID_WAREHOUSE_CODES]
+            if len(cleaned) != len(warehouse_codes):
+                print(f"[workflow] dropped unknown code(s) from role_change.warehouse_codes "
+                      f"before persistence: {warehouse_codes!r} -> {cleaned!r}", flush=True)
+            result["warehouse_codes"] = cleaned
+
     return result

@@ -41,7 +41,7 @@ def client():
 AUTH = {"X-Admin-Key": config.ADMIN_API_KEY}
 
 
-def _make_staff(db, group_id, role_name, *, is_active=True, display_name=None, warehouse_code=None):
+def _make_staff(db, group_id, role_name, *, is_active=True, display_name=None, warehouse_codes=None):
     role = db.query(Role).filter_by(name=role_name).one()
     staff = KefuStaff(
         open_kfid=f"kf-test-{uuid.uuid4().hex[:8]}",
@@ -50,7 +50,7 @@ def _make_staff(db, group_id, role_name, *, is_active=True, display_name=None, w
         role_id=role.role_id,
         is_active=is_active,
         display_name=display_name,
-        warehouse_code=warehouse_code,
+        warehouse_codes=warehouse_codes,
     )
     db.add(staff)
     db.commit()
@@ -111,7 +111,7 @@ def test_response_schema_fields(client):
         row = next(r for r in resp.json()["data"] if r["staff_id"] == str(staff.staff_id))
         for field in (
             "staff_id", "open_kfid", "external_userid", "group_id",
-            "role", "display_name", "warehouse_code", "is_active", "created_at",
+            "role", "display_name", "warehouse_codes", "is_active", "created_at",
         ):
             assert field in row
         assert row["role"] == "customer"
@@ -196,7 +196,7 @@ def test_warehouseman_rejects_whitespace_only_code(client):
 
         resp = client.patch(
             f"/admin/kefu-staff/{staff.staff_id}",
-            json={"role": "warehouseman", "warehouse_code": "   "},
+            json={"role": "warehouseman", "warehouse_codes": ["   "]},
             headers=AUTH,
         )
         assert resp.status_code == 400
@@ -215,11 +215,50 @@ def test_warehouseman_with_valid_code_succeeds(client):
 
         resp = client.patch(
             f"/admin/kefu-staff/{staff.staff_id}",
-            json={"role": "warehouseman", "warehouse_code": "JFK"},
+            json={"role": "warehouseman", "warehouse_codes": ["JFK"]},
             headers=AUTH,
         )
         assert resp.status_code == 200
-        assert resp.json()["data"]["warehouse_code"] == "JFK"
+        assert resp.json()["data"]["warehouse_codes"] == ["JFK"]
+    finally:
+        _cleanup(db, staff_ids)
+        db.close()
+
+
+def test_warehouseman_with_multiple_codes_succeeds(client):
+    db = SessionLocal()
+    staff_ids = []
+    try:
+        group = db.query(GroupConfig).order_by(GroupConfig.created_at).first()
+        staff = _make_staff(db, group.group_id, "pending")
+        staff_ids = [staff.staff_id]
+
+        resp = client.patch(
+            f"/admin/kefu-staff/{staff.staff_id}",
+            json={"role": "warehouseman", "warehouse_codes": ["NJ", "JFK"]},
+            headers=AUTH,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["warehouse_codes"] == ["JFK", "NJ"]
+    finally:
+        _cleanup(db, staff_ids)
+        db.close()
+
+
+def test_warehouseman_rejects_unknown_code(client):
+    db = SessionLocal()
+    staff_ids = []
+    try:
+        group = db.query(GroupConfig).order_by(GroupConfig.created_at).first()
+        staff = _make_staff(db, group.group_id, "pending")
+        staff_ids = [staff.staff_id]
+
+        resp = client.patch(
+            f"/admin/kefu-staff/{staff.staff_id}",
+            json={"role": "warehouseman", "warehouse_codes": ["ATL"]},
+            headers=AUTH,
+        )
+        assert resp.status_code == 400
     finally:
         _cleanup(db, staff_ids)
         db.close()

@@ -16,6 +16,7 @@ import config
 from core import pre_confirm_validators
 from core.confirmation import build_confirmation_message, build_display_name, build_confirmation_sections
 from core.uchoice_rates import CHARGE_TYPE_DESCRIPTIONS
+from core.uchoice_constants import VALID_WAREHOUSE_CODES
 from core.uchoice_field_sanitization import sanitize_extracted_fields_before_persistence
 
 
@@ -28,11 +29,16 @@ _CHARGE_TYPE_QUESTION = "请选择计费类型：\n" + "\n".join(
     f"- {desc}" for desc in CHARGE_TYPE_DESCRIPTIONS.values()
 )
 
+# Built from VALID_WAREHOUSE_CODES at import time, not a hardcoded string --
+# so adding a warehouse only ever requires editing core/uchoice_constants.py.
+_WAREHOUSE_CODE_LIST = "、".join(sorted(VALID_WAREHOUSE_CODES))
+
 _FIELD_PROMPTS = {
     "sku_lines": ("商品及数量", "请提供商品、托盘/箱数及每托箱数。"),
     "destination_address_id": ("送货地址", "请提供或确认送货目的地。"),
     "charge_type": ("计费类型", _CHARGE_TYPE_QUESTION),
-    "warehouse_code": ("所属仓库", "请选择所属仓库：JFK 或 DE。"),
+    "warehouse_code": ("所属仓库", f"请选择所属仓库：{_WAREHOUSE_CODE_LIST}。"),
+    "warehouse_codes": ("负责仓库", f"请选择负责的仓库（可多个，用顿号或逗号分隔）：{_WAREHOUSE_CODE_LIST}。"),
     "reference_serial": ("申请编号", "请提供要处理的申请编号。"),
     "start_month": ("开始月份", "请提供查询的开始月份。"),
     "end_month": ("结束月份", "请提供查询的结束月份。"),
@@ -50,6 +56,8 @@ _SERVICE_LABELS = {
     "upsert_address": "地址维护",
     "confirm_outbound_completion": "出库完成确认",
     "confirm_inbound_completion": "入库完成确认",
+    "cancel_inbound_request": "取消入库申请",
+    "cancel_outbound_request": "取消出库申请",
 }
 
 
@@ -84,6 +92,8 @@ def _render_missing_fields(service: dict, fields: dict) -> str:
 _PENDING_CANDIDATE_KEYS = {
     "confirm_inbound_completion": ("pending_inbound_requests", "入库申请"),
     "confirm_outbound_completion": ("pending_outbound_requests", "出库申请"),
+    "cancel_inbound_request": ("cancelable_inbound_requests", "入库申请"),
+    "cancel_outbound_request": ("cancelable_outbound_requests", "出库申请"),
 }
 
 
@@ -294,17 +304,37 @@ def _set_context_for_session(context: dict, session, log) -> None:
     context["customer_id"] = str(session.customer_id) if session.customer_id else None
 
 
-def _apply_warehouse_default(service_name: str, session, context: dict) -> None:
+def _apply_warehouse_default(service_name: str, session, context: dict) -> str | None:
+    """
+    Defaults warehouse_code when unstated, same list-aware rule as Smart
+    Robot's core.workflow_engine._actor_default_warehouse_code: an unscoped
+    caller (warehouse_codes is None) still defaults to JFK; a caller with
+    exactly one assigned warehouse defaults to it; a caller with several
+    assigned and nothing stated gets no default -- returns a clarification
+    message instead of silently guessing, which the caller must send and
+    treat as "not yet ready to proceed" (same shape as the stock-error
+    early return a few lines below this call).
+    """
     if service_name not in {"uchoice_inbound_request", "uchoice_outbound_request"}:
-        return
+        return None
     fields = session.collected_fields or {}
-    if not fields.get("warehouse_code"):
-        session.collected_fields = {
-            **fields,
-            "warehouse_code": "JFK",
-            "_warehouse_auto_default": True,
-        }
-        context["collected_fields"] = session.collected_fields
+    if fields.get("warehouse_code"):
+        return None
+    caller_warehouses = context.get("warehouse_codes")
+    if caller_warehouses is None:
+        default = "JFK"
+    elif len(caller_warehouses) == 1:
+        default = caller_warehouses[0]
+    else:
+        direction = "入库" if service_name == "uchoice_inbound_request" else "出库"
+        return f"您负责多个仓库，请说明本次{direction}针对哪个仓库：" + "、".join(sorted(caller_warehouses))
+    session.collected_fields = {
+        **fields,
+        "warehouse_code": default,
+        "_warehouse_auto_default": True,
+    }
+    context["collected_fields"] = session.collected_fields
+    return None
 
 
 def _resolve_outbound_pallet_defaults(db: DBSession, session, context: dict) -> str | None:
@@ -569,12 +599,22 @@ def _finish_execution(db: DBSession, context: dict, service: dict, session, log)
         context["_reply"] = reply
         _append(session, "assistant", reply)
         return reply
-    if log is not None:
+    # Guarded: log.status may already have been transitioned to a terminal
+    # state other than 'processing' by a workflow step just run above (the
+    # locked lookup handler for a cancellation, or -- via the same identity-
+    # mapped row, refreshed in place by that handler's populate_existing()
+    # call -- a completion this same log already resolved to). Only advance
+    # it, and only replace its result, while it is still genuinely
+    # 'processing' -- otherwise this would silently overwrite a
+    # cancellation's terminal status/result with whatever this (different)
+    # handler run produced. completed_at stays inside the
+    # not-awaits_completion branch, not hoisted above it, so a brand-new
+    # awaits_completion submission (correctly staying 'processing') never
+    # gets stamped with a completion timestamp it doesn't actually have yet.
+    if log is not None and log.status == "processing":
         if not service.get("awaits_completion", False):
             log.status = "success"
             log.completed_at = now
-        else:
-            log.status = "processing"
         log.result = context.get("result", {})
     session.status = "completed"
     session.updated_at = now
@@ -585,6 +625,8 @@ def _finish_execution(db: DBSession, context: dict, service: dict, session, log)
 
 def confirm_kefu_turn(db: DBSession, context: dict, service: dict, session) -> str:
     """Apply one confirmed mutation; caller owns the guarded execution claim."""
+    from core.workflow_errors import TargetOperationRejected
+
     log = _load_log(db, session)
     _set_context_for_session(context, session, log)
     _append(session, "user", context["content"])
@@ -596,9 +638,43 @@ def confirm_kefu_turn(db: DBSession, context: dict, service: dict, session) -> s
     # does not.  The surrounding CaseExecution claim/advisory lock owns this
     # confirmation attempt until the transaction reaches its terminal state.
     session.status = "active"
-    if log is not None:
+    # For an ordinary session, log is this session's own freshly-created
+    # row (pending -> processing). For a targets_existing_request session
+    # (completion/cancellation), log is instead a pre-existing TARGET row
+    # this session merely references -- forcing it to 'processing'
+    # unconditionally here, before any lock or status check, would clobber
+    # a concurrent winner's already-committed terminal status. That target
+    # is left completely untouched until its own locked lookup handler
+    # (inside _finish_execution's _workflow_steps call below) runs -- that
+    # handler is the first and only authoritative place that evaluates and
+    # transitions it.
+    if log is not None and not service.get("targets_existing_request", False):
         log.status = "processing"
-    return _finish_execution(db, context, service, session, log)
+    try:
+        return _finish_execution(db, context, service, session, log)
+    except TargetOperationRejected as e:
+        # Either a losing race against a concurrent completion/cancellation
+        # attempt on the same target (TargetAlreadyResolvedError), or a
+        # business rule the target fails regardless of timing: wrong
+        # direction, wrong group, not authorized (TargetValidationError).
+        # A plain db.rollback() here would be actively wrong, not just
+        # inelegant, for either case: this transaction also holds the
+        # CaseExecution claim row and the rest of this turn's replay/
+        # idempotency bookkeeping, uncommitted until the caller's own
+        # single outer commit -- rolling back would discard that claim
+        # along with everything else, breaking the duplicate-message
+        # replay guarantee that machinery exists to provide. So this
+        # exception never crosses the orchestration boundary: caught here,
+        # right around the call it wraps, the same shape as the
+        # "already processed" early-return two blocks above. The target
+        # itself is never touched in either case. Control returns to the
+        # caller exactly as if this were any other outcome; the
+        # surrounding turn (case_turn/execution-ledger state) finalizes
+        # normally in the same transaction.
+        session.status = "cancelled"
+        reply = e.user_message
+        _append(session, "assistant", reply)
+        return reply
 
 
 def cancel_kefu_turn(db: DBSession, context: dict, service: dict | None, session) -> str:
@@ -707,7 +783,11 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
     # Stock impossibility is independent of customer/address collection. Once
     # SKU quantities and the warehouse are resolvable, reject immediately so
     # staff are not asked to maintain an address for goods that cannot ship.
-    _apply_warehouse_default(service["name"], session, context)
+    warehouse_clarification = _apply_warehouse_default(service["name"], session, context)
+    if warehouse_clarification:
+        context["_reply"] = warehouse_clarification
+        _append(session, "assistant", warehouse_clarification)
+        return warehouse_clarification
     if service["name"] == "uchoice_outbound_request":
         stock_error = _outbound_stock_error(db, session.collected_fields or {})
         if stock_error:

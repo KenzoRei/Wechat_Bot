@@ -146,7 +146,7 @@ Invoke-RestMethod "$base/admin/groups/{group_id}/members" -Method POST -Headers 
 | `wechat_openid` | ✅ | WeChat user ID (the `from` field in webhook messages) — there's no way to look this up in advance; have the person send one message in the target group first, then read it off the `[webhook] from=...` line in the server logs (or, for a *member's own* ID specifically, the bot's own self-service reply to an unregistered sender already includes it — no log-digging needed for that case) |
 | `role` | ✅ | Role name — must exist in the `role` table. See "Roles" section below to list/add roles |
 | `display_name` | — | Name shown in bot replies and request logs |
-| `warehouse_code` | Required if `role` is `warehouseman` | `JFK` or `DE` — which warehouse this member is responsible for. 400 if omitted for a `warehouseman`. Cleared automatically if the member's role is later changed away from `warehouseman` |
+| `warehouse_codes` | Required if `role` is `warehouseman` | Array of one or more codes from `JFK`, `DE`, `NJ` — which warehouse(s) this member is responsible for. 400 if empty/omitted for a `warehouseman`, or if any code is unknown. Cleared automatically if the member's role is later changed away from `warehouseman` |
 
 ### List members
 ```powershell
@@ -350,7 +350,7 @@ Invoke-WebRequest "$base/admin/invoices/export?warehouse_code=JFK&start_month=20
 ```
 | Param | Required | Notes |
 |---|---|---|
-| `warehouse_code` | ✅ | `JFK` or `DE` |
+| `warehouse_code` | ✅ | `JFK`, `DE`, or `NJ` |
 | `start_month` | ✅ | `YYYY-MM` |
 | `end_month` | — | `YYYY-MM`, defaults to `start_month` for a single-month invoice |
 

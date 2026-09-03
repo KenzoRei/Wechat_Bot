@@ -58,6 +58,24 @@ def _address_result_title(service_type_name: str, context: dict) -> str:
     return f"地址已{mode}"
 
 
+def _cancel_inbound_result_title(service_type_name: str, context: dict) -> str:
+    """
+    cancel_inbound_request — the generic fallback title ("{display}已完成")
+    would render this as "取消入库申请已完成", which reads as "the
+    cancellation completed" rather than "the request was cancelled" --
+    confusing next to every other "已完成" title in this list, which all
+    mean the underlying operation succeeded, not the cancellation of one.
+    No sections needed beyond the title -- details were already shown in
+    full at the confirm step, same reasoning as
+    _awaits_completion_result_title above.
+    """
+    return "入库申请已取消"
+
+
+def _cancel_outbound_result_title(service_type_name: str, context: dict) -> str:
+    return "出库申请已取消"
+
+
 def _explain_service_result_title(service_type_name: str, context: dict) -> str:
     result = context.get("result", {})
     if not result.get("found"):
@@ -75,6 +93,8 @@ _RESULT_TITLE_BUILDERS: dict[str, Callable[[str, dict], str]] = {
     "confirm_outbound_completion": _outbound_completion_result_title,
     "upsert_address":              _address_result_title,
     "explain_service":             _explain_service_result_title,
+    "cancel_inbound_request":      _cancel_inbound_result_title,
+    "cancel_outbound_request":     _cancel_outbound_result_title,
 }
 
 
@@ -427,8 +447,8 @@ def _role_change_result_sections_builder(context: dict, db: DBSession) -> list[d
         "目标成员": member_display_label(db, result.get("target_openid") or fields.get("target_openid")),
         "新角色":   role_label(result.get("new_role") or fields.get("new_role")),
     }
-    if fields.get("warehouse_code"):
-        items["负责仓库"] = fields["warehouse_code"]
+    if fields.get("warehouse_codes"):
+        items["负责仓库"] = "、".join(sorted(fields["warehouse_codes"]))
     return [{"label": None, "type": "kv", "items": items}]
 
 

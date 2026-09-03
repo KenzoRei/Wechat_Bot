@@ -27,6 +27,7 @@ def send_message(context: dict, content: str) -> None:
 from handlers.registry import HANDLER_REGISTRY
 from models.workflow import WorkflowStep
 from models.service import ServiceType
+from core.workflow_errors import TargetOperationRejected
 
 
 def _session_provenance_kwargs(context: dict) -> dict:
@@ -304,6 +305,8 @@ def _supersede_stale_target_session(context: dict, db: DBSession) -> bool:
 _REFERENCE_SERIAL_CANDIDATE_KEYS = {
     "confirm_inbound_completion":  "pending_inbound_requests",
     "confirm_outbound_completion": "pending_outbound_requests",
+    "cancel_inbound_request":      "cancelable_inbound_requests",
+    "cancel_outbound_request":     "cancelable_outbound_requests",
 }
 
 
@@ -465,7 +468,10 @@ def _on_all_fields_collected(
         db.commit()
 
     if service["name"] == "uchoice_outbound_request":
-        _resolve_outbound_warehouse_default(context, session, db)
+        clarification = _resolve_outbound_warehouse_default(context, session, db)
+        if clarification:
+            send_message(context, clarification)
+            return
         clarification = _resolve_outbound_pallet_defaults(context, session, db)
         if clarification:
             send_message(context, clarification)
@@ -474,7 +480,10 @@ def _on_all_fields_collected(
             return
 
     if service["name"] == "uchoice_inbound_request":
-        _resolve_inbound_warehouse_default(context, session, db)
+        clarification = _resolve_inbound_warehouse_default(context, session, db)
+        if clarification:
+            send_message(context, clarification)
+            return
 
     if service["name"] == "confirm_outbound_completion":
         _resolve_outbound_loose_pick_defaults(context, session, db)
@@ -491,46 +500,80 @@ def _on_all_fields_collected(
         # _execute_workflow_and_finish sends its own reply via reply_wechat / failure message
 
 
-def _resolve_outbound_warehouse_default(context: dict, session, db: DBSession) -> None:
+def _actor_default_warehouse_code(context: dict) -> str | None:
+    """
+    Resolves which warehouse a new inbound/outbound request should default
+    to when unstated. An unscoped caller (customer/admin/accountant --
+    warehouse_codes is None) still defaults to JFK, matching every real
+    dispatch message reviewed (found reviewing 57 real outbound requests:
+    not one names JFK or DE explicitly). A caller with exactly one assigned
+    warehouse defaults to it. A caller with several assigned warehouses and
+    nothing stated gets no default at all (None) -- never silently assigned
+    JFK unless actually authorized for it; the caller must be asked
+    instead. Not reachable through current role grants (V17 removed
+    uchoice_inbound_request from warehouseman; only the unscoped customer
+    role submits these today), but group_service_role is admin-configurable
+    data, not a code invariant.
+    """
+    caller_warehouses = context.get("warehouse_codes")
+    if caller_warehouses is None:
+        return "JFK"
+    if len(caller_warehouses) == 1:
+        return caller_warehouses[0]
+    return None
+
+
+def _resolve_outbound_warehouse_default(context: dict, session, db: DBSession) -> str | None:
     """
     warehouse_code became optional on uchoice_outbound_request (V12) —
-    real dispatch messages essentially never state it (found reviewing 57
-    real outbound requests: not one names JFK or DE explicitly). Defaults to
-    JFK, persisted here before confirmation is built (and before
-    _resolve_outbound_pallet_defaults runs, since that function's storage-
-    bucket lookup needs the real warehouse_code to find the right buckets)
-    — marked with _warehouse_auto_default so the confirmation display can
-    flag it as an assumption the customer can still correct.
+    real dispatch messages essentially never state it. Defaults per
+    _actor_default_warehouse_code, persisted here before confirmation is
+    built (and before _resolve_outbound_pallet_defaults runs, since that
+    function's storage-bucket lookup needs the real warehouse_code to find
+    the right buckets) — marked with _warehouse_auto_default so the
+    confirmation display can flag it as an assumption the customer can
+    still correct. Returns a clarification message (and skips setting a
+    default) for a multi-warehouse caller who didn't state one; the caller
+    must handle a non-None return the same way as
+    _resolve_outbound_pallet_defaults' clarification.
     """
     fields = session.collected_fields
     if fields.get("warehouse_code"):
-        return
+        return None
+    default = _actor_default_warehouse_code(context)
+    if default is None:
+        return "您负责多个仓库，请说明本次出库针对哪个仓库：" + "、".join(sorted(context.get("warehouse_codes") or []))
     session_manager.update_collected_fields(db, session, {
-        "warehouse_code": "JFK",
+        "warehouse_code": default,
         "_warehouse_auto_default": True,
     })
     context["collected_fields"] = session.collected_fields
+    return None
 
 
-def _resolve_inbound_warehouse_default(context: dict, session, db: DBSession) -> None:
+def _resolve_inbound_warehouse_default(context: dict, session, db: DBSession) -> str | None:
     """
-    Inbound defaults warehouse_code to JFK when unstated, using the same
-    two-tier rule as outbound's _resolve_outbound_warehouse_default above
-    (explicit when stated, JFK otherwise, no third tier). This is separate
-    from the outbound resolver, which is outbound-specific by name and
-    confirmation-flow position; inbound previously had no such default at
-    all (warehouse_code was a hard-required schema field). The
-    corresponding service_type.input_schema migration moves
-    warehouse_code from required to optional to match.
+    Inbound defaults warehouse_code using the same rule as outbound's
+    _resolve_outbound_warehouse_default above (explicit when stated,
+    per-actor default otherwise). This is separate from the outbound
+    resolver, which is outbound-specific by name and confirmation-flow
+    position; inbound previously had no such default at all (warehouse_code
+    was a hard-required schema field). The corresponding
+    service_type.input_schema migration moves warehouse_code from required
+    to optional to match.
     """
     fields = session.collected_fields
     if fields.get("warehouse_code"):
-        return
+        return None
+    default = _actor_default_warehouse_code(context)
+    if default is None:
+        return "您负责多个仓库，请说明本次入库针对哪个仓库：" + "、".join(sorted(context.get("warehouse_codes") or []))
     session_manager.update_collected_fields(db, session, {
-        "warehouse_code": "JFK",
+        "warehouse_code": default,
         "_warehouse_auto_default": True,
     })
     context["collected_fields"] = session.collected_fields
+    return None
 
 
 def _resolve_outbound_pallet_defaults(context: dict, session, db: DBSession) -> str | None:
@@ -885,6 +928,28 @@ def _handle_confirm(context: dict, db: DBSession) -> None:
     _execute_workflow_and_finish(context, session, db)
 
 
+def _close_as_target_rejected(context: dict, session, db: DBSession, error: TargetOperationRejected) -> None:
+    """
+    A targets_existing_request confirm/execute attempt was rejected --
+    either a losing race against a concurrent completion/cancellation
+    attempt on the same target (TargetAlreadyResolvedError), or a business
+    rule the target itself fails regardless of timing: wrong direction,
+    wrong group, not authorized (TargetValidationError). Rolls back any
+    partial work from THIS attempt only, closes the attempting session as
+    'cancelled' (same vocabulary _resolve_target_request's unlocked
+    pre-check already uses for the equivalent case), and replies with the
+    rejection's own message. Never touches the target's own status/result
+    in either case -- it is exactly whatever it already was. Safe to roll
+    back here: a Smart Robot confirm turn carries no cross-turn replay
+    ledger the way Kefu's CaseExecution claim does (see
+    core/kefu_turn_apply.py's own handling of this same exception for why
+    Kefu cannot use this same rollback).
+    """
+    db.rollback()
+    session_manager.close_session(db, session, status="cancelled")
+    send_message(context, error.user_message)
+
+
 def _execute_workflow_and_finish(context: dict, session, db: DBSession) -> None:
     """
     Shared by _handle_confirm and the requires_confirmation=false immediate
@@ -911,11 +976,25 @@ def _execute_workflow_and_finish(context: dict, session, db: DBSession) -> None:
         if log:
             context["serial_number"] = log.serial_number
 
-    if session.request_log_id:
-        request_logger.mark_processing(db, session.request_log_id)
-
     service_for_split_check = _find_service_by_type_id(context, session.service_type_id)
     service_name_for_split_check = service_for_split_check["name"] if service_for_split_check else None
+
+    # For an ordinary session, this is the session's own freshly-created log
+    # (pending -> processing). For a targets_existing_request session,
+    # session.request_log_id instead points at a pre-existing TARGET row
+    # this session merely references -- forcing it to 'processing'
+    # unconditionally here, before any lock or status check, would clobber
+    # a concurrent winner's already-committed terminal status (e.g. a
+    # cancellation confirm turn racing a completion that just succeeded).
+    # The target's status is left completely untouched until its own locked
+    # lookup handler (LookupAndValidateCompletionHandler /
+    # LookupAndValidateCancellationHandler) runs -- that handler becomes the
+    # first and only authoritative place that evaluates and transitions it.
+    targets_existing_request = bool(
+        service_for_split_check.get("targets_existing_request", False)
+    ) if service_for_split_check else False
+    if session.request_log_id and not targets_existing_request:
+        request_logger.mark_processing(db, session.request_log_id)
 
     # The atomic transaction split applies only to explicitly named U-Choice
     # services. Every other
@@ -944,6 +1023,14 @@ def _execute_workflow_and_finish(context: dict, session, db: DBSession) -> None:
         "adjust_storage",
         "move_storage",
         "recount_storage",
+        # cancel_inbound_request/cancel_outbound_request don't mutate
+        # storage, but need the split for a different reason: their
+        # notify_cancelled_request step is an external call, and a
+        # notification failure must never roll back an already-committed
+        # cancellation -- the same reasoning that put
+        # complete_existing_request/reply_wechat in _SIDE_EFFECT_STEP_TYPES.
+        "cancel_inbound_request",
+        "cancel_outbound_request",
     }
     uses_uchoice_split = service_name_for_split_check in _UCHOICE_SPLIT_ELIGIBLE_SERVICES
 
@@ -956,6 +1043,8 @@ def _execute_workflow_and_finish(context: dict, session, db: DBSession) -> None:
                 request_logger.mark_success(db, session.request_log_id, context.get("result", {}), commit=False)
             session_manager.close_session(db, session, status="completed", commit=False)
             db.commit()
+        except TargetOperationRejected as e:
+            _close_as_target_rejected(context, session, db, e)
         except Exception as e:
             import traceback
             print(f"[workflow] STEP FAILED: {e}", flush=True)
@@ -982,6 +1071,9 @@ def _execute_workflow_and_finish(context: dict, session, db: DBSession) -> None:
         session_manager.close_session(db, session, status="completed", commit=False)
         db.commit()
 
+    except TargetOperationRejected as e:
+        _close_as_target_rejected(context, session, db, e)
+        return
     except Exception as e:
         import traceback
         print(f"[workflow] STEP FAILED (db phase): {e}", flush=True)
@@ -1063,6 +1155,7 @@ def _handle_unrecognized(context: dict, ai_response: AIResponse) -> None:
 _SIDE_EFFECT_STEP_TYPES = {
     "generate_pdf_stub",
     "complete_existing_request",   # cross-group webhook
+    "notify_cancelled_request",    # cross-channel cancellation notice
     "reply_wechat",                # final WeChat send
 }
 

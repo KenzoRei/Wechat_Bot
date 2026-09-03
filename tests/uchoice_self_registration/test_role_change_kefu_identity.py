@@ -42,7 +42,7 @@ class _Query:
                 return SimpleNamespace(
                     staff_id=staff_id,
                     role_id=f"role-{role_name}",
-                    warehouse_code=None,
+                    warehouse_codes=None,
                     is_active=is_active,
                 )
             return None
@@ -142,7 +142,7 @@ def test_pre_confirm_accepts_valid_kefu_warehouseman_promotion():
     db = _MockDB(kefu_members={KEFU_ID: "customer"})
     error = pre_confirm_validators.run(
         "role_change", {"group_id": "g1"},
-        {"target_openid": tag_kefu_identity(KEFU_ID), "new_role": "warehouseman", "warehouse_code": "JFK"}, db,
+        {"target_openid": tag_kefu_identity(KEFU_ID), "new_role": "warehouseman", "warehouse_codes": ["JFK"]}, db,
     )
     assert error is None
 
@@ -208,7 +208,7 @@ def test_last_admin_protection_allows_reassigning_an_already_inactive_kefu_admin
 def test_execution_backstop_accepts_valid_kefu_promotion():
     db = _MockDB(kefu_members={KEFU_ID: "customer"})
     context = {
-        "collected_fields": {"target_openid": tag_kefu_identity(KEFU_ID), "new_role": "warehouseman", "warehouse_code": "JFK"},
+        "collected_fields": {"target_openid": tag_kefu_identity(KEFU_ID), "new_role": "warehouseman", "warehouse_codes": ["JFK"]},
         "group_id": "g1",
     }
     result = RoleChangeHandler().handle(context, {}, db)

@@ -63,7 +63,9 @@ def sku_label_map(db: DBSession) -> dict[str, str]:
     return {s.sku_code: s.description for s in db.query(UchoiceSku).all()}
 
 
-def address_candidates(db: DBSession, customer_id=None, source_warehouse_code=None) -> list[dict]:
+def address_candidates(
+    db: DBSession, customer_id=None, source_warehouse_code=None, allowed_warehouse_codes=None
+) -> list[dict]:
     """
     The U-Choice address book is shared across every authorized U-Choice
     service; `customer_id` is
@@ -96,6 +98,14 @@ def address_candidates(db: DBSession, customer_id=None, source_warehouse_code=No
     uchoice_outbound_request's own candidate injection -- upsert_address
     needs the FULL, unfiltered list to resolve create-vs-update, so its
     caller must never pass this.
+
+    allowed_warehouse_codes, when given (and source_warehouse_code is not),
+    scopes to addresses whose OWN warehouse_code is either in that set or
+    null -- the multi-warehouse-caller counterpart to source_warehouse_code
+    above, used when the caller's own assignment (not yet a single resolved
+    request-level warehouse) is the only scoping signal available. The two
+    parameters are never both meaningful at once: a request-level warehouse,
+    when known, always takes priority over the caller's own assigned set.
     """
     query = db.query(UchoiceAddress)
     if customer_id is not None:
@@ -103,6 +113,10 @@ def address_candidates(db: DBSession, customer_id=None, source_warehouse_code=No
     if source_warehouse_code is not None:
         query = query.filter(
             (UchoiceAddress.warehouse_code == source_warehouse_code) | (UchoiceAddress.warehouse_code.is_(None))
+        )
+    elif allowed_warehouse_codes is not None:
+        query = query.filter(
+            (UchoiceAddress.warehouse_code.in_(allowed_warehouse_codes)) | (UchoiceAddress.warehouse_code.is_(None))
         )
     rows = query.all()
     return [
@@ -158,15 +172,19 @@ def _summarize_sku_lines(lines: list[dict], sku_labels: dict[str, str]) -> str:
     return "，".join(parts) if parts else "（无商品明细）"
 
 
-def pending_request_candidates(db: DBSession, warehouse_code: str | None, service_type_ids: list[str]) -> list[dict]:
+def pending_request_candidates(
+    db: DBSession, group_id, allowed_warehouse_codes: list[str] | None, service_type_ids: list[str]
+) -> list[dict]:
     """
     Requests still awaiting warehouse completion (status='processing') for the
-    given service types (inbound or outbound request types), scoped to one
-    warehouse (the confirming warehouseman's own) when provided. Includes
-    enough of the original submission (warehouse, SKU summary, and for
-    outbound the destination) for the AI to actually describe each candidate
-    to the user — a bare serial_number gives them nothing to recognize which
-    request is which.
+    given service types (inbound or outbound request types), scoped to the
+    confirming warehouseman's own group and, when given, their assigned
+    warehouse(s) -- a list, not a single value, so one warehouseman covering
+    several warehouses sees candidates from all of them rather than being
+    silently restricted to one. Includes enough of the original submission
+    (warehouse, SKU summary, and for outbound the destination) for the AI to
+    actually describe each candidate to the user — a bare serial_number gives
+    them nothing to recognize which request is which.
     """
     if not service_type_ids:
         return []
@@ -175,6 +193,7 @@ def pending_request_candidates(db: DBSession, warehouse_code: str | None, servic
         .filter(
             RequestLog.status == "processing",
             RequestLog.service_type_id.in_(service_type_ids),
+            RequestLog.group_id == group_id,
         )
         .order_by(RequestLog.created_at.asc())
         .all()
@@ -185,7 +204,11 @@ def pending_request_candidates(db: DBSession, warehouse_code: str | None, servic
     for r in rows:
         original_fields = get_original_fields(db, r)
         req_warehouse_code = original_fields.get("warehouse_code")
-        if warehouse_code and req_warehouse_code and req_warehouse_code != warehouse_code:
+        if (
+            allowed_warehouse_codes is not None
+            and req_warehouse_code
+            and req_warehouse_code not in allowed_warehouse_codes
+        ):
             continue
 
         candidate = {
@@ -202,6 +225,61 @@ def pending_request_candidates(db: DBSession, warehouse_code: str | None, servic
             if addr:
                 candidate["destination"] = format_address_label(addr)
 
+        candidates.append(candidate)
+
+    return candidates
+
+
+def cancelable_request_candidates(db: DBSession, group_id, service_type_ids: list[str], access) -> list[dict]:
+    """
+    Requests still awaiting warehouse completion (status='processing') for
+    the given service types, eligible for the new cancel_inbound_request/
+    cancel_outbound_request services -- scoped by ownership and tenant, not
+    by warehouse (unlike pending_request_candidates above, which scopes
+    completion candidates to the confirming warehouseman's own warehouse).
+    Cancellation is authorized by who created the request (or an admin), so
+    the candidate list mirrors that: admins see every eligible row in their
+    own group (never system-wide); everyone else sees only requests they
+    themselves created, matched the same channel-aware way execution-time
+    authorization does -- Smart Bot by wechat_openid, Kefu by staff_id.
+    """
+    if not service_type_ids:
+        return []
+    query = db.query(RequestLog).filter(
+        RequestLog.status == "processing",
+        RequestLog.service_type_id.in_(service_type_ids),
+        RequestLog.group_id == group_id,
+    )
+    if access.role != "admin":
+        if access.source_channel == "kefu":
+            staff_id = str(access.staff_id) if access.staff_id else None
+            query = query.filter(
+                RequestLog.source_channel == "kefu",
+                RequestLog.submitted_by_staff_id == staff_id,
+            )
+        else:
+            query = query.filter(
+                RequestLog.source_channel == "smart_robot",
+                RequestLog.wechat_openid == access.wechat_openid,
+            )
+    rows = query.order_by(RequestLog.created_at.asc()).all()
+
+    sku_labels = sku_label_map(db)
+    candidates = []
+    for r in rows:
+        original_fields = get_original_fields(db, r)
+        candidate = {
+            "serial_number":  r.serial_number,
+            "wechat_openid":  r.wechat_openid,
+            "created_at":     r.created_at.isoformat() if r.created_at else None,
+            "warehouse_code": original_fields.get("warehouse_code"),
+            "sku_summary":    _summarize_sku_lines(original_fields.get("sku_lines", []), sku_labels),
+        }
+        destination_address_id = original_fields.get("destination_address_id")
+        if destination_address_id:
+            addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
+            if addr:
+                candidate["destination"] = format_address_label(addr)
         candidates.append(candidate)
 
     return candidates

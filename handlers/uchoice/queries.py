@@ -4,21 +4,35 @@ from handlers.base import BaseHandler
 class QueryStorageHandler(BaseHandler):
     """
     view_storage — requires_confirmation=false, executes immediately.
-    Deliberately zero-argument: always shows every warehouse's full
-    inventory, no filtering by warehouse/SKU — input_schema has no fields
-    left to collect, and this handler doesn't read collected_fields at all,
-    so there's nothing for a stray field to accidentally filter on.
+
+    input_schema declares optional warehouse_code/sku_code fields, but this
+    handler previously ignored collected_fields entirely and always showed
+    every warehouse's full inventory. Now reads warehouse_code: an explicit
+    value (already checked against the caller's own assignment by
+    core.pre_confirm_validators._valid_caller_warehouse_scope) filters to
+    that one warehouse; with none given, a warehouse-restricted caller
+    (context["warehouse_codes"] is not None) sees only their own assigned
+    warehouse(s) -- IN, not a single value, since one warehouseman can now
+    cover several -- while a genuinely unscoped caller (customer/admin/
+    accountant) continues to see every warehouse, unchanged.
     """
 
     def handle(self, context: dict, config: dict, db) -> dict:
         from models.uchoice import UchoiceStorage
 
-        rows = (
-            db.query(UchoiceStorage)
-            .filter(UchoiceStorage.pallet_count > 0)
-            .order_by(UchoiceStorage.warehouse_code, UchoiceStorage.sku_code, UchoiceStorage.boxes_per_pallet)
-            .all()
-        )
+        fields = context.get("collected_fields", {})
+        requested_warehouse = fields.get("warehouse_code")
+        allowed_warehouses = context.get("warehouse_codes")
+
+        query = db.query(UchoiceStorage).filter(UchoiceStorage.pallet_count > 0)
+        if requested_warehouse:
+            query = query.filter(UchoiceStorage.warehouse_code == requested_warehouse)
+        elif allowed_warehouses is not None:
+            query = query.filter(UchoiceStorage.warehouse_code.in_(allowed_warehouses))
+
+        rows = query.order_by(
+            UchoiceStorage.warehouse_code, UchoiceStorage.sku_code, UchoiceStorage.boxes_per_pallet
+        ).all()
 
         # structured, not pre-formatted — core/result_message.py's builder
         # resolves sku_code -> product name and formats for display

@@ -1,6 +1,6 @@
 from sqlalchemy import String, Text, Boolean, Integer, ForeignKey, DateTime, text
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
 from database import Base
 import uuid
 from datetime import datetime
@@ -27,7 +27,7 @@ class GroupMember(Base):
     group_id:      Mapped[uuid.UUID]    = mapped_column(UUID(as_uuid=True), ForeignKey("group_config.group_id", ondelete="CASCADE"), primary_key=True)
     role_id:       Mapped[uuid.UUID]    = mapped_column(UUID(as_uuid=True), ForeignKey("role.role_id", ondelete="RESTRICT"), nullable=False)
     display_name:  Mapped[str | None]   = mapped_column(String(200))
-    warehouse_code: Mapped[str | None]  = mapped_column(String(20))
+    warehouse_codes: Mapped[list[str] | None] = mapped_column(ARRAY(String(20)))
     is_active:     Mapped[bool]         = mapped_column(Boolean, nullable=False, default=True)
     joined_at:     Mapped[datetime]     = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     updated_at:    Mapped[datetime]     = mapped_column(DateTime(timezone=True), server_default=text("now()"))

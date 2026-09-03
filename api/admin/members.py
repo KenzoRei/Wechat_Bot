@@ -30,9 +30,24 @@ def _resolve_assignable_role(db: Session, role_name: str) -> Role:
     return role
 
 
-def _clean_warehouse_code(raw: str | None) -> str | None:
-    """Matches api/admin/kefu_staff.py's whitespace handling."""
-    return (raw or "").strip() or None
+def _clean_warehouse_codes(raw: list[str] | None) -> list[str] | None:
+    """
+    Matches api/admin/kefu_staff.py's cleaning. Strips/dedupes/sorts (for
+    deterministic rendering) and validates every element against
+    VALID_WAREHOUSE_CODES -- 400s on an unknown code rather than silently
+    dropping it, since this is a direct admin write, not AI-extracted input
+    that needs a "preserve valid progress" fallback.
+    """
+    if not raw:
+        return None
+    from core.uchoice_constants import VALID_WAREHOUSE_CODES
+    cleaned = sorted({c.strip() for c in raw if c and c.strip()})
+    if not cleaned:
+        return None
+    unknown = [c for c in cleaned if c not in VALID_WAREHOUSE_CODES]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown warehouse code(s): {unknown}")
+    return cleaned
 
 
 def _to_response(member: GroupMember, role_name: str) -> MemberResponse:
@@ -41,7 +56,7 @@ def _to_response(member: GroupMember, role_name: str) -> MemberResponse:
         group_id=member.group_id,
         role=role_name,
         display_name=member.display_name,
-        warehouse_code=member.warehouse_code,
+        warehouse_codes=member.warehouse_codes,
         is_active=member.is_active,
         joined_at=member.joined_at,
     )
@@ -55,9 +70,9 @@ def add_member(group_id: str, body: MemberCreate, db: Session = Depends(get_db))
 
     role = _resolve_assignable_role(db, body.role)
 
-    warehouse_code = _clean_warehouse_code(body.warehouse_code)
-    if role.name == "warehouseman" and not warehouse_code:
-        raise HTTPException(status_code=400, detail="warehouse_code is required for role=warehouseman")
+    warehouse_codes = _clean_warehouse_codes(body.warehouse_codes)
+    if role.name == "warehouseman" and not warehouse_codes:
+        raise HTTPException(status_code=400, detail="warehouse_codes is required for role=warehouseman")
 
     existing = db.query(GroupMember).filter_by(
         wechat_openid=body.wechat_openid, group_id=group_id
@@ -70,7 +85,7 @@ def add_member(group_id: str, body: MemberCreate, db: Session = Depends(get_db))
         group_id=group_id,
         role_id=role.role_id,
         display_name=body.display_name,
-        warehouse_code=warehouse_code if role.name == "warehouseman" else None,
+        warehouse_codes=warehouse_codes if role.name == "warehouseman" else None,
     )
     db.add(member)
     db.commit()
@@ -130,22 +145,22 @@ def update_member(
         member.role_id = role.role_id
         role_name = role.name
         if role.name == "warehouseman":
-            new_warehouse_code = body.warehouse_code if body.warehouse_code is not None else member.warehouse_code
-            new_warehouse_code = _clean_warehouse_code(new_warehouse_code)
-            if not new_warehouse_code:
-                raise HTTPException(status_code=400, detail="warehouse_code is required for role=warehouseman")
-            member.warehouse_code = new_warehouse_code
+            new_warehouse_codes = body.warehouse_codes if body.warehouse_codes is not None else member.warehouse_codes
+            new_warehouse_codes = _clean_warehouse_codes(new_warehouse_codes)
+            if not new_warehouse_codes:
+                raise HTTPException(status_code=400, detail="warehouse_codes is required for role=warehouseman")
+            member.warehouse_codes = new_warehouse_codes
         else:
             # cleared automatically whenever a member's role changes away from warehouseman
-            member.warehouse_code = None
-    elif body.warehouse_code is not None:
+            member.warehouse_codes = None
+    elif body.warehouse_codes is not None:
         # role unchanged this call — only meaningful if the member is already a warehouseman
         if not current_role or current_role.name != "warehouseman":
-            raise HTTPException(status_code=400, detail="warehouse_code only applies to role=warehouseman")
-        cleaned = _clean_warehouse_code(body.warehouse_code)
+            raise HTTPException(status_code=400, detail="warehouse_codes only applies to role=warehouseman")
+        cleaned = _clean_warehouse_codes(body.warehouse_codes)
         if not cleaned:
-            raise HTTPException(status_code=400, detail="warehouse_code cannot be blank")
-        member.warehouse_code = cleaned
+            raise HTTPException(status_code=400, detail="warehouse_codes cannot be empty")
+        member.warehouse_codes = cleaned
 
     if body.is_active is not None:
         member.is_active = body.is_active

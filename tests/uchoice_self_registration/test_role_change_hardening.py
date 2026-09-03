@@ -145,7 +145,16 @@ def test_pre_confirm_rejects_warehouseman_with_invalid_warehouse_code():
     db = _MockDB(members={"m1": "customer"})
     error = pre_confirm_validators.run(
         "role_change", {"group_id": "g1"},
-        {"target_openid": "m1", "new_role": "warehouseman", "warehouse_code": "ATL"}, db,
+        {"target_openid": "m1", "new_role": "warehouseman", "warehouse_codes": ["ATL"]}, db,
+    )
+    assert error is not None
+
+
+def test_pre_confirm_rejects_warehouseman_with_empty_warehouse_codes():
+    db = _MockDB(members={"m1": "customer"})
+    error = pre_confirm_validators.run(
+        "role_change", {"group_id": "g1"},
+        {"target_openid": "m1", "new_role": "warehouseman", "warehouse_codes": []}, db,
     )
     assert error is not None
 
@@ -154,7 +163,16 @@ def test_pre_confirm_accepts_valid_warehouseman_promotion():
     db = _MockDB(members={"m1": "customer"})
     error = pre_confirm_validators.run(
         "role_change", {"group_id": "g1"},
-        {"target_openid": "m1", "new_role": "warehouseman", "warehouse_code": "JFK"}, db,
+        {"target_openid": "m1", "new_role": "warehouseman", "warehouse_codes": ["JFK"]}, db,
+    )
+    assert error is None
+
+
+def test_pre_confirm_accepts_valid_multi_warehouse_promotion():
+    db = _MockDB(members={"m1": "customer"})
+    error = pre_confirm_validators.run(
+        "role_change", {"group_id": "g1"},
+        {"target_openid": "m1", "new_role": "warehouseman", "warehouse_codes": ["JFK", "NJ"]}, db,
     )
     assert error is None
 
@@ -217,7 +235,7 @@ def test_execution_backstop_rejects_warehouseman_without_warehouse_code():
 def test_execution_backstop_rejects_warehouseman_with_invalid_warehouse_code():
     db = _MockDB(members={"m1": "customer"})
     context = {
-        "collected_fields": {"target_openid": "m1", "new_role": "warehouseman", "warehouse_code": "ATL"},
+        "collected_fields": {"target_openid": "m1", "new_role": "warehouseman", "warehouse_codes": ["ATL"]},
         "group_id": "g1",
     }
     with pytest.raises(RuntimeError):
@@ -227,7 +245,18 @@ def test_execution_backstop_rejects_warehouseman_with_invalid_warehouse_code():
 def test_execution_backstop_accepts_valid_warehouseman_promotion():
     db = _MockDB(members={"m1": "customer"})
     context = {
-        "collected_fields": {"target_openid": "m1", "new_role": "warehouseman", "warehouse_code": "JFK"},
+        "collected_fields": {"target_openid": "m1", "new_role": "warehouseman", "warehouse_codes": ["JFK"]},
+        "group_id": "g1",
+    }
+    result = RoleChangeHandler().handle(context, {}, db)
+    assert result == {"target_openid": "m1", "new_role": "warehouseman"}
+    assert db.committed is True
+
+
+def test_execution_backstop_accepts_valid_multi_warehouse_promotion():
+    db = _MockDB(members={"m1": "customer"})
+    context = {
+        "collected_fields": {"target_openid": "m1", "new_role": "warehouseman", "warehouse_codes": ["JFK", "NJ"]},
         "group_id": "g1",
     }
     result = RoleChangeHandler().handle(context, {}, db)

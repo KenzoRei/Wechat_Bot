@@ -24,6 +24,21 @@ def _actor_id(context: dict) -> str:
     return str(actor)
 
 
+def _require_caller_warehouse_scope(context: dict, warehouse_code: str | None) -> None:
+    """
+    Execution-time backstop, matching the pre-confirm
+    core.pre_confirm_validators._valid_caller_warehouse_scope check --
+    closes the gap between that check and a later confirm-turn actually
+    executing it (same reasoning already used for role_change's handler
+    re-checking what its own pre-confirm validator already checked). A
+    caller with warehouse_codes=None is genuinely unscoped and never
+    blocked here.
+    """
+    allowed = context.get("warehouse_codes")
+    if allowed is not None and warehouse_code and warehouse_code not in allowed:
+        raise RuntimeError("该仓库不在您的权限范围内。")
+
+
 class ApplyInboundStorageHandler(BaseHandler):
     """confirm_inbound_completion, step 2."""
 
@@ -291,6 +306,7 @@ class AdjustStorageHandler(BaseHandler):
     def handle(self, context: dict, config: dict, db) -> dict:
         fields = context.get("collected_fields", {})
         warehouse_code = fields.get("warehouse_code")
+        _require_caller_warehouse_scope(context, warehouse_code)
         request_log_id = context.get("request_log_id")
         created_by = _actor_id(context)
         lines = fields.get("adjustment_lines", []) or []
@@ -320,6 +336,7 @@ class RecountStorageHandler(BaseHandler):
 
         fields = context.get("collected_fields", {})
         warehouse_code = fields.get("warehouse_code")
+        _require_caller_warehouse_scope(context, warehouse_code)
         request_log_id = context.get("request_log_id")
         created_by = _actor_id(context)
 
@@ -364,6 +381,7 @@ class MoveStorageHandler(BaseHandler):
     def handle(self, context: dict, config: dict, db) -> dict:
         fields = context.get("collected_fields", {})
         warehouse_code = fields.get("warehouse_code")
+        _require_caller_warehouse_scope(context, warehouse_code)
         request_log_id = context.get("request_log_id")
         created_by = _actor_id(context)
         lines = fields.get("move_lines", []) or []

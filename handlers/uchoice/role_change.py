@@ -24,7 +24,7 @@ class RoleChangeHandler(BaseHandler):
         fields = context.get("collected_fields", {})
         target_openid = fields.get("target_openid")
         new_role_name = fields.get("new_role")
-        warehouse_code = fields.get("warehouse_code")
+        warehouse_codes = fields.get("warehouse_codes")
         group_id = context.get("group_id")
 
         identity = parse_target_identity(target_openid)
@@ -42,8 +42,14 @@ class RoleChangeHandler(BaseHandler):
         if new_role_name not in ASSIGNABLE_ROLE_NAMES:
             raise RuntimeError(f"未知角色：{new_role_name}")
 
-        if new_role_name == "warehouseman" and (not warehouse_code or warehouse_code not in VALID_WAREHOUSE_CODES):
-            raise RuntimeError("指派为仓库管理员需要提供有效的仓库代码（JFK 或 DE）。")
+        if new_role_name == "warehouseman":
+            if (
+                not isinstance(warehouse_codes, list)
+                or not warehouse_codes
+                or any(code not in VALID_WAREHOUSE_CODES for code in warehouse_codes)
+            ):
+                codes_list = "、".join(sorted(VALID_WAREHOUSE_CODES))
+                raise RuntimeError(f"指派为仓库管理员需要提供至少一个有效的仓库代码（{codes_list}）。")
 
         role = db.query(Role).filter_by(name=new_role_name).first()
         if role is None:
@@ -74,8 +80,8 @@ class RoleChangeHandler(BaseHandler):
             raise RuntimeError("无法将该成员的角色改为非管理员——该群组当前仅剩一名管理员。")
 
         target.role_id = role.role_id
-        # warehouse_code is meaningful only for warehouseman — cleared on any other role
-        target.warehouse_code = warehouse_code if new_role_name == "warehouseman" else None
+        # warehouse_codes is meaningful only for warehouseman — cleared on any other role
+        target.warehouse_codes = sorted(set(warehouse_codes)) if new_role_name == "warehouseman" else None
         db.commit()
 
         return {"target_openid": target_openid, "new_role": new_role_name}

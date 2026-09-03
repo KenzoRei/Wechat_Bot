@@ -39,7 +39,7 @@ class KefuStaff(Base):
     external_userid: Mapped[str]           = mapped_column(String(128), nullable=False)
     group_id:       Mapped[uuid.UUID]      = mapped_column(UUID(as_uuid=True), ForeignKey("group_config.group_id", ondelete="RESTRICT"), nullable=False)
     role_id:        Mapped[uuid.UUID]      = mapped_column(UUID(as_uuid=True), ForeignKey("role.role_id", ondelete="RESTRICT"), nullable=False)
-    warehouse_code: Mapped[str | None]     = mapped_column(String(20))
+    warehouse_codes: Mapped[list[str] | None] = mapped_column(ARRAY(String(20)))
     display_name:   Mapped[str | None]     = mapped_column(String(200))
     is_active:      Mapped[bool]           = mapped_column(Boolean, nullable=False, default=True)
     created_at:     Mapped[datetime]       = mapped_column(DateTime(timezone=True), server_default=text("now()"))

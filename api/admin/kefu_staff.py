@@ -33,6 +33,20 @@ def _resolve_assignable_role(db: Session, role_name: str) -> Role:
     return role
 
 
+def _clean_warehouse_codes(raw: list[str] | None) -> list[str] | None:
+    """Matches api/admin/members.py's cleaning."""
+    if not raw:
+        return None
+    from core.uchoice_constants import VALID_WAREHOUSE_CODES
+    cleaned = sorted({c.strip() for c in raw if c and c.strip()})
+    if not cleaned:
+        return None
+    unknown = [c for c in cleaned if c not in VALID_WAREHOUSE_CODES]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown warehouse code(s): {unknown}")
+    return cleaned
+
+
 def _to_response(staff: KefuStaff, role_name: str) -> KefuStaffResponse:
     return KefuStaffResponse(
         staff_id=staff.staff_id,
@@ -41,7 +55,7 @@ def _to_response(staff: KefuStaff, role_name: str) -> KefuStaffResponse:
         group_id=staff.group_id,
         role=role_name,
         display_name=staff.display_name,
-        warehouse_code=staff.warehouse_code,
+        warehouse_codes=staff.warehouse_codes,
         is_active=staff.is_active,
         created_at=staff.created_at,
     )
@@ -90,22 +104,22 @@ def update_kefu_staff(staff_id: str, body: KefuStaffUpdate, db: Session = Depend
         staff.role_id = role.role_id
         role_name = role.name
         if role.name == "warehouseman":
-            new_warehouse_code = body.warehouse_code if body.warehouse_code is not None else staff.warehouse_code
-            new_warehouse_code = (new_warehouse_code or "").strip() or None
-            if not new_warehouse_code:
-                raise HTTPException(status_code=400, detail="warehouse_code is required for role=warehouseman")
-            staff.warehouse_code = new_warehouse_code
+            new_warehouse_codes = body.warehouse_codes if body.warehouse_codes is not None else staff.warehouse_codes
+            new_warehouse_codes = _clean_warehouse_codes(new_warehouse_codes)
+            if not new_warehouse_codes:
+                raise HTTPException(status_code=400, detail="warehouse_codes is required for role=warehouseman")
+            staff.warehouse_codes = new_warehouse_codes
         else:
             # cleared automatically whenever a staff member's role changes away from warehouseman
-            staff.warehouse_code = None
-    elif body.warehouse_code is not None:
+            staff.warehouse_codes = None
+    elif body.warehouse_codes is not None:
         # role unchanged this call — only meaningful if the staff member is already a warehouseman
         if not current_role or current_role.name != "warehouseman":
-            raise HTTPException(status_code=400, detail="warehouse_code only applies to role=warehouseman")
-        stripped = body.warehouse_code.strip()
-        if not stripped:
-            raise HTTPException(status_code=400, detail="warehouse_code cannot be blank")
-        staff.warehouse_code = stripped
+            raise HTTPException(status_code=400, detail="warehouse_codes only applies to role=warehouseman")
+        cleaned = _clean_warehouse_codes(body.warehouse_codes)
+        if not cleaned:
+            raise HTTPException(status_code=400, detail="warehouse_codes cannot be empty")
+        staff.warehouse_codes = cleaned
 
     if body.display_name is not None:
         staff.display_name = body.display_name

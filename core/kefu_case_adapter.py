@@ -101,6 +101,7 @@ _KEFU_ENABLED_SERVICES = frozenset({
     "view_pending_digest", "explain_service",
     "uchoice_inbound_request", "uchoice_outbound_request", "upsert_address",
     "confirm_inbound_completion", "confirm_outbound_completion",
+    "cancel_inbound_request", "cancel_outbound_request",
     "adjust_storage", "recount_storage", "move_storage",
     # role_change already has the full generic pipeline (sanitization,
     # confirmation builder, pre-confirm last-admin check) plus a
@@ -643,6 +644,21 @@ def _process_turn(
 
     db.commit()
 
+    # Post-commit, best-effort dispatch for any cross-channel webhook
+    # notification a handler deferred instead of sending inline (see
+    # handlers/uchoice/cancel_request.py's NotifyCancelledRequestHandler) --
+    # core.workflow_engine's own _SIDE_EFFECT_STEP_TYPES split, which
+    # guarantees this ordering for the Smart Bot pipeline, does not apply
+    # here; Kefu's own single commit above is the only point this pipeline
+    # can guarantee the underlying mutation is actually durable. A delivery
+    # failure here must never affect the already-committed turn.
+    for notification in context.get("_deferred_webhook_notifications", []):
+        try:
+            from clients.wechat_client import send_group_webhook_message
+            send_group_webhook_message(notification["webhook_url"], notification["content"])
+        except Exception as e:
+            print(f"[kefu] deferred webhook notification failed (non-fatal): {e}", flush=True)
+
     return CaseTurnSuccess(
         reply_text=reply_text,
         customer_copy_text=customer_copy_text,
@@ -665,9 +681,9 @@ def _authorize_case(access, session) -> str | None:
         allowed_ids = {s["service_type_id"] for s in access.allowed_services}
         if str(session.service_type_id) not in allowed_ids:
             return "case_service_not_granted"
-    if access.warehouse_code is not None:
+    if access.warehouse_codes is not None:
         session_warehouse = (session.collected_fields or {}).get("warehouse_code")
-        if session_warehouse is not None and session_warehouse != access.warehouse_code:
+        if session_warehouse is not None and session_warehouse not in access.warehouse_codes:
             return "case_wrong_warehouse"
     return None
 

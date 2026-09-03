@@ -66,9 +66,21 @@ def mark_success(
     this status change into the same transaction as the storage deltas that
     preceded it, so a failure between this call and the caller's own commit
     rolls back both together instead of leaving mark_success durable alone.
+
+    Guarded: no-op if the row's current status is not 'processing'. For a
+    targets_existing_request session (completion or cancellation), log_id
+    is the pre-existing TARGET row, not one this session owns -- a
+    cancellation's own workflow step may already have moved it to
+    'cancelled' earlier in this same call chain (same identity-mapped
+    object, refreshed in place by that step's locked read). Without this
+    guard, this call would silently overwrite that cancellation back to
+    'success' and replace its (empty) result -- exactly the bug this
+    guard exists to prevent.
     """
     log = db.query(RequestLog).filter_by(log_id=log_id).first()
     if log is None:
+        return
+    if log.status != "processing":
         return
     log.status       = "success"
     log.result       = result

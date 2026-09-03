@@ -62,7 +62,7 @@ def test_pending_short_circuit_fires_before_session_and_ai(monkeypatch):
 
     fake_result = access_control.AccessResult(
         wechat_openid="user-1", group_id="g1", role="pending", role_id="r1",
-        display_name=None, warehouse_code=None, allowed_services=[],
+        display_name=None, warehouse_codes=None, allowed_services=[],
         group_context=None, group_description=None,
     )
     monkeypatch.setattr(webhook_module.access_control, "check_access", lambda *_a, **_kw: fake_result)
@@ -91,7 +91,7 @@ def test_operational_member_reaches_session_and_ai(monkeypatch):
 
     fake_result = access_control.AccessResult(
         wechat_openid="user-1", group_id="g1", role="admin", role_id="r1",
-        display_name=None, warehouse_code=None, allowed_services=[],
+        display_name=None, warehouse_codes=None, allowed_services=[],
         group_context=None, group_description=None,
     )
     monkeypatch.setattr(webhook_module.access_control, "check_access", lambda *_a, **_kw: fake_result)

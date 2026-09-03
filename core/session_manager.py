@@ -141,7 +141,7 @@ def build_context(
         "group_id":          str(access.group_id),
         "role":              access.role,
         "display_name":      access.display_name,
-        "warehouse_code":    access.warehouse_code,
+        "warehouse_codes":   access.warehouse_codes,
         "allowed_services":  access.allowed_services,
         "group_context":     access.group_context,
         "group_description": access.group_description,
@@ -213,7 +213,27 @@ def _build_uchoice_candidates(
     else:
         names = {s["name"] for s in access.allowed_services}
     collected = session.collected_fields if session else {}
-    scope_warehouse = collected.get("warehouse_code") or access.warehouse_code
+    requested_warehouse = collected.get("warehouse_code")
+    caller_warehouses = access.warehouse_codes  # None = unscoped (customer/admin/accountant)
+
+    # List-aware resolution: an explicit request-level warehouse always wins;
+    # otherwise a caller with exactly one assigned warehouse defaults to it
+    # (unchanged single-warehouse behavior); a caller with zero or several
+    # assigned warehouses gets no single default guessed on their behalf —
+    # `allowed_warehouse_codes` carries the full set down to whichever
+    # candidate function can filter by it instead.
+    if requested_warehouse:
+        scope_warehouse = requested_warehouse
+        allowed_warehouse_codes = None
+    elif caller_warehouses is not None and len(caller_warehouses) == 1:
+        scope_warehouse = caller_warehouses[0]
+        allowed_warehouse_codes = None
+    elif caller_warehouses is not None:
+        scope_warehouse = None
+        allowed_warehouse_codes = caller_warehouses
+    else:
+        scope_warehouse = None
+        allowed_warehouse_codes = None
 
     candidates: dict = {}
 
@@ -223,12 +243,24 @@ def _build_uchoice_candidates(
         "view_storage", "view_storage_history",
     }
     if names & SKU_DEPENDENT_SERVICES:
-        # Defaults to JFK when the warehouse isn't known yet — same default
-        # used for uchoice_outbound_request's warehouse_code itself (real
-        # customers essentially never state it), so the stock signal used
-        # for SKU disambiguation matches whichever warehouse the request
-        # will actually end up defaulting to.
-        candidates["skus"] = uchoice_context.sku_catalog(db, scope_warehouse or "JFK")
+        # Defaults to JFK when the warehouse isn't known yet AND the caller
+        # carries no warehouse restriction of their own (a customer/admin/
+        # accountant session with nothing stated) — same default used for
+        # uchoice_outbound_request's warehouse_code itself (real customers
+        # essentially never state it), so the stock signal used for SKU
+        # disambiguation matches whichever warehouse the request will
+        # actually end up defaulting to. A multi-warehouse caller with no
+        # single resolved warehouse gets sku_catalog's own None-shaped
+        # behavior instead (no `in_stock` at all) rather than a guessed
+        # single-warehouse stock signal that could mislead — see
+        # core/uchoice_context.py's sku_catalog docstring.
+        if scope_warehouse:
+            sku_warehouse = scope_warehouse
+        elif allowed_warehouse_codes is None:
+            sku_warehouse = "JFK"
+        else:
+            sku_warehouse = None
+        candidates["skus"] = uchoice_context.sku_catalog(db, sku_warehouse)
 
     # Customer selection was once required for Kefu inbound/outbound requests,
     # but every current U-Choice service is performed on behalf of
@@ -277,8 +309,12 @@ def _build_uchoice_candidates(
         )
         if active_is_upsert_address:
             candidates["addresses"] = uchoice_context.address_candidates(db)
+        elif scope_warehouse:
+            candidates["addresses"] = uchoice_context.address_candidates(db, source_warehouse_code=scope_warehouse)
+        elif allowed_warehouse_codes is not None:
+            candidates["addresses"] = uchoice_context.address_candidates(db, allowed_warehouse_codes=allowed_warehouse_codes)
         else:
-            candidates["addresses"] = uchoice_context.address_candidates(db, source_warehouse_code=scope_warehouse or "JFK")
+            candidates["addresses"] = uchoice_context.address_candidates(db, source_warehouse_code="JFK")
         # boxes_per_pallet resolution (default-fill, ambiguity-clarification,
         # stock-sufficiency check) is entirely code-level now — see
         # workflow_engine._resolve_outbound_pallet_defaults — so the AI no
@@ -286,14 +322,26 @@ def _build_uchoice_candidates(
         # them removes the exact material that kept tempting it to self-fill
         # a plausible-looking value despite being told not to.
 
+    pending_allowed_warehouses = [scope_warehouse] if scope_warehouse else allowed_warehouse_codes
+
     if "confirm_inbound_completion" in names and "uchoice_inbound_request" in by_name:
         candidates["pending_inbound_requests"] = uchoice_context.pending_request_candidates(
-            db, scope_warehouse, [by_name["uchoice_inbound_request"]]
+            db, access.group_id, pending_allowed_warehouses, [by_name["uchoice_inbound_request"]]
         )
 
     if "confirm_outbound_completion" in names and "uchoice_outbound_request" in by_name:
         candidates["pending_outbound_requests"] = uchoice_context.pending_request_candidates(
-            db, scope_warehouse, [by_name["uchoice_outbound_request"]]
+            db, access.group_id, pending_allowed_warehouses, [by_name["uchoice_outbound_request"]]
+        )
+
+    if "cancel_inbound_request" in names and "uchoice_inbound_request" in by_name:
+        candidates["cancelable_inbound_requests"] = uchoice_context.cancelable_request_candidates(
+            db, access.group_id, [by_name["uchoice_inbound_request"]], access
+        )
+
+    if "cancel_outbound_request" in names and "uchoice_outbound_request" in by_name:
+        candidates["cancelable_outbound_requests"] = uchoice_context.cancelable_request_candidates(
+            db, access.group_id, [by_name["uchoice_outbound_request"]], access
         )
 
     if "role_change" in names:

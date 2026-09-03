@@ -45,6 +45,8 @@ _DISPLAY_NAMES = {
     "uchoice_outbound_request":   "U-Choice 出库申请",
     "confirm_inbound_completion": "入库完成确认",
     "confirm_outbound_completion":"出库完成确认",
+    "cancel_inbound_request":     "取消入库申请",
+    "cancel_outbound_request":    "取消出库申请",
     "adjust_storage":             "库存调整",
     "recount_storage":            "库存盘点",
     "move_storage":               "库存内部调拨",
@@ -91,7 +93,7 @@ _FIELD_LABELS = {
     "weight_lbs": "重量（磅）", "service_level": "服务等级", "length_in": "长度（英寸）",
     "width_in": "宽度（英寸）", "height_in": "高度（英寸）", "reference_number": "参考编号",
     # U-Choice
-    "warehouse_code": "仓库", "sku_lines": "商品明细", "needs_unpacking": "需要拆包",
+    "warehouse_code": "仓库", "warehouse_codes": "负责仓库", "sku_lines": "商品明细", "needs_unpacking": "需要拆包",
     "destination_address_id": "目的地地址ID", "new_pallet_count": "新增打托数",
     "reference_serial": "关联申请编号", "received_lines": "实收明细",
     "fulfillment_lines": "实发明细", "adjustment_lines": "调整明细",
@@ -485,15 +487,57 @@ def _role_change_sections_builder(collected_fields: dict, db: DBSession) -> list
     """role_change — resolve target_openid to a display name and new_role to its Chinese label."""
     target_openid = collected_fields.get("target_openid")
     new_role = collected_fields.get("new_role")
-    warehouse_code = collected_fields.get("warehouse_code")
+    warehouse_codes = collected_fields.get("warehouse_codes")
 
     items = {
         "目标成员": member_display_label(db, target_openid),
         "新角色":   role_label(new_role),
     }
-    if warehouse_code:
-        items["负责仓库"] = warehouse_code
+    if warehouse_codes:
+        items["负责仓库"] = "、".join(sorted(warehouse_codes))
     return [{"label": None, "type": "kv", "items": items}]
+
+
+def _cancel_request_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
+    """
+    cancel_inbound_request/cancel_outbound_request — shared by both
+    directions. Shows the target's original SKU summary (and, for outbound,
+    its destination) so the person confirming a cancellation can actually
+    recognize which request they're about to cancel, same reasoning as the
+    completion builders above.
+    """
+    from core.uchoice_context import resolve_completion_target
+
+    reference_serial = collected_fields.get("reference_serial")
+    target, original_fields = resolve_completion_target(db, reference_serial)
+    if target is None:
+        msg = f"未找到申请编号 {reference_serial}" if reference_serial else "未能确定要取消的申请"
+        return [{"label": None, "type": "list", "items": [f"⚠️ {msg}"]}]
+
+    sku_labels = _sku_label_map(db)
+    formatted = []
+    for line in sorted(
+        original_fields.get("sku_lines", []),
+        key=lambda l: (l.get("sku_code", ""), l.get("boxes_per_pallet", l.get("box_count", 0))),
+    ):
+        label = _sku_label(sku_labels, line.get("sku_code", "?"))
+        if "box_count" in line:
+            formatted.append(f'{label}：散箱 x{line["box_count"]}')
+        else:
+            formatted.append(f'{label}：{line.get("pallet_count", "?")} 托 @ {line.get("boxes_per_pallet", "?")}/托')
+
+    warehouse_code = original_fields.get("warehouse_code", "?")
+    sections = [{"label": f"关联申请 {reference_serial}（{warehouse_code} 仓）", "type": "list", "items": formatted}]
+
+    destination_address_id = original_fields.get("destination_address_id")
+    if destination_address_id:
+        from models.uchoice import UchoiceAddress
+        from core.uchoice_context import format_address_label
+        addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
+        if addr:
+            sections.append({"label": None, "type": "list", "items": [f"目的地：{format_address_label(addr)}"]})
+
+    return sections
 
 
 def _default_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
@@ -513,6 +557,8 @@ CONFIRMATION_BUILDERS: dict[str, Callable[[dict, DBSession], list[dict]]] = {
     "move_storage":             _move_sections_builder,
     "upsert_address":           _address_sections_builder,
     "role_change":              _role_change_sections_builder,
+    "cancel_inbound_request":   _cancel_request_sections_builder,
+    "cancel_outbound_request":  _cancel_request_sections_builder,
 }
 
 
