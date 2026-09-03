@@ -29,7 +29,7 @@ INSERT INTO service_type (
     confirmation_note, is_active, requires_confirmation,
     targets_existing_request, awaits_completion, keywords
 ) VALUES (
-    'c1000000-0000-0000-0000-00000000000e',
+    'c1000000-0000-0000-0000-000000000010',
     'cancel_inbound_request',
     '取消一笔已确认、但仓库尚未实际收货确认的入库申请（状态为待处理）。取消后申请作废，不影响库存（入库确认前库存本就未变动）。',
     '{"required": ["reference_serial"], "optional": [], "field_hints": {"reference_serial": "The processing inbound request being cancelled. If omitted, fuzzy-match against the injected candidate list of requests this caller may cancel (their own, or -- for an admin -- any in this group), same 0/1/N handling as completion confirmation."}}'::jsonb,
@@ -53,7 +53,7 @@ INSERT INTO service_type (
     confirmation_note, is_active, requires_confirmation,
     targets_existing_request, awaits_completion, keywords
 ) VALUES (
-    'c1000000-0000-0000-0000-00000000000f',
+    'c1000000-0000-0000-0000-000000000011',
     'cancel_outbound_request',
     '取消一笔已确认、但仓库尚未实际发货确认的出库申请（状态为待处理）。取消后申请作废，不影响库存（出库确认前库存本就未变动）。',
     '{"required": ["reference_serial"], "optional": [], "field_hints": {"reference_serial": "The processing outbound request being cancelled. If omitted, fuzzy-match against the injected candidate list of requests this caller may cancel (their own, or -- for an admin -- any in this group), same 0/1/N handling as completion confirmation."}}'::jsonb,
@@ -74,7 +74,7 @@ SET description = EXCLUDED.description,
 
 INSERT INTO workflow (workflow_id, name, description)
 VALUES (
-    'c2000000-0000-0000-0000-00000000000e',
+    'c2000000-0000-0000-0000-000000000010',
     'cancel_inbound_request',
     'Validate target request and caller authorization, cancel it, notify (best-effort), reply'
 )
@@ -82,25 +82,25 @@ ON CONFLICT (workflow_id) DO UPDATE SET description = EXCLUDED.description;
 
 INSERT INTO workflow (workflow_id, name, description)
 VALUES (
-    'c2000000-0000-0000-0000-00000000000f',
+    'c2000000-0000-0000-0000-000000000011',
     'cancel_outbound_request',
     'Validate target request and caller authorization, cancel it, notify (best-effort), reply'
 )
 ON CONFLICT (workflow_id) DO UPDATE SET description = EXCLUDED.description;
 
-DELETE FROM workflow_step WHERE workflow_id = 'c2000000-0000-0000-0000-00000000000e';
+DELETE FROM workflow_step WHERE workflow_id = 'c2000000-0000-0000-0000-000000000010';
 INSERT INTO workflow_step (workflow_id, step_order, step_type, config) VALUES
-    ('c2000000-0000-0000-0000-00000000000e', 1, 'lookup_and_validate_cancellation', '{"direction": "inbound"}'::jsonb),
-    ('c2000000-0000-0000-0000-00000000000e', 2, 'cancel_existing_request', '{}'::jsonb),
-    ('c2000000-0000-0000-0000-00000000000e', 3, 'notify_cancelled_request', '{}'::jsonb),
-    ('c2000000-0000-0000-0000-00000000000e', 4, 'reply_wechat', '{}'::jsonb);
+    ('c2000000-0000-0000-0000-000000000010', 1, 'lookup_and_validate_cancellation', '{"direction": "inbound"}'::jsonb),
+    ('c2000000-0000-0000-0000-000000000010', 2, 'cancel_existing_request', '{}'::jsonb),
+    ('c2000000-0000-0000-0000-000000000010', 3, 'notify_cancelled_request', '{}'::jsonb),
+    ('c2000000-0000-0000-0000-000000000010', 4, 'reply_wechat', '{}'::jsonb);
 
-DELETE FROM workflow_step WHERE workflow_id = 'c2000000-0000-0000-0000-00000000000f';
+DELETE FROM workflow_step WHERE workflow_id = 'c2000000-0000-0000-0000-000000000011';
 INSERT INTO workflow_step (workflow_id, step_order, step_type, config) VALUES
-    ('c2000000-0000-0000-0000-00000000000f', 1, 'lookup_and_validate_cancellation', '{"direction": "outbound"}'::jsonb),
-    ('c2000000-0000-0000-0000-00000000000f', 2, 'cancel_existing_request', '{}'::jsonb),
-    ('c2000000-0000-0000-0000-00000000000f', 3, 'notify_cancelled_request', '{}'::jsonb),
-    ('c2000000-0000-0000-0000-00000000000f', 4, 'reply_wechat', '{}'::jsonb);
+    ('c2000000-0000-0000-0000-000000000011', 1, 'lookup_and_validate_cancellation', '{"direction": "outbound"}'::jsonb),
+    ('c2000000-0000-0000-0000-000000000011', 2, 'cancel_existing_request', '{}'::jsonb),
+    ('c2000000-0000-0000-0000-000000000011', 3, 'notify_cancelled_request', '{}'::jsonb),
+    ('c2000000-0000-0000-0000-000000000011', 4, 'reply_wechat', '{}'::jsonb);
 
 INSERT INTO group_service (group_id, service_type_id, workflow_id, config)
 SELECT gc.group_id, st.service_type_id, wf.workflow_id, '{}'::jsonb

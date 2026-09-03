@@ -61,6 +61,11 @@ here.
   warehouse they have no authority over. The warehouse-scope check for
   address updates now also validates the address's *current* warehouse,
   not just the requested one.
+- `V23`'s hardcoded `service_type`/`workflow` UUIDs collided with rows
+  already claimed by `V10` (missed because only `V2` and `V15` were
+  checked when picking new ones) — caught when applying to production;
+  moved to genuinely free UUIDs before this version's migrations were
+  first successfully applied anywhere.
 
 ### Documentation
 - Archived the reviewed design plan for the above under
