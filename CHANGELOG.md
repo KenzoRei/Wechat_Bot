@@ -9,6 +9,24 @@ here.
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-09-03
+
+### Fixed
+- `cancel_inbound_request`/`cancel_outbound_request` were completely
+  unreachable: the AI intent-classification prompt's existing `cancel`
+  rule (written before these services existed) gave the generic
+  mid-session "abandon whatever's in front of you" intent unconditional
+  priority over any message containing "取消", with an explicit
+  instruction not to let candidate/service matching override it. Every
+  attempt to actually cancel a processing request — even one explicitly
+  naming its serial number — was silently swallowed as a no-op abandon of
+  whichever session happened to be active, never touching the target
+  request at all. `ai/prompt_builder.py` now carves out an explicit
+  exception: a message naming a specific already-submitted request (by
+  serial number, or by the cancel services' own keyword phrases) routes to
+  the real cancellation service regardless of what else is active in the
+  current session.
+
 ## [1.0.1] - 2026-09-03
 
 ### Added
@@ -71,5 +89,6 @@ here.
 - Archived the reviewed design plan for the above under
   `docs/archive/collaboration/2026-09-warehouse-array-and-cancel-service/`.
 
-[Unreleased]: https://github.com/KenzoRei/Wechat_Bot/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/KenzoRei/Wechat_Bot/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/KenzoRei/Wechat_Bot/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/KenzoRei/Wechat_Bot/compare/v1.0.0...v1.0.1

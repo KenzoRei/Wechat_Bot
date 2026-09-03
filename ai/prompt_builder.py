@@ -259,7 +259,14 @@ def build_system_prompt(context: dict) -> str:
   · 状态为"无活跃会话"：即使用户第一句话就带着"确认"字样（例如仓管员对某个待处理申请说"确认入库 REQ-X"，或候选列表只有一条时说"确认"），也必须返回 new_request，而不是 confirm——这是在发起一个新的服务请求（如 confirm_inbound_completion 这类"确认收货"服务，name/description 里本身就包含"确认"字样，容易和 intent=confirm 混淆，但两者是完全不同的东西）。识别服务类型、按候选列表规则提取 reference_serial 等字段，字段齐全则 all_fields_collected=true，由系统生成确认摘要，用户看到摘要后的下一轮回复才是真正的 intent=confirm。
     示例：无活跃会话，候选列表中只有一条待处理入库申请 REQ-Y，用户消息是"确认入库" → 正确输出：intent=new_request，service_type_name="confirm_inbound_completion"，extracted_fields 中 reference_serial 填 REQ-Y，all_fields_collected=true（前提是其余必填字段已满足），reply 类似"好的，正在为您确认 REQ-Y 的入库"。错误输出（禁止）：intent=confirm——此时根本没有 session，没有摘要可言，会导致"未找到待确认的申请"报错。
   两种错误情况的共同后果：intent=confirm 但实际没有对应的待确认 session 时，系统会直接报错"未找到待确认的申请"，且这句话里提取的字段会被完全丢弃，用户必须重新发起。
-- cancel：用户取消了申请（"取消"、"算了"、"不要了"、"别弄了"等表达）。【重要】只要用户的意思是终止/放弃当前这个申请，就必须判定为 cancel，优先级高于候选列表匹配等其他逻辑——不要因为候选列表里有内容可以匹配，就把一句明确的取消话语误判为 continuation 或去追问选哪一条。
+- cancel：用户放弃的是当前这个会话正在收集字段、或刚生成确认摘要等待确认的操作本身（"取消"、"算了"、"不要了"、"别弄了"等表达，且没有指向某个已经提交、仓库尚未处理完的具体申请）。【重要】只要用户的意思是终止/放弃当前会话正在进行的这个操作，就必须判定为 cancel，优先级高于候选列表匹配等其他逻辑——不要因为候选列表里有内容可以匹配，就把一句明确的取消话语误判为 continuation 或去追问选哪一条。
+  【重要，与 cancel_inbound_request / cancel_outbound_request 的区分】如果用户的话语满足下面任一条件，说明用户要的不是放弃当前会话，而是要取消一笔已经确认、仓库尚未处理完成的入库/出库申请——即使当前存在其他进行中或待确认的会话（例如正好是仓库人员为另一笔申请生成的完成确认摘要），也必须判定为 new_request，service_type_name 设为 cancel_inbound_request 或 cancel_outbound_request，而不是 cancel：
+  ① 话语中包含具体申请编号（如 REQ-20260903-000012）并搭配取消/作废/撤销类词语；
+  ② 使用了"取消入库申请""取消出库申请""作废入库""作废出库""撤销入库申请""撤销出库申请"这类整体表达，即使没有提到具体编号（此时按候选列表规则解析 reference_serial：0/1/多条的处理方式与其他 targets_existing_request 服务完全相同）。
+  识别为 new_request 后，正常按 cancel_inbound_request/cancel_outbound_request 的 input_schema 收集 reference_serial 等字段，不代表当前存在的其他会话会被自动放弃或受到影响——那是完全独立的另一回事，系统会分别处理。
+    示例：当前存在一个"出库完成确认"的待确认会话（用户刚发过"确认出库"，系统生成了 REQ-X 的完成确认摘要），用户接着说"取消出库申请 REQ-X" → 正确输出：intent=new_request，service_type_name="cancel_outbound_request"，extracted_fields 中 reference_serial 填 REQ-X。错误输出（禁止）：intent=cancel——这只会放弃刚才那个完成确认摘要，对 REQ-X 本身毫无影响，用户后续无论怎么重发"确认出库"都会看到同一个摘要反复出现，无法真正取消这笔申请。
+    示例2：当前无活跃会话，用户说"取消出库申请" → 正确输出：intent=new_request，service_type_name="cancel_outbound_request"（无具体编号时按候选列表规则解析，0/1/多条分别处理，与"无活跃会话"下其他服务的识别规则一致）。错误输出（禁止）：intent=cancel——此时没有任何进行中的会话可放弃，这类判定只会生成一句"该申请已取消"这样文不对题、什么也没做的空回复。
+    示例3：当前会话状态为"进行中"，正在收集一笔新出库申请的商品明细，用户说"算了，不要了" → 正确输出：intent=cancel（没有编号，没有使用 cancel_inbound_request/cancel_outbound_request 的整体表达，明显是在放弃眼前正在填写的这笔新申请）。
 - check_services：用户询问可使用哪些服务（泛泛地问"有什么服务"）。在 reply 中用简短列表列出服务的中文名称（每项几个字即可，一行一个），不展开解释每项的详细用途。
   【重要】如果用户是在问某一个具体服务是什么/怎么用/干什么用的（如"入库申请是什么意思""怎么用查库存""确认出库和确认入库有什么区别"），不要用 check_services，应判定为 new_request，service_type_name 设为 "explain_service"，按 service_catalog 的匹配规则提取 target_service_name。
 - unrecognized：无法理解或与服务无关。礼貌提示用户重新描述。
