@@ -7,9 +7,18 @@ from models.request_log import RequestLog
 from models.service import ServiceType
 from core.access_control import AccessResult
 from core import uchoice_context
+from core.uchoice_constants import VALID_WAREHOUSE_CODES
 import config
 
 SERIAL_PATTERN = re.compile(r'REQ-\d{8}-\d{6}')
+
+# Longest-code-first so a future longer code that contains a shorter one as
+# a prefix can never be shadowed by the shorter alternative matching first.
+_WAREHOUSE_CODE_PATTERN = re.compile(
+    r'(?<![A-Za-z0-9])(' +
+    '|'.join(sorted(VALID_WAREHOUSE_CODES, key=len, reverse=True)) +
+    r')(?![A-Za-z0-9])'
+)
 
 
 def extract_serial_from_message(content: str) -> str | None:
@@ -168,7 +177,7 @@ def build_context(
         # candidate-list context injection (addresses, pending requests,
         # storage buckets, member list) — scoped to whichever services this
         # caller's role can actually trigger
-        "uchoice_candidates": _build_uchoice_candidates(db, access, session),
+        "uchoice_candidates": _build_uchoice_candidates(db, access, session, message["content"]),
 
         # from webhook_receiver
         "content":      message["content"],
@@ -200,10 +209,49 @@ def _service_type_id_by_name(db: DBSession, service_name: str) -> str | None:
     return str(row[0]) if row else None
 
 
+def _mentioned_warehouse_codes(content: str | None) -> list[str]:
+    """
+    Same-turn textual hint for candidate scoping only -- NEVER used to set
+    collected_fields["warehouse_code"] itself (that stays the AI's own job,
+    unaffected by this). Exists because _build_uchoice_candidates runs
+    BEFORE the AI call that would otherwise extract warehouse_code from
+    this very message, so a first message that states a warehouse for the
+    first time (e.g. "从NJ仓到DE仓") would otherwise see candidates built
+    from the OLD (empty) collected_fields.
+
+    Live incident: an unscoped caller's (admin) first message named both a
+    source and a destination warehouse in one breath. With no
+    collected_fields["warehouse_code"] yet and no caller warehouse
+    restriction, the address-candidate default below fell back to
+    JFK-only -- the real, correctly NJ-scoped "DE Warehouse" address was
+    never even offered to the AI as a candidate (each warehouse has its
+    own same-named address row per destination -- see
+    uchoice_context.address_candidates' docstring). The AI could only ever
+    match the JFK-scoped one, which core/pre_confirm_validators.py then
+    correctly rejected at confirmation time -- a needless failure, not a
+    safety gap.
+
+    Matches whole, case-insensitive, non-embedded occurrences only (e.g.
+    matches "NJ" in "从NJ仓到DE仓" or "发货到 DE" but not inside an
+    unrelated English word) -- deliberately not \\b, since Python's Unicode
+    \\w treats CJK characters as word characters too, so \\bNJ\\b would
+    never match "NJ仓" at all (no boundary between "J" and "仓").
+    """
+    if not content:
+        return []
+    seen: list[str] = []
+    for m in _WAREHOUSE_CODE_PATTERN.finditer(content.upper()):
+        code = m.group(1)
+        if code not in seen:
+            seen.append(code)
+    return seen
+
+
 def _build_uchoice_candidates(
     db: DBSession,
     access: AccessResult,
-    session: ConversationSession | None
+    session: ConversationSession | None,
+    message_content: str | None = None,
 ) -> dict:
     """
     Conditionally fetches candidate lists based on which service names this
@@ -234,12 +282,28 @@ def _build_uchoice_candidates(
     requested_warehouse = collected.get("warehouse_code")
     caller_warehouses = access.warehouse_codes  # None = unscoped (customer/admin/accountant)
 
+    # Only consulted when neither collected_fields nor the caller's own
+    # assignment has already resolved a warehouse -- a caller with a real
+    # assigned set (e.g. a warehouseman) keeps that as the sole scope,
+    # never widened by a stray mention of a warehouse they aren't assigned
+    # to (see _mentioned_warehouse_codes' docstring for why this exists at
+    # all).
+    mentioned_warehouses = (
+        _mentioned_warehouse_codes(message_content)
+        if not requested_warehouse and caller_warehouses is None
+        else []
+    )
+
     # List-aware resolution: an explicit request-level warehouse always wins;
     # otherwise a caller with exactly one assigned warehouse defaults to it
     # (unchanged single-warehouse behavior); a caller with zero or several
     # assigned warehouses gets no single default guessed on their behalf —
     # `allowed_warehouse_codes` carries the full set down to whichever
-    # candidate function can filter by it instead.
+    # candidate function can filter by it instead. A same-turn warehouse
+    # mention is consulted next, ahead of the hardcoded JFK default: an
+    # unambiguous single mention resolves scope_warehouse directly, and a
+    # message naming several (e.g. "从NJ仓到DE仓") widens the candidate set
+    # to just those instead of guessing JFK.
     if requested_warehouse:
         scope_warehouse = requested_warehouse
         allowed_warehouse_codes = None
@@ -249,6 +313,12 @@ def _build_uchoice_candidates(
     elif caller_warehouses is not None:
         scope_warehouse = None
         allowed_warehouse_codes = caller_warehouses
+    elif len(mentioned_warehouses) == 1:
+        scope_warehouse = mentioned_warehouses[0]
+        allowed_warehouse_codes = None
+    elif mentioned_warehouses:
+        scope_warehouse = None
+        allowed_warehouse_codes = mentioned_warehouses
     else:
         scope_warehouse = None
         allowed_warehouse_codes = None

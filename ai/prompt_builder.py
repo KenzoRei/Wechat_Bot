@@ -18,8 +18,14 @@ def _address_matching_instructions(is_kefu: bool) -> str:
     existing legacy instruction unchanged because Smart Robot owns its own
     reply and pivot path.
     """
+    warehouse_hint = (
+        "【重要】客户如果只说了一个裸词 JFK / DE / NJ 作为目的地（不带公司名、不带门牌号街道），"
+        "指的是我们自己的仓库，不是一个未收录的新公司/新地址——应在此列表中寻找 company_name 形如"
+        "\"<该仓库代码> Warehouse\" 的那一项（内部调仓地址），而不是当作 unmatched 走新增地址流程。\n"
+    )
     if is_kefu:
         return (
+            warehouse_hint +
             "- addresses：将用户描述的目的地与此列表语义匹配。【重要】不要把结果直接写入 "
             "extracted_fields 的 destination_address_id 或 unmatched_new_address——改为在顶层字段 "
             "address_match 中返回结构化证据，四种状态之一：\n"
@@ -37,6 +43,7 @@ def _address_matching_instructions(is_kefu: bool) -> str:
             "造成与真实系统状态不符（reply 字段本身也不会被当作操作性回复发送，仅供内部记录，可简要留空）。\n"
         )
     return (
+        warehouse_hint +
         "- addresses：将用户描述的目的地与此列表匹配，提取 address_id 填入 destination_address_id。"
         "【重要】在 reply 中向用户确认匹配到的目的地时，必须同时给出公司名和完整地址（如\"发往 ABC 公司（123 Main St, City, ST 12345）\"），"
         "不能只提公司名——地址信息才是用户真正需要核对的部分。"
