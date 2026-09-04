@@ -42,6 +42,19 @@ here.
   (`request_log.service_type_id` has no dependency on `group_service` at
   all, so an admin disabling new-order intake for a group must not hide
   already-processing requests from completion/cancellation either).
+- A first outbound-request message naming both a source and destination
+  warehouse in one breath (e.g. "从NJ仓到DE仓") had its address-candidate
+  list built from the still-empty `collected_fields`, before the AI call
+  that would extract `warehouse_code` from that same message — silently
+  defaulting to JFK-only addresses and hiding the real NJ-scoped
+  destination entirely (each warehouse has its own same-named address row
+  for its own inter-warehouse transfers). The AI could only match the
+  JFK-scoped one, which `core/pre_confirm_validators.py` then correctly
+  rejected at confirmation time — a needless failure, not a safety gap.
+  `core/session_manager.py` now scans the raw message text for bare
+  JFK/DE/NJ mentions as a same-turn scoping hint; `ai/prompt_builder.py`
+  also now tells the AI a bare warehouse-code mention refers to our own
+  warehouse, not an unrecognized new address.
 
 ## [1.0.3] - 2026-09-04
 
