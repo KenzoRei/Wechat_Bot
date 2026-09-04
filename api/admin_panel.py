@@ -137,6 +137,35 @@ _PANEL_HTML = """<!doctype html>
   .error { color: var(--bad); font-size: 13px; margin-top: 8px; }
   #gate { display: flex; flex-direction: column; gap: 10px; max-width: 340px; margin-top: 60px; }
   #app { display: none; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+  .tab-btn {
+    background: transparent;
+    color: var(--muted);
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    padding: 10px 14px;
+    font-weight: 600;
+  }
+  .tab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+  .warehouse-checks { display: flex; gap: 8px; flex-wrap: wrap; }
+  .warehouse-checks label { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; white-space: nowrap; }
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  .filters select, .filters input[type=date] {
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 6px 8px;
+    font-size: 13px;
+  }
+  .ledger-detail { background: color-mix(in srgb, var(--card) 60%, var(--bg)); border-radius: 8px; padding: 10px 12px; margin: 6px 0 10px; }
+  .session-block { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+  .session-block .session-header { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .chat-line { padding: 4px 0; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+  .chat-line .who { font-weight: 600; margin-right: 6px; }
 </style>
 </head>
 <body>
@@ -178,22 +207,72 @@ _PANEL_HTML = """<!doctype html>
     </div>
   </div>
 
-  <div class="card">
-    <div class="card-header">
-      <div>
-        <h3>Kefu Staff</h3>
-        <div class="meta">Assign a role to promote a staff member out of "pending". Warehouseman requires a warehouse code.</div>
-      </div>
-      <button class="secondary" onclick="refreshKefuNames()">Refresh names from WeCom</button>
-    </div>
-    <table>
-      <thead><tr><th>Name</th><th>external_userid</th><th>Role</th><th>Warehouse</th><th>Status</th><th>Registered</th><th></th></tr></thead>
-      <tbody id="kefuStaffRows"></tbody>
-    </table>
-    <div class="error" id="kefuStaffError"></div>
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="staff" onclick="switchTab('staff')">Staff &amp; Groups</button>
+    <button class="tab-btn" data-tab="transactions" onclick="switchTab('transactions')">Transactions</button>
   </div>
 
-  <div id="groups"></div>
+  <div id="tab-staff" class="tab-panel active">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <h3>Kefu Staff</h3>
+          <div class="meta">Assign a role to promote a staff member out of "pending". Warehouseman requires at least one warehouse.</div>
+        </div>
+        <button class="secondary" onclick="refreshKefuNames()">Refresh names from WeCom</button>
+      </div>
+      <table>
+        <thead><tr><th>Name</th><th>external_userid</th><th>Role</th><th>Warehouse</th><th>Status</th><th>Registered</th><th></th></tr></thead>
+        <tbody id="kefuStaffRows"></tbody>
+      </table>
+      <div class="error" id="kefuStaffError"></div>
+    </div>
+
+    <div id="groups"></div>
+  </div>
+
+  <div id="tab-transactions" class="tab-panel">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <h3>Transaction Ledger</h3>
+          <div class="meta">Every request_log row, most recent first. Dates are UTC. Expand a row for its full conversation.</div>
+        </div>
+      </div>
+      <div class="filters">
+        <select id="ledgerStatus" onchange="reloadLedger()">
+          <option value="">Any status</option>
+          <option value="pending">pending</option>
+          <option value="processing">processing</option>
+          <option value="success">success</option>
+          <option value="failed">failed</option>
+          <option value="cancelled">cancelled</option>
+          <option value="stale">stale</option>
+        </select>
+        <select id="ledgerChannel" onchange="reloadLedger()">
+          <option value="">Any channel</option>
+          <option value="smart_robot">Smart Bot</option>
+          <option value="kefu">Kefu</option>
+        </select>
+        <input type="date" id="ledgerDateFrom" onchange="reloadLedger()">
+        <span>to</span>
+        <input type="date" id="ledgerDateTo" onchange="reloadLedger()">
+        <button class="secondary" onclick="clearLedgerFilters()">Clear filters</button>
+      </div>
+      <table>
+        <thead><tr>
+          <th>Serial</th><th>Created At</th><th>Created By</th><th>Channel</th>
+          <th>Service</th><th>Status</th><th>Completed At</th><th></th>
+        </tr></thead>
+        <tbody id="ledgerRows"></tbody>
+      </table>
+      <div class="error" id="ledgerError"></div>
+      <div class="toolbar" style="margin-top:10px;margin-bottom:0;">
+        <button class="secondary" id="ledgerLoadMore" onclick="loadMoreLedger()" style="display:none;">Load more</button>
+      </div>
+    </div>
+  </div>
+
   <div class="error" id="loadError"></div>
 </div>
 
@@ -261,13 +340,30 @@ function fmtDate(iso) {
 }
 
 let _rolesCache = null;
+let _warehouseCodesCache = null;
 let _kefuStaffLabels = {};
 
 async function getRoles() {
   if (_rolesCache) return _rolesCache;
   const resp = await authedFetch("/admin/roles");
   _rolesCache = resp.data || [];
+  // Sourced from the same top-level key the server derives from
+  // VALID_WAREHOUSE_CODES -- never hardcoded here, so this list can't
+  // silently drift from what the backend actually accepts.
+  _warehouseCodesCache = resp.warehouse_codes || [];
   return _rolesCache;
+}
+
+function warehouseChecksHtml(staffId, selectedCodes, visible) {
+  const selected = new Set(selectedCodes || []);
+  const boxes = (_warehouseCodesCache || []).map(code => `
+    <label>
+      <input type="checkbox" class="kefu-wh-box" data-staff="${staffId}" value="${escapeHtml(code)}"
+             ${selected.has(code) ? "checked" : ""}>
+      ${escapeHtml(code)}
+    </label>
+  `).join("");
+  return `<div class="warehouse-checks" id="kefu-wh-${staffId}" style="${visible ? "" : "display:none"}">${boxes}</div>`;
 }
 
 function kefuRoleRowHtml(s, roles) {
@@ -288,8 +384,7 @@ function kefuRoleRowHtml(s, roles) {
       <td>${escapeHtml(s.display_name || "(no name)")}</td>
       <td>${escapeHtml(s.external_userid)}</td>
       <td><select id="kefu-role-${s.staff_id}" onchange="onKefuRoleChange('${s.staff_id}')">${options}</select></td>
-      <td><input type="text" id="kefu-wh-${s.staff_id}" value="${escapeHtml((s.warehouse_codes || []).join(", "))}"
-            style="width:120px;${isWarehouseman ? "" : "display:none"}" placeholder="JFK, DE"></td>
+      <td>${warehouseChecksHtml(s.staff_id, s.warehouse_codes, isWarehouseman)}</td>
       <td>${s.is_active ? '<span class="badge ok">active</span>' : '<span class="badge bad">suspended</span>'}</td>
       <td>${fmtDate(s.created_at)}</td>
       <td class="actions">
@@ -309,12 +404,12 @@ async function saveKefuRole(staffId) {
   document.getElementById("kefuStaffError").textContent = "";
   document.getElementById("kefuStaffError").style.color = "";
   const role = document.getElementById(`kefu-role-${staffId}`).value;
-  const warehouseInput = document.getElementById(`kefu-wh-${staffId}`);
   const body = { role };
   if (role === "warehouseman") {
-    const codes = warehouseInput.value.split(/[,、]/).map(s => s.trim()).filter(Boolean);
+    const codes = Array.from(document.querySelectorAll(`.kefu-wh-box[data-staff="${staffId}"]:checked`))
+      .map(box => box.value);
     if (codes.length === 0) {
-      document.getElementById("kefuStaffError").textContent = "At least one warehouse code is required for role=warehouseman.";
+      document.getElementById("kefuStaffError").textContent = "At least one warehouse is required for role=warehouseman.";
       return;
     }
     body.warehouse_codes = codes;
@@ -374,6 +469,150 @@ async function deleteKefuStaff(staffId) {
     document.getElementById("kefuStaffError").style.color = "var(--bad)";
     document.getElementById("kefuStaffError").textContent = "Delete failed: " + e.message;
   }
+}
+
+function switchTab(name) {
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll(".tab-panel").forEach(p => p.classList.toggle("active", p.id === `tab-${name}`));
+  if (name === "transactions" && !_ledgerLoadedOnce) {
+    _ledgerLoadedOnce = true;
+    reloadLedger();
+  }
+}
+
+// ── Transaction ledger ──────────────────────────────────────────────────────
+let _ledgerLoadedOnce = false;
+let _ledgerNextCursor = null;
+let _ledgerExpanded = {};  // serial_number -> bool, so re-rendering a page doesn't collapse an open row
+
+function ledgerFilterParams() {
+  const params = {};
+  const status = document.getElementById("ledgerStatus").value;
+  const channel = document.getElementById("ledgerChannel").value;
+  const dateFrom = document.getElementById("ledgerDateFrom").value;
+  const dateTo = document.getElementById("ledgerDateTo").value;
+  if (status) params.status = status;
+  if (channel) params.source_channel = channel;
+  // Plain <input type=date> gives "YYYY-MM-DD"; the server requires a full
+  // ISO-8601 datetime and treats a naive one as UTC, so widen to the whole
+  // day in UTC here rather than sending an ambiguous bare date.
+  if (dateFrom) params.date_from = `${dateFrom}T00:00:00`;
+  // .999999, not .000000/omitted -- the server's date_to bound is
+  // inclusive at the exact instant given, so a bare T23:59:59 excludes
+  // anything in that final fractional second (e.g. 23:59:59.5). Postgres
+  // timestamptz's own precision ceiling is microseconds, so .999999 is
+  // the true end of the selected day, not an approximation.
+  if (dateTo) params.date_to = `${dateTo}T23:59:59.999999`;
+  return params;
+}
+
+function clearLedgerFilters() {
+  document.getElementById("ledgerStatus").value = "";
+  document.getElementById("ledgerChannel").value = "";
+  document.getElementById("ledgerDateFrom").value = "";
+  document.getElementById("ledgerDateTo").value = "";
+  reloadLedger();
+}
+
+async function reloadLedger() {
+  document.getElementById("ledgerRows").innerHTML = "";
+  _ledgerNextCursor = null;
+  _ledgerExpanded = {};
+  await loadMoreLedger();
+}
+
+async function loadMoreLedger() {
+  document.getElementById("ledgerError").textContent = "";
+  const params = new URLSearchParams(ledgerFilterParams());
+  if (_ledgerNextCursor) params.set("cursor", _ledgerNextCursor);
+  try {
+    const resp = await authedFetch(`/admin/request-logs?${params.toString()}`);
+    const rows = resp.data || [];
+    _ledgerNextCursor = resp.next_cursor || null;
+
+    const tbody = document.getElementById("ledgerRows");
+    if (rows.length === 0 && tbody.children.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="8" class="empty">No matching requests.</td></tr>';
+    } else {
+      for (const r of rows) tbody.insertAdjacentHTML("beforeend", ledgerRowHtml(r));
+    }
+    document.getElementById("ledgerLoadMore").style.display = _ledgerNextCursor ? "" : "none";
+  } catch (e) {
+    if (e.message === "UNAUTHORIZED") throw e;
+    document.getElementById("ledgerError").textContent = "Failed to load: " + e.message;
+  }
+}
+
+function ledgerRowHtml(r) {
+  const channelLabel = r.source_channel === "kefu" ? "Kefu" : "Smart Bot";
+  return `
+    <tr>
+      <td>${escapeHtml(r.serial_number)}</td>
+      <td>${fmtDate(r.created_at)}</td>
+      <td>${escapeHtml(r.display_name || r.wechat_openid || "—")}</td>
+      <td>${escapeHtml(channelLabel)}</td>
+      <td>${escapeHtml(r.service_name || "—")}</td>
+      <td>${escapeHtml(r.status)}</td>
+      <td>${fmtDate(r.completed_at)}</td>
+      <td><button class="secondary" onclick="toggleLedgerDetail('${r.serial_number}', this)">Details</button></td>
+    </tr>
+    <tr id="ledger-detail-row-${cssEscape(r.serial_number)}" style="display:none;">
+      <td colspan="8"><div class="ledger-detail" id="ledger-detail-${cssEscape(r.serial_number)}"></div></td>
+    </tr>
+  `;
+}
+
+function cssEscape(s) {
+  // serial numbers are REQ-YYYYMMDD-NNNNNN today, but escape defensively
+  // rather than assume that shape forever.
+  return String(s).replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+async function toggleLedgerDetail(serial, buttonEl) {
+  const rowId = `ledger-detail-row-${cssEscape(serial)}`;
+  const containerId = `ledger-detail-${cssEscape(serial)}`;
+  const row = document.getElementById(rowId);
+  const nowOpen = row.style.display === "none";
+  row.style.display = nowOpen ? "" : "none";
+  buttonEl.textContent = nowOpen ? "Hide" : "Details";
+  if (nowOpen && !_ledgerExpanded[serial]) {
+    _ledgerExpanded[serial] = true;
+    const container = document.getElementById(containerId);
+    container.innerHTML = '<span class="empty">Loading…</span>';
+    try {
+      const resp = await authedFetch(`/admin/request-logs/${encodeURIComponent(serial)}`);
+      container.innerHTML = ledgerDetailHtml(resp.data);
+    } catch (e) {
+      if (e.message === "UNAUTHORIZED") throw e;
+      container.innerHTML = `<span class="error">Failed to load: ${escapeHtml(e.message)}</span>`;
+      _ledgerExpanded[serial] = false;
+    }
+  }
+}
+
+function ledgerDetailHtml(detail) {
+  const sessions = detail.sessions || [];
+  if (sessions.length === 0) {
+    return '<div class="empty">No conversation found for this request.</div>';
+  }
+  return sessions.map((s, i) => {
+    const actorLabel = s.actor && s.actor.display_name
+      ? s.actor.display_name
+      : (s.actor && s.actor.id) || "unknown";
+    const header = `Session ${i + 1} — ${escapeHtml(s.service_name || "?")} — ${escapeHtml(s.status)} — ${escapeHtml(actorLabel)} — ${fmtDate(s.created_at)}`;
+    const lines = (s.conversation_history || []).map(turn => {
+      const who = turn.role === "assistant" ? "Bot" : "User";
+      // User-authored message text must never be interpolated unescaped
+      // into innerHTML -- escapeHtml() here is mandatory, not optional.
+      return `<div class="chat-line"><span class="who">${escapeHtml(who)}:</span>${escapeHtml(turn.content || "")}</div>`;
+    }).join("");
+    return `
+      <div class="session-block">
+        <div class="session-header">${header}</div>
+        ${lines || '<div class="empty">(no turns recorded)</div>'}
+      </div>
+    `;
+  }).join("");
 }
 
 async function loadAll() {

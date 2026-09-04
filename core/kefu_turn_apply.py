@@ -279,6 +279,31 @@ def _load_log(db: DBSession, session):
     return db.get(RequestLog, session.request_log_id)
 
 
+def _discard_placeholder_log(db: DBSession, session, log) -> None:
+    """
+    Cancels the session and deletes the turn-local placeholder request_log
+    row created for it earlier in this same call to apply_kefu_turn --
+    called only when that placeholder turns out to have no real target
+    (unknown/wrong-status serial, or a targets_existing_request service
+    with zero eligible candidates). Never called for a log that predates
+    this turn (a real, possibly still-relevant row).
+
+    session.request_log_id is set to None explicitly rather than relying
+    on the database's own ON DELETE SET NULL (db/migrations/V1__initial_
+    schema.sql's fk_session_request_log) -- models/session.py's column
+    omits the ORM-level ForeignKey() declaration, so SQLAlchemy's unit of
+    work has no knowledge of that cascade. core/kefu_case_adapter.py's
+    _finalize_turn reads session.request_log_id directly moments later in
+    this same request-processing flow, before any reload would pick up a
+    DB-side cascade.
+    """
+    session.status = "cancelled"
+    session.request_log_id = None
+    if log is not None:
+        db.delete(log)
+        db.flush()
+
+
 def _resolve_existing_target(db: DBSession, session, owned_log):
     from models.request_log import RequestLog
     reference = (session.collected_fields or {}).get("reference_serial")
@@ -710,6 +735,7 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
     from models.request_log import RequestLog
     from models.session import ConversationSession
 
+    log_created_this_turn = False
     if session is None:
         session = ConversationSession(
             wechat_openid=None,
@@ -738,6 +764,7 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
         db.add(log)
         db.flush()
         session.request_log_id = log.log_id
+        log_created_this_turn = True
         key = context.get("_kefu_execution_key")
         if key:
             db.query(CaseExecution).filter_by(execution_key=key, status="claimed").update({"session_id": session.session_id})
@@ -766,6 +793,7 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
             db.add(log)
             db.flush()
             session.request_log_id = log.log_id
+            log_created_this_turn = True
         key = context.get("_kefu_execution_key")
         if key:
             db.query(CaseExecution).filter_by(execution_key=key, status="claimed").update(
@@ -841,6 +869,8 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
     if service.get("targets_existing_request", False):
         serial_reply = _resolve_reference_serial(context, session, service)
         if serial_reply is not None:
+            if log_created_this_turn:
+                _discard_placeholder_log(db, session, log)
             context["_reply"] = serial_reply
             _append(session, "assistant", serial_reply)
             return serial_reply
@@ -868,7 +898,10 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
     if service.get("targets_existing_request", False):
         target, target_error = _resolve_existing_target(db, session, log)
         if target_error:
-            session.status = "cancelled"
+            if log_created_this_turn:
+                _discard_placeholder_log(db, session, log)
+            else:
+                session.status = "cancelled"
             context["_reply"] = target_error
             _append(session, "assistant", target_error)
             return target_error

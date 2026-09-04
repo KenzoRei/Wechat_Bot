@@ -383,7 +383,7 @@ there is no way to deliver it privately to just the person who asked.
 ```
 
 **For a U-Choice group specifically:**
-- Step 5/6: use `warehouseman`/`accountant` roles too where applicable, and pass `warehouse_code` for any `warehouseman` — required, 400 without it.
+- Step 5/6: use `warehouseman`/`accountant` roles too where applicable, and pass `warehouse_codes` (a list) for any `warehouseman` — required, 400 without it.
 - Step 7: U-Choice services need no `config` at all — pass `{}`. See the U-Choice service catalog table above for the 12 `service_type_id`/`workflow_id` pairs.
 - MVP design is **one shared group** with all four roles as members, gated by step 8 — not separate groups per role. The original reasoning and deferred multi-tenant alternative are preserved in the [historical U-Choice design](../archive/designs/uchoice-original-design.md).
 - Step 9.5 (not in the numbered list above, easy to forget): `PATCH /admin/groups/{id}` with `group_robot_webhook_url` — without it, the daily digest, monthly invoice, cross-group completion notifications, and Excel invoice exports all silently no-op for that group.

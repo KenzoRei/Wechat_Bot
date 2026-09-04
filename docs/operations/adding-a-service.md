@@ -104,8 +104,9 @@ Register it in `handlers/registry.py`'s `HANDLER_REGISTRY` dict, keyed by the
 exact `step_type` string from step 2.
 
 **What's already on `context` when your handler runs**, without you having to
-fetch it again: `wechat_openid`, `group_id`, `warehouse_code` (the *caller's*
-own, from `AccessResult` — not necessarily the request's), `display_name`,
+fetch it again: `wechat_openid`, `group_id`, `warehouse_codes` (the
+*caller's* own list, from `AccessResult` — not necessarily the request's),
+`display_name`,
 `role`, `collected_fields`, `serial_number`, `request_log_id`, `result`
 (accumulated from prior steps in this same workflow run — mutating
 `context["result"]` in an earlier step makes it visible to later ones and to

@@ -9,6 +9,62 @@ here.
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-09-04
+
+### Added
+- Admin panel: a **Transactions** tab — a paginated, filterable ledger over
+  `request_log` (status/channel/date-range filters, keyset pagination),
+  with each row expandable to show every `conversation_session` that ever
+  touched that request (not just the first), rendered as labeled,
+  HTML-escaped conversation transcripts.
+- Admin panel: **Staff & Groups** tab consolidates the existing Kefu Staff
+  and Groups/Members sections into one tabbed view.
+- Kefu Staff warehouse assignment is now checkboxes sourced from the
+  server's own `VALID_WAREHOUSE_CODES` (via a new `warehouse_codes` field
+  on `GET /admin/roles`), replacing a free-text input that only found out
+  about a typo after submitting.
+- `GET /admin/request-logs` (existing endpoint) gains `source_channel` in
+  its response, a `kefu_staff` join for Kefu rows' `display_name`
+  (previously always `None` for Kefu), and a `sessions` array on the
+  detail endpoint for the ledger's conversation view.
+- `db/migrations/V25__conversation_session_request_log_index.sql` — indexes
+  `conversation_session(request_log_id)`, the ledger's per-row conversation
+  lookup.
+
+### Fixed
+- A `targets_existing_request` service (`confirm_inbound_completion`,
+  `confirm_outbound_completion`, `cancel_inbound_request`,
+  `cancel_outbound_request`) unconditionally created a placeholder
+  `conversation_session`/`request_log` pair before knowing whether a real
+  target existed. Four separate rejection paths — zero eligible
+  candidates, an explicitly-referenced serial that doesn't exist, one that
+  exists but isn't `processing`, and a single eligible candidate missing
+  its own serial number — left that placeholder behind permanently
+  (`status='pending'`, real user text, never resolved). Found live in
+  production (`REQ-20260903-000022`, unresolved since creation). All four
+  paths now discard the placeholder and end the session terminal in one
+  step (`core/kefu_turn_apply.py`).
+- `GET /admin/request-logs` raised a Pydantic validation error on any
+  Kefu-originated row — `wechat_openid` was typed as required `str`, but
+  Kefu rows genuinely store it as `NULL` (Kefu identifies by
+  `submitted_by_staff_id` instead). This endpoint had likely never
+  successfully listed a single Kefu request before this fix.
+- Its date filters used `datetime.fromisoformat(...).replace(tzinfo=utc)`,
+  which relabels an offset-aware timestamp instead of converting it (a
+  `-04:00` input was silently treated as `+00:00`, off by however many
+  hours the offset was). Now converts via `.astimezone(timezone.utc)`.
+- A cursor that was valid base64/JSON/ISO-datetime but carried a
+  non-UUID `log_id` passed `_decode_cursor`'s own checks and reached the
+  PostgreSQL keyset query uncaught, surfacing as a raw 500 instead of a
+  400. `log_id` is now validated as a real UUID in the same decode step.
+- The admin panel's ledger date-to filter sent `T23:59:59`, excluding
+  anything in the final fractional second of the selected day; now
+  `T23:59:59.999999`, the true end of the day at Postgres's own
+  microsecond precision.
+- Multiple sessions sharing an identical `created_at` (possible since
+  `now()` returns transaction-start time, not per-statement time) had no
+  deterministic order; `session_id` is now a tie-breaker.
+
 ## [1.0.2] - 2026-09-03
 
 ### Fixed
@@ -89,6 +145,7 @@ here.
 - Archived the reviewed design plan for the above under
   `docs/archive/collaboration/2026-09-warehouse-array-and-cancel-service/`.
 
-[Unreleased]: https://github.com/KenzoRei/Wechat_Bot/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/KenzoRei/Wechat_Bot/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/KenzoRei/Wechat_Bot/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/KenzoRei/Wechat_Bot/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/KenzoRei/Wechat_Bot/compare/v1.0.0...v1.0.1

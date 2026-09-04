@@ -171,15 +171,39 @@ class WorkflowResponse(BaseModel):
 # ── Request Logs ──────────────────────────────────────────────────────────────
 
 class RequestLogSummary(BaseModel):
-    log_id:        UUID
-    serial_number: str
-    wechat_openid: str
-    display_name:  str | None
-    group_id:      UUID | None
-    service_name:  str | None
-    status:        str
-    created_at:    datetime
-    completed_at:  datetime | None
+    log_id:         UUID
+    serial_number:  str
+    # Kefu-originated rows genuinely store this as NULL (Kefu identifies by
+    # submitted_by_staff_id instead) -- this was previously typed as
+    # required `str`, so listing/fetching any Kefu row raised a Pydantic
+    # validation error. Confirmed live: this endpoint could never have
+    # successfully returned a single Kefu-originated request before this
+    # fix.
+    wechat_openid:  str | None
+    display_name:   str | None
+    group_id:       UUID | None
+    service_name:   str | None
+    source_channel: str
+    status:         str
+    created_at:     datetime
+    completed_at:   datetime | None
+
+
+class SessionActor(BaseModel):
+    kind:         str  # "group_member" (Smart Bot) | "kefu_staff" (Kefu)
+    id:           str | None
+    display_name: str | None
+
+
+class RequestLogSession(BaseModel):
+    session_id:           UUID
+    service_name:         str | None
+    status:                str
+    source_channel:        str
+    actor:                 SessionActor
+    created_at:            datetime
+    updated_at:            datetime
+    conversation_history:  list[dict]
 
 
 class RequestLogDetail(RequestLogSummary):
@@ -188,6 +212,7 @@ class RequestLogDetail(RequestLogSummary):
     parsed_input:   dict
     result:         Any
     error_detail:   str | None
+    sessions:       list[RequestLogSession]
 
 
 # ── Sessions ──────────────────────────────────────────────────────────────────

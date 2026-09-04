@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from middleware.admin_auth import verify_admin_key
-from core.uchoice_constants import ASSIGNABLE_ROLE_NAMES
+from core.uchoice_constants import ASSIGNABLE_ROLE_NAMES, VALID_WAREHOUSE_CODES
 from models.role import Role
 from api.schemas import RoleCreate, RoleResponse
 
@@ -23,7 +23,13 @@ def _to_response(role: Role) -> RoleResponse:
 @router.get("")
 def list_roles(db: Session = Depends(get_db)):
     roles = db.query(Role).order_by(Role.name).all()
-    return {"data": [_to_response(r) for r in roles]}
+    # A separate top-level key, not folded into `data` -- keeps the
+    # existing `resp.data` array-of-roles shape untouched for every
+    # existing caller. Sourced from the same VALID_WAREHOUSE_CODES constant
+    # the backend already validates warehouse_codes against, so the panel's
+    # checkbox list can never silently drift from what the server actually
+    # accepts.
+    return {"data": [_to_response(r) for r in roles], "warehouse_codes": sorted(VALID_WAREHOUSE_CODES)}
 
 
 @router.post("", status_code=201)
