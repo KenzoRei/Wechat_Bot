@@ -275,6 +275,17 @@ def _outbound_sections_builder(collected_fields: dict, db: DBSession) -> list[di
         addr = db.query(UchoiceAddress).filter_by(address_id=dest_id).first()
         dest_label = format_address_label(addr)
         sections.append({"label": None, "type": "list", "items": [f"目的地：{dest_label}"]})
+        # Future tense, deliberately different wording from
+        # _outbound_completion_sections_builder's own warning below --
+        # confirming THIS request only advances it to 'processing', it
+        # does not move any inventory yet. That happens later, when a
+        # warehouseman confirms completion; the completion builder's
+        # present-tense wording is correct there, not here.
+        if addr and addr.destination_warehouse_code:
+            sections.append({
+                "label": None, "type": "list",
+                "items": [f"⚠️ 此为内部调仓：仓库确认出库完成后，将同时增加 {addr.destination_warehouse_code} 仓对应库存"],
+            })
 
     new_pallet_count = collected_fields.get("new_pallet_count")
     if new_pallet_count:

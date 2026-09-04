@@ -4,6 +4,7 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session as DBSession
 from models.session import ConversationSession
 from models.request_log import RequestLog
+from models.service import ServiceType
 from core.access_control import AccessResult
 from core import uchoice_context
 import config
@@ -182,6 +183,23 @@ def build_context(
     }
 
 
+def _service_type_id_by_name(db: DBSession, service_name: str) -> str | None:
+    """
+    Global, permanent service-catalog lookup -- independent of both the
+    caller's own role grants (group_service_role) and the group's current
+    service enablement (group_service). Neither of those answers the
+    question this needs: "what service_type_id does uchoice_outbound_request
+    have", a fact about the catalog, not about who's asking or whether the
+    CREATION service happens to still be enabled for this group.
+    request_log.service_type_id is FK'd straight to service_type, with no
+    relationship to group_service at all -- an admin disabling new-order
+    intake for a group must not make already-processing requests invisible
+    to completion/cancellation.
+    """
+    row = db.query(ServiceType.service_type_id).filter_by(name=service_name).first()
+    return str(row[0]) if row else None
+
+
 def _build_uchoice_candidates(
     db: DBSession,
     access: AccessResult,
@@ -324,25 +342,57 @@ def _build_uchoice_candidates(
 
     pending_allowed_warehouses = [scope_warehouse] if scope_warehouse else allowed_warehouse_codes
 
-    if "confirm_inbound_completion" in names and "uchoice_inbound_request" in by_name:
-        candidates["pending_inbound_requests"] = uchoice_context.pending_request_candidates(
-            db, access.group_id, pending_allowed_warehouses, [by_name["uchoice_inbound_request"]]
-        )
+    # The paired creation service's service_type_id must NOT come from
+    # by_name (the caller's own granted-services dict) or from a
+    # group_service join (the group's current creation-service
+    # enablement). Neither answers the actual question here -- gating on
+    # by_name silently hid every pending/cancelable candidate from any
+    # role authorized to complete/cancel but not to create (warehouseman
+    # for confirm_inbound_completion/confirm_outbound_completion, live and
+    # confirmed broken); gating on group_service would have replaced that
+    # with a different trigger for the same bug, since
+    # DELETE /admin/groups/{id}/services/{id} hard-deletes the
+    # group_service row (api/admin/services.py) with no check for
+    # existing 'processing' requests, and group_service_role cascades on
+    # it too. request_log.service_type_id is a plain FK straight to
+    # service_type (ON DELETE SET NULL, models/request_log.py) with no
+    # relationship to group_service at all -- this is a permanent,
+    # global catalog fact, resolved the same way regardless of who's
+    # asking or whether the group still offers the creation service.
+    # Every other gate that actually matters for tenant/authorization
+    # safety is already enforced elsewhere: "confirm_outbound_completion"
+    # in names (the caller can invoke completion/cancel at all),
+    # RequestLog.status == 'processing' and RequestLog.group_id ==
+    # access.group_id inside pending_request_candidates/
+    # cancelable_request_candidates, plus warehouse scope (completion) or
+    # ownership/admin scope (cancellation) within those same functions.
+    if "confirm_inbound_completion" in names:
+        inbound_id = _service_type_id_by_name(db, "uchoice_inbound_request")
+        if inbound_id:
+            candidates["pending_inbound_requests"] = uchoice_context.pending_request_candidates(
+                db, access.group_id, pending_allowed_warehouses, [inbound_id]
+            )
 
-    if "confirm_outbound_completion" in names and "uchoice_outbound_request" in by_name:
-        candidates["pending_outbound_requests"] = uchoice_context.pending_request_candidates(
-            db, access.group_id, pending_allowed_warehouses, [by_name["uchoice_outbound_request"]]
-        )
+    if "confirm_outbound_completion" in names:
+        outbound_id = _service_type_id_by_name(db, "uchoice_outbound_request")
+        if outbound_id:
+            candidates["pending_outbound_requests"] = uchoice_context.pending_request_candidates(
+                db, access.group_id, pending_allowed_warehouses, [outbound_id]
+            )
 
-    if "cancel_inbound_request" in names and "uchoice_inbound_request" in by_name:
-        candidates["cancelable_inbound_requests"] = uchoice_context.cancelable_request_candidates(
-            db, access.group_id, [by_name["uchoice_inbound_request"]], access
-        )
+    if "cancel_inbound_request" in names:
+        inbound_id = _service_type_id_by_name(db, "uchoice_inbound_request")
+        if inbound_id:
+            candidates["cancelable_inbound_requests"] = uchoice_context.cancelable_request_candidates(
+                db, access.group_id, [inbound_id], access
+            )
 
-    if "cancel_outbound_request" in names and "uchoice_outbound_request" in by_name:
-        candidates["cancelable_outbound_requests"] = uchoice_context.cancelable_request_candidates(
-            db, access.group_id, [by_name["uchoice_outbound_request"]], access
-        )
+    if "cancel_outbound_request" in names:
+        outbound_id = _service_type_id_by_name(db, "uchoice_outbound_request")
+        if outbound_id:
+            candidates["cancelable_outbound_requests"] = uchoice_context.cancelable_request_candidates(
+                db, access.group_id, [outbound_id], access
+            )
 
     if "role_change" in names:
         candidates["members"] = uchoice_context.member_candidates(db, access.group_id)

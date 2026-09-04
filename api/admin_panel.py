@@ -257,6 +257,11 @@ _PANEL_HTML = """<!doctype html>
         <input type="date" id="ledgerDateFrom" onchange="reloadLedger()">
         <span>to</span>
         <input type="date" id="ledgerDateTo" onchange="reloadLedger()">
+        <select id="ledgerPageSize" onchange="reloadLedger()">
+          <option value="25" selected>25 / page</option>
+          <option value="50">50 / page</option>
+          <option value="100">100 / page</option>
+        </select>
         <button class="secondary" onclick="clearLedgerFilters()">Clear filters</button>
       </div>
       <table>
@@ -503,6 +508,7 @@ function ledgerFilterParams() {
   // timestamptz's own precision ceiling is microseconds, so .999999 is
   // the true end of the selected day, not an approximation.
   if (dateTo) params.date_to = `${dateTo}T23:59:59.999999`;
+  params.page_size = document.getElementById("ledgerPageSize").value;
   return params;
 }
 

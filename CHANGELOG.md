@@ -9,6 +9,40 @@ here.
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-09-04
+
+### Added
+- Outbound order-creation confirmation now shows the internal-transfer
+  warning ("⚠️ 此为内部调仓...") whenever the destination resolves to one of
+  the company's own warehouses, not just at warehouse-completion time.
+  Worded in future tense (`core/confirmation.py`'s `_outbound_sections_builder`)
+  since confirming at creation only advances the request to `processing` —
+  no inventory moves until a warehouseman later confirms completion, where
+  the existing present-tense warning still applies unchanged.
+- Admin panel: Transactions tab gets a page-size selector (25/50/100,
+  default 25), wired to the existing `page_size` query param on
+  `GET /admin/request-logs`.
+
+### Fixed
+- `core/session_manager.py`'s `_build_uchoice_candidates()` gated the
+  pending/cancelable candidate list for `confirm_inbound_completion`,
+  `confirm_outbound_completion`, `cancel_inbound_request`, and
+  `cancel_outbound_request` on whether the CALLER's own role also held the
+  paired creation service (e.g. `uchoice_outbound_request`). A pure
+  warehouseman — whose entire job is completing requests, never creating
+  them — never holds that grant, so the candidate list was silently empty
+  regardless of real `request_log` content. Found live in production: a
+  warehouseman ("Jeff") was rejected with "当前没有待处理的出库申请，无需
+  操作。" on a genuine `processing` outbound request assigned to his
+  warehouse, on two separate days, across both the pending-completion and
+  (latently, since no role's real grants ever triggered it) the
+  cancellation paths. The paired service's `service_type_id` is now
+  resolved via a global `service_type` catalog lookup, independent of both
+  the caller's own grants and the group's current service enablement
+  (`request_log.service_type_id` has no dependency on `group_service` at
+  all, so an admin disabling new-order intake for a group must not hide
+  already-processing requests from completion/cancellation either).
+
 ## [1.0.3] - 2026-09-04
 
 ### Added
@@ -145,7 +179,8 @@ here.
 - Archived the reviewed design plan for the above under
   `docs/archive/collaboration/2026-09-warehouse-array-and-cancel-service/`.
 
-[Unreleased]: https://github.com/KenzoRei/Wechat_Bot/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/KenzoRei/Wechat_Bot/compare/v1.0.4...HEAD
+[1.0.4]: https://github.com/KenzoRei/Wechat_Bot/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/KenzoRei/Wechat_Bot/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/KenzoRei/Wechat_Bot/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/KenzoRei/Wechat_Bot/compare/v1.0.0...v1.0.1
