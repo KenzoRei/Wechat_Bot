@@ -33,7 +33,7 @@ from jobs.session_expiry import run_expiry_check
 from jobs.uchoice_daily import run_uchoice_daily
 from jobs.uchoice_invoice import run_uchoice_invoice
 from api import health, labels, admin_panel, file_download
-from api.admin import groups, members, services, reference, logs, sessions, roles, invoices, kefu_staff
+from api.admin import groups, members, services, reference, logs, sessions, roles, invoices, kefu_staff, customers
 
 
 # ── Scheduler setup ───────────────────────────────────────────────────────────
@@ -209,3 +209,4 @@ app.include_router(sessions.router)
 app.include_router(roles.router)
 app.include_router(invoices.router)
 app.include_router(kefu_staff.router)
+app.include_router(customers.router)

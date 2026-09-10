@@ -326,6 +326,24 @@ def _valid_role_change_target_and_role(context: dict, collected_fields: dict, db
             codes_list = "、".join(sorted(VALID_WAREHOUSE_CODES))
             return f"指派为仓库管理员需要提供至少一个有效的仓库代码（{codes_list}）。"
 
+    if new_role == "customer":
+        # KefuStaff has no billing_customer_id column at all -- internal
+        # staff are never customers themselves, so this must be rejected
+        # here, before confirmation, not silently accepted and then fail
+        # (or worse, be silently ignored) at the mutation boundary.
+        target_identity = parse_target_identity(target_openid) if target_openid else None
+        if target_identity and target_identity.kind == "kefu":
+            return "客服账号不能设置为客户角色。"
+        billing_customer_id = collected_fields.get("billing_customer_id")
+        if not billing_customer_id:
+            return "指派为客户角色需要提供关联的客户编号（格式 F 加 6 位数字）。"
+        from core import customer_directory
+        record = customer_directory.get_customer(db, billing_customer_id)
+        if record is None:
+            return f"未找到客户编号 {billing_customer_id}，请确认后重新提供。"
+        if record.status != "active":
+            return f"客户 {billing_customer_id} 当前状态为「{record.status}」，无法关联，请联系管理员。"
+
     return None
 
 

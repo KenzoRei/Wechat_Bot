@@ -5,6 +5,7 @@ from database import get_db
 from middleware.admin_auth import verify_admin_key
 from core.admin_invariants import lock_group_admin_invariant, would_remove_last_admin
 from core.uchoice_constants import ASSIGNABLE_ROLE_NAMES
+from core import customer_directory
 from models.group import GroupConfig, GroupMember
 from models.role import Role
 from api.schemas import MemberCreate, MemberUpdate, MemberResponse
@@ -50,6 +51,26 @@ def _clean_warehouse_codes(raw: list[str] | None) -> list[str] | None:
     return cleaned
 
 
+def _resolve_billing_customer_id(db: Session, raw: str | None) -> str:
+    """
+    Validates a billing_customer_id against the real customer directory
+    before it can ever be written -- an admin write, not AI-extracted
+    input, so a 400 on an unknown/inactive id is correct, not a "preserve
+    valid progress" fallback. This is the create/update-time counterpart
+    to core.customer_directory.resolve_billing_customer_id's own runtime
+    checks; both must independently reject the same bad values.
+    """
+    if not raw or not raw.strip():
+        raise HTTPException(status_code=400, detail="billing_customer_id is required for role=customer")
+    customer_id = raw.strip()
+    record = customer_directory.get_customer(db, customer_id)
+    if record is None:
+        raise HTTPException(status_code=400, detail=f"Unknown customer_id: '{customer_id}'. See GET /admin/customers")
+    if record.status != "active":
+        raise HTTPException(status_code=400, detail=f"Customer '{customer_id}' is not active (status={record.status!r})")
+    return customer_id
+
+
 def _to_response(member: GroupMember, role_name: str) -> MemberResponse:
     return MemberResponse(
         wechat_openid=member.wechat_openid,
@@ -57,6 +78,7 @@ def _to_response(member: GroupMember, role_name: str) -> MemberResponse:
         role=role_name,
         display_name=member.display_name,
         warehouse_codes=member.warehouse_codes,
+        billing_customer_id=member.billing_customer_id,
         is_active=member.is_active,
         joined_at=member.joined_at,
     )
@@ -74,6 +96,8 @@ def add_member(group_id: str, body: MemberCreate, db: Session = Depends(get_db))
     if role.name == "warehouseman" and not warehouse_codes:
         raise HTTPException(status_code=400, detail="warehouse_codes is required for role=warehouseman")
 
+    billing_customer_id = _resolve_billing_customer_id(db, body.billing_customer_id) if role.name == "customer" else None
+
     existing = db.query(GroupMember).filter_by(
         wechat_openid=body.wechat_openid, group_id=group_id
     ).first()
@@ -86,6 +110,7 @@ def add_member(group_id: str, body: MemberCreate, db: Session = Depends(get_db))
         role_id=role.role_id,
         display_name=body.display_name,
         warehouse_codes=warehouse_codes if role.name == "warehouseman" else None,
+        billing_customer_id=billing_customer_id,
     )
     db.add(member)
     db.commit()
@@ -153,6 +178,16 @@ def update_member(
         else:
             # cleared automatically whenever a member's role changes away from warehouseman
             member.warehouse_codes = None
+        if role.name == "customer":
+            new_billing_id = body.billing_customer_id if body.billing_customer_id is not None else member.billing_customer_id
+            member.billing_customer_id = _resolve_billing_customer_id(db, new_billing_id)
+        else:
+            # Cleared automatically whenever a member's role changes away
+            # from customer -- a former customer's stale binding must never
+            # be left in place once they're reassigned to a staff role,
+            # where it would otherwise be silently ignored rather than
+            # actively wrong, but clearing it is the safer default.
+            member.billing_customer_id = None
     elif body.warehouse_codes is not None:
         # role unchanged this call — only meaningful if the member is already a warehouseman
         if not current_role or current_role.name != "warehouseman":
@@ -161,6 +196,12 @@ def update_member(
         if not cleaned:
             raise HTTPException(status_code=400, detail="warehouse_codes cannot be empty")
         member.warehouse_codes = cleaned
+
+    if new_role is None and body.billing_customer_id is not None:
+        # role unchanged this call — only meaningful if the member is already a customer
+        if not current_role or current_role.name != "customer":
+            raise HTTPException(status_code=400, detail="billing_customer_id only applies to role=customer")
+        member.billing_customer_id = _resolve_billing_customer_id(db, body.billing_customer_id)
 
     if body.is_active is not None:
         member.is_active = body.is_active

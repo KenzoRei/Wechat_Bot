@@ -147,6 +147,19 @@ def test_pre_confirm_accepts_valid_kefu_warehouseman_promotion():
     assert error is None
 
 
+def test_pre_confirm_rejects_kefu_target_for_customer_role():
+    """KefuStaff has no billing_customer_id column -- internal staff are
+    never customers themselves, so this must be rejected outright,
+    regardless of anything else about the request."""
+    db = _MockDB(kefu_members={KEFU_ID: "admin"})
+    error = pre_confirm_validators.run(
+        "role_change", {"group_id": "g1"},
+        {"target_openid": tag_kefu_identity(KEFU_ID), "new_role": "customer"}, db,
+    )
+    assert error is not None
+    assert "客服账号" in error
+
+
 def test_pre_confirm_rejects_unknown_kefu_target():
     db = _MockDB(kefu_members={})
     error = pre_confirm_validators.run(
@@ -167,7 +180,7 @@ def test_last_admin_protection_counts_across_both_channels():
     # Demoting the sole (Kefu) admin must be blocked.
     error = pre_confirm_validators.run(
         "role_change", {"group_id": "g1"},
-        {"target_openid": tag_kefu_identity(KEFU_ID), "new_role": "customer"}, db,
+        {"target_openid": tag_kefu_identity(KEFU_ID), "new_role": "accountant"}, db,
     )
     assert error is not None
 
@@ -180,7 +193,7 @@ def test_last_admin_protection_allows_demotion_when_another_admin_exists_in_othe
     # Two admins total (one per channel) -- demoting one is fine.
     error = pre_confirm_validators.run(
         "role_change", {"group_id": "g1"},
-        {"target_openid": tag_kefu_identity(KEFU_ID), "new_role": "customer"}, db,
+        {"target_openid": tag_kefu_identity(KEFU_ID), "new_role": "accountant"}, db,
     )
     assert error is None
 
@@ -198,7 +211,7 @@ def test_last_admin_protection_allows_reassigning_an_already_inactive_kefu_admin
     )
     error = pre_confirm_validators.run(
         "role_change", {"group_id": "g1"},
-        {"target_openid": tag_kefu_identity(KEFU_ID), "new_role": "customer"}, db,
+        {"target_openid": tag_kefu_identity(KEFU_ID), "new_role": "accountant"}, db,
     )
     assert error is None
 

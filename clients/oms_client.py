@@ -119,6 +119,7 @@ def create_work_order(
     app_secret:                  str,
     associated_tracking_no:      str = "",
     associated_tracking_no_type: int = 0,
+    unmatched_oms_order_no:      str = "",
 ) -> str:
     """
     Creates an OMS work order (workTypeCode = 通用).
@@ -130,8 +131,16 @@ def create_work_order(
         Leave both at defaults (empty / 0) for no-OMS-order shipments.
         Set associated_tracking_no_type=2, associated_tracking_no=oms_outbound_order_no
         when linking to an existing OMS outbound order.
+
+    unmatched_oms_order_no:
+        Set when the customer supplied an oms_outbound_order_no but OMS's
+        own lookup could not find it -- preserves the raw value in the
+        remark for manual reconciliation, rather than either silently
+        dropping it or (the previous, incorrect behavior) still claiming a
+        verified link via associated_tracking_no to an order OMS just said
+        doesn't exist. Never set together with associated_tracking_no.
     """
-    remark = _build_remark(tracking_number, collected_fields)
+    remark = _build_remark(tracking_number, collected_fields, unmatched_oms_order_no)
 
     data: dict = {
         "thirdNo":      third_no,
@@ -150,10 +159,14 @@ def create_work_order(
     return result.get("data", "")
 
 
-def _build_remark(tracking_number: str, fields: dict) -> str:
+def _build_remark(tracking_number: str, fields: dict, unmatched_oms_order_no: str = "") -> str:
     """Builds the work order remark with all shipment details."""
     lines = [
         f"标签追踪号: {tracking_number}",
+    ]
+    if unmatched_oms_order_no:
+        lines.append(f"客户提供的OMS出库单号（系统未查到匹配）: {unmatched_oms_order_no}")
+    lines += [
         "",
         "发件人:",
         f"  姓名: {fields.get('shipper_name', '')}",

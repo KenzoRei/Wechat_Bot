@@ -152,6 +152,11 @@ def build_context(
         "role":              access.role,
         "display_name":      access.display_name,
         "warehouse_codes":   access.warehouse_codes,
+        # Set only for role=customer (GroupMember; always None for Kefu
+        # staff -- see core.customer_directory.resolve_billing_customer_id).
+        # Deliberately NOT named customer_id -- see that column's own
+        # comment for the unrelated, pre-existing meaning of that name here.
+        "requester_billing_customer_id": access.billing_customer_id,
         "allowed_services":  access.allowed_services,
         "group_context":     access.group_context,
         "group_description": access.group_description,

@@ -9,6 +9,53 @@ here.
 
 ## [Unreleased]
 
+### Added
+- New `customer`/`customer_credential`/`label_shipment` tables and
+  `core/customer_directory.py`: a central, `F######`-keyed customer
+  master-data module embedded in this service (not yet a separate
+  deployment), holding profile data, per-carrier `ydd_channel_id`/
+  `rate_multiplier` (reserved for a future pickup-scheduling pipeline,
+  unused by labels), and AES-256-GCM-encrypted OMS/YDD credentials
+  (`customer_credential`, write-only at the API layer — no endpoint ever
+  returns a decrypted or encrypted value).
+- `GroupMember.billing_customer_id`: a new, explicitly-named (not
+  `customer_id`, to avoid colliding with the pre-existing
+  `uchoice_customer`-linked concept) binding from a customer-role member to
+  their `customer` row. Enforced end-to-end: admin API
+  (`api/admin/members.py`), conversational role changes
+  (`handlers/uchoice/role_change.py`), and label-creation turns
+  (`core/customer_directory.resolve_billing_customer_id`, wired into both
+  `core/workflow_engine.py` and `core/kefu_turn_apply.py`) all require,
+  validate, and clear this binding consistently — a customer-role caller's
+  own binding is always authoritative and can never be overridden by a
+  supplied value; an unbound customer-role caller is rejected outright
+  rather than falling through to staff-style validation.
+- Admin panel: new "Customers" tab (list/create, `status`, `oms_wh_code`,
+  `ydd_channel_id`/`rate_multiplier` JSON editors, write-only "Set/Rotate"
+  credential actions).
+- `clients/yidida_client.py::get_price_quote()`: calls YiDiDa's separate
+  `/price` endpoint (label creation's `/yundans` carries no pricing fields)
+  to fetch `sales_amount` for a completed label. Wired into
+  `handlers/label/base.py` right after label creation, non-fatally (a
+  quote failure never blocks label delivery); the result is persisted by
+  `handlers/oms_create_workorder.py` into the new `label_shipment` table.
+- `label_agent` added as an assignable role name; `fedex_label`/
+  `ups_label` are now grantable and enabled on the Kefu channel as well
+  (previously Smart-Bot-only despite being grantable via
+  `group_service_role`).
+
+### Changed
+- `handlers/label/base.py` now reads OMS/YDD credentials from
+  `customer_directory` instead of `group_service.config`, and revalidates
+  the `billing_customer_id` binding immediately before calling YDD (not
+  just at field-collection time), catching a customer deactivated or a
+  member rebound between collection and confirmation.
+- `handlers/oms_create_workorder.py` is now customer-driven and
+  failure-tolerant: missing credentials or a missing `oms_wh_code` skip
+  the OMS call cleanly (recorded, not fatal), and OMS API failures
+  (timeouts included) are caught and recorded rather than aborting the
+  turn and rolling back an already-created label.
+
 ## [1.0.4] - 2026-09-04
 
 ### Added

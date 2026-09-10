@@ -41,28 +41,31 @@ class GroupResponse(BaseModel):
 # ── Members ───────────────────────────────────────────────────────────────────
 
 class MemberCreate(BaseModel):
-    wechat_openid:   str
-    role:            str
-    display_name:    str | None = None
-    warehouse_codes: list[str] | None = None   # required if role == "warehouseman", enforced in the route
+    wechat_openid:       str
+    role:                str
+    display_name:        str | None = None
+    warehouse_codes:     list[str] | None = None   # required if role == "warehouseman", enforced in the route
+    billing_customer_id: str | None = None         # required if role == "customer", enforced in the route
 
 
 class MemberUpdate(BaseModel):
-    role:            str | None = None
-    is_active:       bool | None = None
-    warehouse_codes: list[str] | None = None   # required if role becomes "warehouseman", enforced in the route
+    role:                str | None = None
+    is_active:           bool | None = None
+    warehouse_codes:     list[str] | None = None   # required if role becomes "warehouseman", enforced in the route
+    billing_customer_id: str | None = None         # required if role becomes "customer", enforced in the route
 
 
 class MemberResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    wechat_openid:   str
-    group_id:        UUID
-    role:            str
-    display_name:    str | None
-    warehouse_codes: list[str] | None
-    is_active:       bool
-    joined_at:       datetime
+    wechat_openid:       str
+    group_id:            UUID
+    role:                str
+    display_name:        str | None
+    warehouse_codes:     list[str] | None
+    billing_customer_id: str | None
+    is_active:           bool
+    joined_at:           datetime
 
 
 # ── Roles ─────────────────────────────────────────────────────────────────────
@@ -229,3 +232,71 @@ class SessionResponse(BaseModel):
     collected_fields: dict
     expires_at:       datetime
     created_at:       datetime
+
+
+# ── Customers ─────────────────────────────────────────────────────────────────
+
+class CustomerCreate(BaseModel):
+    customer_id:      str    # F###### -- validated against the DB CHECK constraint
+    display_name:     str
+    display_name_cn:  str | None = None
+    contact_name:     str | None = None
+    email:            str | None = None
+    phone:            str | None = None
+    addr_line1:       str | None = None
+    city:             str | None = None
+    state:            str | None = None
+    zip:              str | None = None
+    country:          str | None = None
+    bank_account:     str | None = None
+    status:           str = "active"
+    notes:            str | None = None
+    created_by:       str    # who created this — manual until per-admin auth exists, matches GroupServiceRoleGrant's convention
+
+
+class CustomerUpdate(BaseModel):
+    display_name:     str | None = None
+    display_name_cn:  str | None = None
+    contact_name:     str | None = None
+    email:            str | None = None
+    phone:            str | None = None
+    addr_line1:       str | None = None
+    city:             str | None = None
+    state:            str | None = None
+    zip:              str | None = None
+    country:          str | None = None
+    bank_account:     str | None = None
+    status:           str | None = None
+    rate_multiplier:  dict | None = None
+    ydd_channel_id:   dict | None = None
+    oms_wh_code:      str | None = None
+    toggles:          dict | None = None
+    notes:            str | None = None
+    updated_by:       str
+
+
+class CustomerResponse(BaseModel):
+    customer_id:      str
+    display_name:     str
+    display_name_cn:  str | None
+    contact_name:     str | None
+    email:            str | None
+    phone:            str | None
+    addr_line1:       str | None
+    city:             str | None
+    state:            str | None
+    zip:              str | None
+    country:          str | None
+    bank_account:     str | None
+    status:           str
+    rate_multiplier:  dict
+    ydd_channel_id:   dict
+    oms_wh_code:      str | None
+    toggles:          dict
+    notes:            str | None
+
+
+class CustomerCredentialSet(BaseModel):
+    credential_type: str    # 'oms_app_key' | 'oms_app_secret' | 'ydd_username' | 'ydd_password'
+    value:           str
+    updated_by:      str

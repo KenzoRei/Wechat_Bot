@@ -51,6 +51,24 @@ class RoleChangeHandler(BaseHandler):
                 codes_list = "、".join(sorted(VALID_WAREHOUSE_CODES))
                 raise RuntimeError(f"指派为仓库管理员需要提供至少一个有效的仓库代码（{codes_list}）。")
 
+        billing_customer_id_to_set = None
+        if new_role_name == "customer":
+            # KefuStaff has no billing_customer_id column -- internal staff
+            # are never customers themselves. pre_confirm_validators.py
+            # already rejects this before confirmation is ever shown; this
+            # is the execution-time backstop, same 3-layer pattern as
+            # warehouse_codes/warehouseman above.
+            if identity.kind == "kefu":
+                raise RuntimeError("客服账号不能设置为客户角色。")
+            new_billing_id = fields.get("billing_customer_id") or getattr(target, "billing_customer_id", None)
+            if not new_billing_id:
+                raise RuntimeError("指派为客户角色需要提供关联的客户编号。")
+            from core import customer_directory
+            record = customer_directory.get_customer(db, new_billing_id)
+            if record is None or record.status != "active":
+                raise RuntimeError(f"客户编号 {new_billing_id} 无效或未激活，无法关联，请联系管理员。")
+            billing_customer_id_to_set = new_billing_id
+
         role = db.query(Role).filter_by(name=new_role_name).first()
         if role is None:
             raise RuntimeError(f"未知角色：{new_role_name}")
@@ -82,6 +100,13 @@ class RoleChangeHandler(BaseHandler):
         target.role_id = role.role_id
         # warehouse_codes is meaningful only for warehouseman — cleared on any other role
         target.warehouse_codes = sorted(set(warehouse_codes)) if new_role_name == "warehouseman" else None
+        # billing_customer_id only exists on GroupMember (KefuStaff has no
+        # such column) -- meaningful only for role=customer, cleared on any
+        # other role, same pattern as warehouse_codes above. A former
+        # customer's stale binding must never survive a reassignment away
+        # from role=customer.
+        if identity.kind != "kefu":
+            target.billing_customer_id = billing_customer_id_to_set
         db.commit()
 
         return {"target_openid": target_openid, "new_role": new_role_name}

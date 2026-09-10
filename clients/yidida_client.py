@@ -7,6 +7,13 @@ Auth flow:
 
 Shipment flow:
   POST /yundans  [YunDanModel]  →  tracking number + label URL
+  (verified: this response carries NO pricing/fee/amount field of any
+  kind -- "sales_amount" cannot come from here.)
+
+Pricing flow (separate endpoint, confirmed against a real quote sample):
+  POST /price  {priceZoneType, searchType, channel, wayTypeList, weight (KG),
+                packageType, pieceCount, toCustomer}  →  one quote per
+  specific channel, with a "moneyTotal" (USD total) field.
 """
 import requests
 import config
@@ -143,6 +150,97 @@ def _build_shipment_body(fields: dict, shou_huo_qu_dao: str) -> dict:
         body["gaoGao"] = float(fields["height_in"])
 
     return body
+
+
+# ── Price quote ──────────────────────────────────────────────────────────────
+# Genuinely separate from /yundans (label creation) -- confirmed against a
+# real /yundans response that it carries no pricing field at all. Given a
+# specific channel (shouHuoQuDao), YiDiDa returns exactly one quote.
+
+_LBS_TO_KG = 0.45359237
+
+
+def get_price_quote(fields: dict, api_key: str) -> dict:
+    """
+    Queries a shipping rate quote via /price. Raises RuntimeError on any
+    failure (network, auth, business failure, or a response carrying no
+    usable quote) -- same convention as create_label/_get_token. Callers
+    (handlers/label/base.py) are responsible for deciding this is non-
+    fatal to label creation, same as this codebase already treats OMS
+    failures (see docs/reviews/active/2026-09-customer-service-and-label-
+    pipeline/plan.md) -- this client layer never silently swallows a
+    failure itself.
+
+    Returns {"sales_amount": <float, USD>}.
+    """
+    username     = fields.get("ydd_cust_id", "")
+    password     = api_key
+    shou_huo_qu_dao = fields.get("ydd_channel_id", "")
+
+    if not username or not password or not shou_huo_qu_dao:
+        raise RuntimeError("Missing YiDiDa credentials: ydd_cust_id, ydd_api_key, ydd_channel_id required")
+
+    token = _get_token(username, password)
+    body  = _build_price_query_body(fields, shou_huo_qu_dao)
+
+    url  = f"{BASE_URL}/price"
+    resp = requests.post(
+        url,
+        json=body,
+        headers={"Authorization": token, "Content-Type": "application/json"},
+        timeout=30
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    return _parse_price_response(data)
+
+
+def _build_price_query_body(fields: dict, shou_huo_qu_dao: str) -> dict:
+    """
+    Maps our collected_fields to YiDiDa's /price query params.
+
+    weight is in KILOGRAMS here (confirmed against a real /price test
+    script's own printed summary: "Weight: {weight} kg") -- unlike
+    /yundans's shouHuoShiZhong, which this codebase passes weight_lbs into
+    directly with no conversion (a separate, pre-existing convention on
+    that endpoint, not touched here).
+    """
+    weight_lbs = float(fields.get("weight_lbs", 0))
+    return {
+        "priceZoneType": 1,   # 1 = postal code
+        "searchType":    2,   # 2 = customer (negotiated) pricing, not public
+        "channel":       shou_huo_qu_dao,
+        "wayTypeList":   [0],  # 0 = express export, matches label creation's own shipment type
+        "weight":        weight_lbs * _LBS_TO_KG,
+        "packageType":   1,
+        "pieceCount":    1,
+        "toCustomer": {
+            "countryCode": fields.get("recipient_country", "US"),
+            "postcode":    fields.get("recipient_zip", ""),
+            "city":        fields.get("recipient_city", ""),
+            "stateCode":   fields.get("recipient_state", ""),
+        },
+    }
+
+
+def _parse_price_response(data: dict) -> dict:
+    if not data.get("success"):
+        raise RuntimeError(f"YiDiDa price query failed: {data}")
+
+    quotes = data.get("data")
+    if not isinstance(quotes, list) or not quotes:
+        raise RuntimeError(f"YiDiDa price query returned no quotes: {data}")
+
+    quote = quotes[0]
+    if not quote.get("success", True):
+        raise RuntimeError(f"YiDiDa price quote failed: {quote.get('errorMsg') or quote}")
+
+    money_total = quote.get("moneyTotal")
+    if money_total is None:
+        raise RuntimeError(f"YiDiDa price quote missing moneyTotal: {quote}")
+
+    return {"sales_amount": float(money_total)}
 
 
 def _parse_response(data: dict) -> dict:

@@ -210,6 +210,7 @@ _PANEL_HTML = """<!doctype html>
   <div class="tabs">
     <button class="tab-btn active" data-tab="staff" onclick="switchTab('staff')">Staff &amp; Groups</button>
     <button class="tab-btn" data-tab="transactions" onclick="switchTab('transactions')">Transactions</button>
+    <button class="tab-btn" data-tab="customers" onclick="switchTab('customers')">Customers</button>
   </div>
 
   <div id="tab-staff" class="tab-panel active">
@@ -275,6 +276,29 @@ _PANEL_HTML = """<!doctype html>
       <div class="toolbar" style="margin-top:10px;margin-bottom:0;">
         <button class="secondary" id="ledgerLoadMore" onclick="loadMoreLedger()" style="display:none;">Load more</button>
       </div>
+    </div>
+  </div>
+
+  <div id="tab-customers" class="tab-panel">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <h3>Customers</h3>
+          <div class="meta">Master customer record (F###### YDD cust_id). Credentials are write-only — set/rotate a value, it is never shown again.</div>
+        </div>
+        <button onclick="showNewCustomerForm()">+ New customer</button>
+      </div>
+      <div id="newCustomerForm" style="display:none;" class="filters">
+        <input type="text" id="newCustomerId" placeholder="F123456">
+        <input type="text" id="newCustomerName" placeholder="Display name">
+        <button onclick="createCustomer()">Create</button>
+        <button class="secondary" onclick="hideNewCustomerForm()">Cancel</button>
+      </div>
+      <table>
+        <thead><tr><th>Customer ID</th><th>Name</th><th>Status</th><th>OMS wh_code</th><th>YDD channel_id (per carrier)</th><th>Rate multiplier (future use)</th><th>Credentials</th><th></th></tr></thead>
+        <tbody id="customerRows"></tbody>
+      </table>
+      <div class="error" id="customerError"></div>
     </div>
   </div>
 
@@ -482,6 +506,10 @@ function switchTab(name) {
   if (name === "transactions" && !_ledgerLoadedOnce) {
     _ledgerLoadedOnce = true;
     reloadLedger();
+  }
+  if (name === "customers" && !_customersLoadedOnce) {
+    _customersLoadedOnce = true;
+    loadCustomers();
   }
 }
 
@@ -712,6 +740,126 @@ async function loadAll() {
     } else {
       document.getElementById("loadError").textContent = "Failed to load: " + e.message;
     }
+  }
+}
+
+// ── Customers ────────────────────────────────────────────────────────────────
+let _customersLoadedOnce = false;
+const CREDENTIAL_TYPES = ["oms_app_key", "oms_app_secret", "ydd_username", "ydd_password"];
+
+function showNewCustomerForm() { document.getElementById("newCustomerForm").style.display = ""; }
+function hideNewCustomerForm() {
+  document.getElementById("newCustomerForm").style.display = "none";
+  document.getElementById("newCustomerId").value = "";
+  document.getElementById("newCustomerName").value = "";
+}
+
+async function createCustomer() {
+  document.getElementById("customerError").textContent = "";
+  const customer_id = document.getElementById("newCustomerId").value.trim().toUpperCase();
+  const display_name = document.getElementById("newCustomerName").value.trim();
+  if (!/^F\d{6}$/.test(customer_id)) {
+    document.getElementById("customerError").textContent = "Customer ID must be F followed by 6 digits (e.g. F123456).";
+    return;
+  }
+  if (!display_name) {
+    document.getElementById("customerError").textContent = "Display name is required.";
+    return;
+  }
+  try {
+    await authedPost("/admin/customers", { customer_id, display_name, created_by: "admin_panel" });
+    hideNewCustomerForm();
+    await loadCustomers();
+  } catch (e) {
+    if (e.message === "UNAUTHORIZED") throw e;
+    document.getElementById("customerError").textContent = "Create failed: " + e.message;
+  }
+}
+
+async function loadCustomers() {
+  document.getElementById("customerError").textContent = "";
+  try {
+    const resp = await authedFetch("/admin/customers");
+    const customers = resp.data || [];
+    const rowsEl = document.getElementById("customerRows");
+    if (customers.length === 0) {
+      rowsEl.innerHTML = '<tr><td colspan="6" class="empty">No customers yet.</td></tr>';
+      return;
+    }
+    const rowsHtml = await Promise.all(customers.map(customerRowHtml));
+    rowsEl.innerHTML = rowsHtml.join("");
+  } catch (e) {
+    if (e.message === "UNAUTHORIZED") throw e;
+    document.getElementById("customerError").textContent = "Failed to load: " + e.message;
+  }
+}
+
+async function customerRowHtml(c) {
+  let credStatus = [];
+  try {
+    const resp = await authedFetch(`/admin/customers/${encodeURIComponent(c.customer_id)}/credentials`);
+    credStatus = resp.data || [];
+  } catch (e) {
+    if (e.message === "UNAUTHORIZED") throw e;
+  }
+  const setTypes = new Set(credStatus.map(x => x.credential_type));
+  const credCells = CREDENTIAL_TYPES.map(t => {
+    const isSet = setTypes.has(t);
+    return `<div><label>${escapeHtml(t)}: ${isSet ? '<span class="badge ok">set</span>' : '<span class="badge bad">unset</span>'}
+      <button class="secondary" onclick="promptSetCredential('${c.customer_id}','${t}')" style="margin-left:4px;">${isSet ? "Rotate" : "Set"}</button></label></div>`;
+  }).join("");
+  const statusOptions = ["pending", "active", "inactive"].map(s =>
+    `<option value="${s}" ${c.status === s ? "selected" : ""}>${s}</option>`
+  ).join("");
+  return `
+    <tr>
+      <td>${escapeHtml(c.customer_id)}</td>
+      <td>${escapeHtml(c.display_name)}</td>
+      <td><select id="status-${c.customer_id}" onchange="saveCustomerField('${c.customer_id}', 'status', document.getElementById('status-${c.customer_id}').value, false)">${statusOptions}</select></td>
+      <td><input type="text" value='${escapeHtml(c.oms_wh_code || "")}' id="whcode-${c.customer_id}" style="width:100px;" placeholder="e.g. DE19713">
+          <button class="secondary" onclick="saveCustomerField('${c.customer_id}', 'oms_wh_code', document.getElementById('whcode-${c.customer_id}').value, false)">Save</button></td>
+      <td><input type="text" value='${escapeHtml(JSON.stringify(c.ydd_channel_id || {}))}' id="channel-${c.customer_id}" style="width:160px;" placeholder='{"fedex":"...","ups":"..."}'>
+          <button class="secondary" onclick="saveCustomerField('${c.customer_id}', 'ydd_channel_id', document.getElementById('channel-${c.customer_id}').value, true)">Save</button></td>
+      <td><input type="text" value='${escapeHtml(JSON.stringify(c.rate_multiplier || {}))}' id="rate-${c.customer_id}" style="width:140px;">
+          <button class="secondary" onclick="saveCustomerField('${c.customer_id}', 'rate_multiplier', document.getElementById('rate-${c.customer_id}').value, true)">Save</button></td>
+      <td>${credCells}</td>
+      <td></td>
+    </tr>
+  `;
+}
+
+async function saveCustomerField(customerId, field, rawValue, isJson) {
+  document.getElementById("customerError").textContent = "";
+  let value = rawValue;
+  if (isJson) {
+    try {
+      value = JSON.parse(rawValue);
+    } catch (e) {
+      document.getElementById("customerError").textContent = `Invalid JSON for ${field}: ${e.message}`;
+      return;
+    }
+  }
+  try {
+    await authedPatch(`/admin/customers/${encodeURIComponent(customerId)}`, { [field]: value, updated_by: "admin_panel" });
+    await loadCustomers();
+  } catch (e) {
+    if (e.message === "UNAUTHORIZED") throw e;
+    document.getElementById("customerError").textContent = "Save failed: " + e.message;
+  }
+}
+
+async function promptSetCredential(customerId, credentialType) {
+  const value = prompt(`New value for ${credentialType} (customer ${customerId}). This will never be shown again.`);
+  if (!value) return;
+  document.getElementById("customerError").textContent = "";
+  try {
+    await authedPost(`/admin/customers/${encodeURIComponent(customerId)}/credentials`, {
+      credential_type: credentialType, value, updated_by: "admin_panel",
+    });
+    await loadCustomers();
+  } catch (e) {
+    if (e.message === "UNAUTHORIZED") throw e;
+    document.getElementById("customerError").textContent = "Failed to set credential: " + e.message;
   }
 }
 

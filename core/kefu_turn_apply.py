@@ -855,6 +855,37 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
                 _append(session, "assistant", reply)
                 return reply
 
+    if service["name"] in ("fedex_label", "ups_label"):
+        # context["requester_billing_customer_id"] is always None on the
+        # Kefu channel (KefuStaff has no billing_customer_id column --
+        # staff are never customers themselves). is_customer_role is
+        # nonetheless computed the same way as workflow_engine.py's
+        # equivalent call, not hardcoded False: if a Kefu account were ever
+        # mis-assigned role='customer' (never supposed to happen
+        # operationally), resolve_billing_customer_id must REJECT it for
+        # having no binding, not silently fall through to the staff path
+        # and let it select an arbitrary customer's billing account.
+        from core import customer_directory
+        extracted_billing_id = (session.collected_fields or {}).get("billing_customer_id")
+        resolved_id, billing_error = customer_directory.resolve_billing_customer_id(
+            db, context.get("role") == "customer", context.get("requester_billing_customer_id"), extracted_billing_id
+        )
+        if billing_error:
+            # Reject the invalid value so the required-field prompt re-asks
+            # instead of silently proceeding with a bad id.
+            session.collected_fields = {k: v for k, v in (session.collected_fields or {}).items() if k != "billing_customer_id"}
+            context["collected_fields"] = session.collected_fields
+            context["_reply"] = billing_error
+            _append(session, "assistant", billing_error)
+            return billing_error
+        elif resolved_id and resolved_id != extracted_billing_id:
+            # Auto-filled from the requester's own identity (never happens
+            # on Kefu today, but keeps this block symmetric with workflow_
+            # engine.py's equivalent for whichever channel gains a
+            # customer-role Kefu concept later).
+            session.collected_fields = {**(session.collected_fields or {}), "billing_customer_id": resolved_id}
+            context["collected_fields"] = session.collected_fields
+
     # Every current U-Choice service is performed on behalf of U-Choice
     # itself (the sole platform tenant today) -- there is no second
     # "customer" to identify for uchoice_inbound_request/uchoice_

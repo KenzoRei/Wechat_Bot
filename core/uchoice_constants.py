@@ -17,7 +17,7 @@ VALID_WAREHOUSE_CODES = frozenset({"JFK", "DE", "NJ"})
 # ("every role except pending") would silently
 # expose any future internal/system role the moment it's added. pending is
 # deliberately absent -- system-assigned only, via self-registration.
-ASSIGNABLE_ROLE_NAMES = frozenset({"admin", "customer", "warehouseman", "accountant"})
+ASSIGNABLE_ROLE_NAMES = frozenset({"admin", "customer", "warehouseman", "accountant", "label_agent"})
 
 # Shared between jobs/uchoice_daily.py's push digest and the on-demand
 # view_pending_digest service (handlers/uchoice/queries.py) so both agree on
