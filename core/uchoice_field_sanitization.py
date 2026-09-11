@@ -155,4 +155,20 @@ def _sanitize_role_change_fields_before_persistence(extracted_fields: dict, db: 
                       f"before persistence: {warehouse_codes!r} -> {cleaned!r}", flush=True)
             result["warehouse_codes"] = cleaned
 
+    # billing_customer_id: same "preserve valid progress" pattern -- drop
+    # only this field if it doesn't name a real, active customer, never
+    # the whole extraction. Whether it's actually REQUIRED (new_role ==
+    # 'customer') is a pre-confirm/execution-time concern (this sanitizer
+    # never blocks a turn, only cleans up what would otherwise persist);
+    # see core/pre_confirm_validators.py and handlers/uchoice/role_change.py
+    # for where that's enforced.
+    billing_customer_id = result.get("billing_customer_id")
+    if billing_customer_id is not None:
+        from core import customer_directory
+        record = customer_directory.get_customer(db, billing_customer_id)
+        if record is None or record.status != "active":
+            print(f"[workflow] dropped invalid role_change.billing_customer_id "
+                  f"before persistence: {billing_customer_id!r} does not name an active customer", flush=True)
+            result.pop("billing_customer_id", None)
+
     return result

@@ -103,6 +103,11 @@ _KEFU_ENABLED_SERVICES = frozenset({
     "confirm_inbound_completion", "confirm_outbound_completion",
     "cancel_inbound_request", "cancel_outbound_request",
     "adjust_storage", "recount_storage", "move_storage",
+    # Label creation via YiDiDa -- previously Smart-Bot-only despite being
+    # grantable through group_service_role here too; the gap had no
+    # functional justification (see docs/reviews/active/2026-09-customer-
+    # service-and-label-pipeline/plan.md).
+    "fedex_label", "ups_label",
     # role_change already has the full generic pipeline (sanitization,
     # confirmation builder, pre-confirm last-admin check) plus a
     # Kefu-identity-aware handler (handlers/uchoice/role_change.py) --

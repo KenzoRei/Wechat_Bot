@@ -17,6 +17,7 @@ _OFFLINE_ENV = {
     "CLAUDE_API_KEY": "offline-test",
     "OPENAI_API_KEY": "offline-test",
     "ADMIN_API_KEY": "offline-test",
+    "CUSTOMER_CREDENTIAL_KEY": "eKq0vyXpFzD4eF48bQEGY7AjuRiwIBP2Z080513irsM=",
     "DATABASE_URL": "sqlite:///:memory:",
 }
 
@@ -56,6 +57,10 @@ _POSTGRES_TEST_FILES = {
     "tests/uchoice_storage_atomicity/test_engine_split_boundaries.py",
     "tests/uchoice_storage_atomicity/test_pre_confirm_validators.py",
     "tests/uchoice_storage_atomicity/test_reply_failure_does_not_roll_back_inventory.py",
+    "tests/core/test_customer_directory.py",
+    "tests/core/test_oms_create_workorder_handler.py",
+    "tests/core/test_label_base_handler.py",
+    "tests/core/test_resolve_billing_customer_id.py",
 }
 
 
@@ -93,6 +98,13 @@ def block_operational_clients(monkeypatch):
     monkeypatch.setattr("clients.oms_client.query_outbound_order", blocked)
     monkeypatch.setattr("clients.oms_client.create_work_order", blocked)
     monkeypatch.setattr("clients.yidida_client.create_label", blocked)
+    # get_price_quote is deliberately NOT blocked at this layer (unlike
+    # create_label/create_work_order/query_outbound_order above) --
+    # tests/core/test_yidida_price_quote.py tests it directly with its own
+    # requests.post/_get_token mocks, the same way no test exercises
+    # clients.oms_client's functions directly either. The real production
+    # call path (handlers/label/base.py's imported alias) is still blocked
+    # below, plus the transport-level kill switch further down.
 
     # Layer 2: already-bound aliases in every module that imports these by
     # value (`from clients.x import y`) -- confirmed by direct grep of every
@@ -100,6 +112,7 @@ def block_operational_clients(monkeypatch):
     monkeypatch.setattr("core.workflow_engine._send_raw", blocked)
     monkeypatch.setattr("handlers.reply_wechat.send_message", blocked)
     monkeypatch.setattr("handlers.label.base.create_label", blocked)
+    monkeypatch.setattr("handlers.label.base.get_price_quote", blocked)
     monkeypatch.setattr("handlers.oms_create_workorder.query_outbound_order", blocked)
     monkeypatch.setattr("handlers.oms_create_workorder.create_work_order", blocked)
     monkeypatch.setattr("jobs.session_expiry.send_group_webhook_message", blocked)

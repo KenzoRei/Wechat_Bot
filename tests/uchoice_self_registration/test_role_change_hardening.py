@@ -181,7 +181,7 @@ def test_last_admin_protection_still_holds():
     db = _MockDB(members={"only-admin": "admin"})
     error = pre_confirm_validators.run(
         "role_change", {"group_id": "g1"},
-        {"target_openid": "only-admin", "new_role": "customer"}, db,
+        {"target_openid": "only-admin", "new_role": "accountant"}, db,
     )
     assert error is not None
 
@@ -198,9 +198,22 @@ def test_last_admin_protection_allows_reassigning_an_already_inactive_admin():
     })
     error = pre_confirm_validators.run(
         "role_change", {"group_id": "g1"},
-        {"target_openid": "inactive-admin", "new_role": "customer"}, db,
+        {"target_openid": "inactive-admin", "new_role": "accountant"}, db,
     )
     assert error is None
+
+
+def test_pre_confirm_rejects_customer_role_with_no_billing_customer_id():
+    """The exact gap Codex reproduced: staff -> customer must not succeed
+    without a binding (this doesn't need a real customer_directory lookup,
+    since the missing-value check short-circuits before one)."""
+    db = _MockDB(members={"m1": "accountant"})
+    error = pre_confirm_validators.run(
+        "role_change", {"group_id": "g1"},
+        {"target_openid": "m1", "new_role": "customer"}, db,
+    )
+    assert error is not None
+    assert "客户编号" in error
 
 
 def test_last_admin_protection_inactive_admin_does_not_count_toward_the_total():
@@ -211,7 +224,7 @@ def test_last_admin_protection_inactive_admin_does_not_count_toward_the_total():
     })
     error = pre_confirm_validators.run(
         "role_change", {"group_id": "g1"},
-        {"target_openid": "only-active-admin", "new_role": "customer"}, db,
+        {"target_openid": "only-active-admin", "new_role": "accountant"}, db,
     )
     assert error is not None
 

@@ -262,6 +262,9 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
     # reads it.
     context["collected_fields"] = session.collected_fields
 
+    if _resolve_label_billing_customer(context, service, session, db):
+        return
+
     auto_resolved = _autoresolve_single_candidate(context, service, session, db)
 
     # Ready once every declared required field is actually present post-
@@ -274,6 +277,38 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
         session_manager.add_message(db, session, "assistant", ai_response.reply)
         send_message(context, ai_response.reply)
         _close_if_no_pending_candidates(service, session, context, db)
+
+
+def _resolve_label_billing_customer(context: dict, service: dict, session, db: DBSession) -> bool:
+    """
+    fedex_label/ups_label only. If the requester is themselves a customer
+    (context["requester_billing_customer_id"] set, from GroupMember.
+    billing_customer_id), that identity is AUTHORITATIVE -- always applied,
+    every turn, regardless of what the AI extracted; a customer cannot
+    state a different billing_customer_id and have it accepted. Otherwise
+    the extracted value is validated against the real customer directory
+    (must exist, must be active) before being accepted -- never trusted
+    blindly, same principle as address/candidate matching elsewhere in this
+    file. Returns True if a blocking reply was sent (caller must return
+    immediately without triggering confirmation).
+    """
+    if service["name"] not in ("fedex_label", "ups_label"):
+        return False
+    from core import customer_directory
+    extracted = (session.collected_fields or {}).get("billing_customer_id")
+    resolved_id, error = customer_directory.resolve_billing_customer_id(
+        db, context.get("role") == "customer", context.get("requester_billing_customer_id"), extracted
+    )
+    if error:
+        session_manager.update_collected_fields(db, session, {"billing_customer_id": None})
+        context["collected_fields"] = session.collected_fields
+        session_manager.add_message(db, session, "assistant", error)
+        send_message(context, error)
+        return True
+    if resolved_id and resolved_id != extracted:
+        session_manager.update_collected_fields(db, session, {"billing_customer_id": resolved_id})
+        context["collected_fields"] = session.collected_fields
+    return False
 
 
 def _supersede_stale_target_session(context: dict, db: DBSession) -> bool:
@@ -888,6 +923,9 @@ def _handle_continuation(context: dict, ai_response: AIResponse, db: DBSession) 
     # field, e.g. warehouse_code, supplied on a later turn ended up missing
     # from the executed query because context still held the pre-merge dict).
     context["collected_fields"] = session.collected_fields
+
+    if service is not None and _resolve_label_billing_customer(context, service, session, db):
+        return
 
     auto_resolved = service is not None and _autoresolve_single_candidate(context, service, session, db)
     force_complete = service is not None and _outbound_required_fields_present(service, session)

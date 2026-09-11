@@ -127,6 +127,12 @@ OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o")
 # Admin
 ADMIN_API_KEY = _require("ADMIN_API_KEY")
 
+# Customer credential encryption (core/customer_directory.py) — 32 raw bytes,
+# base64-encoded, e.g. `python -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())"`.
+# Held only in this env var, never in the database alongside the ciphertext
+# it protects.
+CUSTOMER_CREDENTIAL_KEY = _require("CUSTOMER_CREDENTIAL_KEY")
+
 # Database
 DATABASE_URL = _require("DATABASE_URL")
 

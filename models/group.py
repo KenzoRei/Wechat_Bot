@@ -28,6 +28,13 @@ class GroupMember(Base):
     role_id:       Mapped[uuid.UUID]    = mapped_column(UUID(as_uuid=True), ForeignKey("role.role_id", ondelete="RESTRICT"), nullable=False)
     display_name:  Mapped[str | None]   = mapped_column(String(200))
     warehouse_codes: Mapped[list[str] | None] = mapped_column(ARRAY(String(20)))
+    # Set only for role='customer' members (enforced at the application
+    # layer, not a DB constraint -- mirrors the warehouseman/warehouse_codes
+    # pattern below). This binding is authoritative once set: nothing
+    # extracted from conversation may override it. Named billing_customer_id,
+    # not customer_id, to avoid colliding with the unrelated, pre-existing
+    # customer_id concept (request_log.customer_id -> uchoice_customer).
+    billing_customer_id: Mapped[str | None] = mapped_column(String(7), ForeignKey("customer.customer_id"))
     is_active:     Mapped[bool]         = mapped_column(Boolean, nullable=False, default=True)
     joined_at:     Mapped[datetime]     = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     updated_at:    Mapped[datetime]     = mapped_column(DateTime(timezone=True), server_default=text("now()"))
