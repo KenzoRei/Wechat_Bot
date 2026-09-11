@@ -65,6 +65,46 @@ def test_uses_customer_credential_not_group_config(monkeypatch):
         db.close()
 
 
+def test_carrier_rejection_becomes_label_creation_rejected(monkeypatch):
+    """
+    ShipmentRejected (a business rejection -- bad phone, bad address, etc.,
+    clients.yidida_client's own distinct exception for this case) must be
+    translated into core.workflow_errors.LabelCreationRejected, carrying a
+    real, actionable reply -- not left as a raw exception that propagates
+    silently (the bug this fix addresses: see the 2026-09-11 session
+    discussion). A genuine infra failure (plain RuntimeError) must NOT be
+    caught here -- only ShipmentRejected specifically.
+    """
+    from clients.yidida_client import ShipmentRejected
+    from core.workflow_errors import LabelCreationRejected
+
+    db = SessionLocal()
+    customer_id = _fresh_customer_id()
+    try:
+        cd.upsert_customer(db, customer_id, actor="test", display_name="Rejection Co", ydd_channel_id={"fedex": "channel_z"})
+        cd.set_credential(db, customer_id, "ydd_username", "u", actor="test")
+        cd.set_credential(db, customer_id, "ydd_password", "p", actor="test")
+
+        carrier_message = '{"response":{"errors":[{"code":"120313","message":"ShipFrom PhoneNumber must be at least 10 alphanumeric characters"}]}}'
+
+        def fake_create_label(carrier, fields, api_key):
+            raise ShipmentRejected(carrier_message)
+        monkeypatch.setattr(label_base_module, "create_label", fake_create_label)
+
+        with pytest.raises(LabelCreationRejected) as exc_info:
+            FedExLabelHandler().handle(_context(customer_id), {"carrier": "fedex"}, db=db)
+
+        assert exc_info.value.carrier_message == carrier_message
+        assert "标签创建失败" in exc_info.value.user_message
+        assert carrier_message in exc_info.value.user_message
+        assert "请核实相关信息后重新提供并确认" in exc_info.value.user_message
+    finally:
+        db.execute(text("delete from customer_credential where customer_id = :cid"), {"cid": customer_id})
+        db.execute(text("delete from customer where customer_id = :cid"), {"cid": customer_id})
+        db.commit()
+        db.close()
+
+
 def test_ydd_username_can_differ_from_customer_id(monkeypatch):
     """Business rule from the plan: ydd_username is USUALLY but not always
     equal to customer_id -- must never be derived, always read from storage."""

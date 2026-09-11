@@ -650,7 +650,7 @@ def _finish_execution(db: DBSession, context: dict, service: dict, session, log)
 
 def confirm_kefu_turn(db: DBSession, context: dict, service: dict, session) -> str:
     """Apply one confirmed mutation; caller owns the guarded execution claim."""
-    from core.workflow_errors import TargetOperationRejected
+    from core.workflow_errors import TargetOperationRejected, LabelCreationRejected
 
     log = _load_log(db, session)
     _set_context_for_session(context, session, log)
@@ -696,6 +696,26 @@ def confirm_kefu_turn(db: DBSession, context: dict, service: dict, session) -> s
         # caller exactly as if this were any other outcome; the
         # surrounding turn (case_turn/execution-ledger state) finalizes
         # normally in the same transaction.
+        session.status = "cancelled"
+        reply = e.user_message
+        _append(session, "assistant", reply)
+        return reply
+    except LabelCreationRejected as e:
+        # The carrier rejected this shipment for a business reason (bad
+        # phone, bad address, etc.) -- create_label was the label
+        # workflow's first step, so no prior step in this turn made any
+        # DB writes worth preserving. Unlike TargetOperationRejected
+        # (which never owns/touches its log, by design), this session DOES
+        # own a freshly-created log that would otherwise be stuck at
+        # 'processing' forever -- mark it failed here. No explicit
+        # rollback/commit: this transaction still holds the CaseExecution
+        # claim row and this turn's replay bookkeeping, same reasoning as
+        # the TargetOperationRejected branch above -- the caller's own
+        # single outer commit finalizes everything together.
+        if log is not None:
+            log.status = "failed"
+            log.error_detail = e.carrier_message
+            log.completed_at = datetime.now(timezone.utc)
         session.status = "cancelled"
         reply = e.user_message
         _append(session, "assistant", reply)

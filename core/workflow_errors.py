@@ -57,3 +57,34 @@ class TargetValidationError(TargetOperationRejected):
     def __init__(self, message: str):
         self.user_message = message
         super().__init__(message)
+
+
+class LabelCreationRejected(Exception):
+    """
+    Raised by handlers/label/base.py when YiDiDa/the carrier rejects a
+    label for a business reason (invalid phone, bad address, etc. --
+    clients.yidida_client.ShipmentRejected). Distinct from
+    TargetOperationRejected (unrelated: that's about targets_existing_
+    request races/validation) and from a genuine infra failure (auth,
+    network, unexpected response shape), which must keep propagating
+    uncaught as a plain exception so it's still tracked as a real failure
+    by the surrounding orchestration (Kefu: core/kefu_case_adapter.py's
+    process() re-raises so the sync worker marks it failed for retry/
+    audit; Smart Robot: core/workflow_engine.py's own generic Exception
+    handler already covers it).
+
+    Deliberately does NOT try to translate the carrier's message into
+    friendly Chinese -- carrier error text isn't a fixed enum, so any
+    translation table would always miss cases and silently fall back to
+    raw text anyway. Wraps it honestly instead: always truthful, always
+    actionable ("check this and resend"), even when not maximally polished.
+    """
+    user_message: str
+    carrier_message: str
+
+    def __init__(self, carrier_message: str):
+        self.carrier_message = carrier_message
+        self.user_message = (
+            f"标签创建失败，服务商反馈：{carrier_message}\n请核实相关信息后重新提供并确认。"
+        )
+        super().__init__(self.user_message)

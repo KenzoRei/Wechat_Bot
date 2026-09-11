@@ -2,8 +2,9 @@ import logging
 import re
 from datetime import datetime, timezone
 from handlers.base import BaseHandler
-from clients.yidida_client import create_label, get_price_quote
+from clients.yidida_client import create_label, get_price_quote, ShipmentRejected
 from core import customer_directory
+from core.workflow_errors import LabelCreationRejected
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +102,16 @@ class YDDLabelBaseHandler(BaseHandler):
             "ke_hu_dan_hao":    _generate_ke_hu_dan_hao(context, billing_customer_id),
         }
 
-        result = create_label(carrier=carrier, fields=api_fields, api_key=password)
+        try:
+            result = create_label(carrier=carrier, fields=api_fields, api_key=password)
+        except ShipmentRejected as exc:
+            # A business rejection (bad phone, bad address, etc.), not an
+            # infra failure -- translate into the shared, orchestration-
+            # level exception so core/kefu_turn_apply.py and
+            # core/workflow_engine.py can end this turn gracefully with a
+            # real reply instead of it propagating as an unhandled
+            # exception (previously: silent failure, no reply sent at all).
+            raise LabelCreationRejected(exc.carrier_message) from exc
 
         # Price quote comes from YiDiDa's genuinely separate /price endpoint
         # -- /yundans (create_label, just above) carries no pricing field at

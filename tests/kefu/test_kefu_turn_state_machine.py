@@ -86,6 +86,33 @@ def test_confirm_transitions_processing_before_business_execution(monkeypatch):
     assert seen == {"session_status": "active", "log_status": "processing"}
 
 
+def test_label_creation_rejected_ends_session_with_carrier_reply(monkeypatch):
+    """
+    A carrier rejection (bad phone, bad address, etc.) must end the turn
+    with the carrier's own message, not propagate silently -- the bug
+    reported live: a YDD rejection reached the worker's failure log but
+    never sent any reply to the customer at all.
+    """
+    from core.workflow_errors import LabelCreationRejected
+
+    session = _session("pending_confirmation")
+    log = SimpleNamespace(serial_number="REQ-1", status="processing", error_detail=None, completed_at=None)
+
+    def finish(db, context, service, current_session, current_log):
+        raise LabelCreationRejected("ShipFrom PhoneNumber must be at least 10 alphanumeric characters")
+
+    monkeypatch.setattr(kefu_turn_apply, "_finish_execution", finish)
+    reply = kefu_turn_apply.confirm_kefu_turn(
+        _DB(log), {"content": "确认"}, _service(), session
+    )
+    assert "标签创建失败" in reply
+    assert "ShipFrom PhoneNumber must be at least 10 alphanumeric characters" in reply
+    assert session.status == "cancelled"
+    assert log.status == "failed"
+    assert log.error_detail == "ShipFrom PhoneNumber must be at least 10 alphanumeric characters"
+    assert log.completed_at is not None
+
+
 def test_duplicate_confirm_never_runs_business_execution(monkeypatch):
     session = _session("completed")
     log = SimpleNamespace(serial_number="REQ-1", status="processing")
