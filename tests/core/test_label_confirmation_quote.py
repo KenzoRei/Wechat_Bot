@@ -122,6 +122,35 @@ def test_quote_section_omitted_without_billing_customer_id(db):
     assert not any(s.get("type") == "raw" and "预计费用" in s["items"][0] for s in sections)
 
 
+def test_dim_warning_shown_when_dimensions_missing(db):
+    """_fields() never includes length_in/width_in/height_in -- the default
+    case, and the one that matters most since these are optional fields
+    real customers commonly omit."""
+    customer_id = "F000000"
+    sections = confirmation.build_confirmation_sections("fedex_label", _fields(customer_id), db)
+    warnings = [s for s in sections if s.get("type") == "raw" and "包裹尺寸" in s["items"][0]]
+    assert len(warnings) == 1
+    assert "dim weight" in warnings[0]["items"][0]
+
+
+def test_dim_warning_omitted_when_any_dimension_missing_but_at_least_one_present(db):
+    """Dim weight needs the FULL L x W x H -- a partial set (e.g. length
+    only) still can't compute it, so the warning must still fire."""
+    sections = confirmation.build_confirmation_sections(
+        "fedex_label", _fields("F000000", length_in=10), db,
+    )
+    warnings = [s for s in sections if s.get("type") == "raw" and "包裹尺寸" in s["items"][0]]
+    assert len(warnings) == 1
+
+
+def test_dim_warning_omitted_when_all_dimensions_present(db):
+    sections = confirmation.build_confirmation_sections(
+        "fedex_label", _fields("F000000", length_in=10, width_in=8, height_in=6), db,
+    )
+    warnings = [s for s in sections if s.get("type") == "raw" and "包裹尺寸" in s["items"][0]]
+    assert warnings == []
+
+
 def test_ups_and_fedex_use_their_own_channel(db, monkeypatch):
     """Regression guard for the factory closure itself: fedex_label must
     look up ydd_channel_id['fedex'], ups_label must look up ['ups'] --

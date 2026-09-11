@@ -212,6 +212,28 @@ def _label_quote_section(carrier: str, collected_fields: dict, db: DBSession) ->
     return {"label": None, "type": "raw", "items": [f"预计费用：${sales_amount:.2f}（实际费用以标签生成后为准）"]}
 
 
+_DIM_FIELDS = ("length_in", "width_in", "height_in")
+
+
+def _label_dim_warning(collected_fields: dict) -> dict | None:
+    """
+    All three dimensions are optional in fedex_label/ups_label's own
+    input_schema, but an unstated dimension means dimensional weight can't
+    be computed for the quote shown here (clients.yidida_client's
+    _build_price_query_body sends actual weight only, no dims, to /price)
+    -- a large, light package could bill at a real dim-weight-adjusted
+    rate that's higher than this estimate. Warn whenever any of the three
+    is missing, not only when all three are, since dim weight needs the
+    full L x W x H to compute.
+    """
+    if all(collected_fields.get(f) for f in _DIM_FIELDS):
+        return None
+    return {
+        "label": None, "type": "raw",
+        "items": ["⚠️ 未提供包裹尺寸（长/宽/高），实际计费重量可能因体积重（dim weight）高于预计，最终费用以标签生成后为准。"],
+    }
+
+
 def _label_sections_builder(carrier: str) -> Callable[[dict, DBSession], list[dict]]:
     """
     Factory, not a bare function -- the shared builder needs to know which
@@ -238,6 +260,9 @@ def _label_sections_builder(carrier: str) -> Callable[[dict, DBSession], list[di
         sections.append({"label": "收件人", "type": "kv", "items": recipient})
         if other:
             sections.append({"label": "包裹信息", "type": "kv", "items": other})
+        dim_warning = _label_dim_warning(collected_fields)
+        if dim_warning:
+            sections.append(dim_warning)
         quote_section = _label_quote_section(carrier, collected_fields, db)
         if quote_section:
             sections.append(quote_section)
