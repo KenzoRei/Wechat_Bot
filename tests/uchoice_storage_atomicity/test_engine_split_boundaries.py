@@ -222,3 +222,68 @@ def test_fedex_style_workflow_untouched_by_uchoice_split(db, monkeypatch):
     assert log.status == "success"
     assert log.result.get("tracking_number") == "FAKE123", \
         "the real label output must be stored by mark_success -- proves mark_success ran AFTER label creation, not before"
+
+
+def test_label_creation_rejected_ends_turn_with_carrier_reply(db, monkeypatch):
+    """
+    A carrier rejection (LabelCreationRejected, raised when
+    clients.yidida_client.ShipmentRejected reaches handlers/label/base.py)
+    must end the turn with a real reply quoting the carrier's own message
+    and mark the log failed -- not propagate as an unhandled exception
+    (previously: caught by workflow_engine's own generic Exception
+    handler, which sends a generic "请稍后重试" message instead of telling
+    the customer what was actually wrong).
+    """
+    from core.workflow_errors import LabelCreationRejected
+    from core import access_control
+    access = access_control.check_access(db, wechat_openid=OPENID, wechat_group_id=WECHAT_GROUP_ID)
+
+    workflow_id = db.execute(text("select workflow_id from workflow where name='fedex_workorder'")).scalar()
+
+    class RejectingLabelHandler:
+        def handle(self, context, config, db):
+            raise LabelCreationRejected("ShipFrom PhoneNumber must be at least 10 alphanumeric characters")
+
+    monkeypatch.setitem(workflow_engine.HANDLER_REGISTRY, "create_fedex_label", RejectingLabelHandler)
+
+    service_type_id = db.execute(text("select service_type_id from service_type where name='fedex_label'")).scalar()
+    fake_session_row_service_id = str(service_type_id) if service_type_id else "00000000-0000-0000-0000-000000000000"
+
+    log = request_logger.create_log(
+        db, wechat_openid=OPENID, group_id=access.group_id,
+        service_type_id=service_type_id or access.group_id,
+        raw_message="test", wechat_msg_id=None,
+    )
+    _created_log_ids.append(log.log_id)
+
+    allowed_services = [{
+        "name": "fedex_label",
+        "service_type_id": fake_session_row_service_id,
+        "workflow_id": str(workflow_id),
+        "awaits_completion": False,
+    }]
+
+    class FakeSessionObj:
+        session_id = "fake-reject"
+        service_type_id = fake_session_row_service_id
+        request_log_id = log.log_id
+        status = "pending_confirmation"
+
+    sent = []
+    context = {
+        "allowed_services": allowed_services,
+        "collected_fields": {},
+        "serial_number": log.serial_number,
+        "response_url": "", "_reply": "",
+        "wechat_openid": OPENID,
+    }
+    monkeypatch.setattr(workflow_engine, "send_message", lambda ctx, content: sent.append(content))
+
+    workflow_engine._execute_workflow_and_finish(context, FakeSessionObj(), db)
+
+    db.refresh(log)
+    assert log.status == "failed"
+    assert log.error_detail == "ShipFrom PhoneNumber must be at least 10 alphanumeric characters"
+    assert len(sent) == 1
+    assert "标签创建失败" in sent[0]
+    assert "ShipFrom PhoneNumber must be at least 10 alphanumeric characters" in sent[0]

@@ -61,6 +61,7 @@ _POSTGRES_TEST_FILES = {
     "tests/core/test_oms_create_workorder_handler.py",
     "tests/core/test_label_base_handler.py",
     "tests/core/test_resolve_billing_customer_id.py",
+    "tests/core/test_label_confirmation_quote.py",
 }
 
 

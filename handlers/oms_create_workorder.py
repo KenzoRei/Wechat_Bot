@@ -1,3 +1,4 @@
+import base64
 import logging
 from uuid import UUID
 from handlers.base import BaseHandler
@@ -168,6 +169,7 @@ class OMSCreateWorkorderHandler(BaseHandler):
         carrier = label_result.get("carrier")
         if not carrier:
             raise RuntimeError("carrier missing from context[\"result\"] -- label step must set it")
+        label_base64 = label_result.get("label_base64")
         shipment = LabelShipment(
             request_log_id=UUID(request_log_id),
             billing_customer_id=billing_customer_id,
@@ -176,6 +178,10 @@ class OMSCreateWorkorderHandler(BaseHandler):
             oms_work_order=oms_result.get("oms_work_order"),
             oms_error=oms_result.get("oms_error"),
             sales_amount=label_result.get("sales_amount"),
+            # Stored once, here, at creation time -- see the column's own
+            # docstring (models/customer.py) for why this must never be
+            # re-derived by calling YiDiDa's create_label a second time.
+            label_pdf=base64.b64decode(label_base64) if label_base64 else None,
             status="created",
         )
         db.add(shipment)

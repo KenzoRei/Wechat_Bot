@@ -575,6 +575,20 @@ def _workflow_steps(db: DBSession, context: dict, service: dict, session) -> Non
             merged["_defer_commit"] = True
         result = handler_class().handle(context, merged, db)
         context["result"].update(result or {})
+        if step.step_type in ("create_fedex_label", "create_ups_label") and (result or {}).get("label_base64"):
+            # Kefu can send the label PDF itself as a native chat file,
+            # unlike Smart Robot's group-webhook response_url, which can't
+            # carry a file at all and must stay link-based. Built from the
+            # step's own just-returned label_base64 (the real, one-time
+            # YiDiDa API response) -- never regenerated later by calling
+            # create_label again; see core/kefu_label_export.py's docstring.
+            from core.kefu_label_export import build_label_artifact_from_base64
+
+            artifact = build_label_artifact_from_base64(
+                result["label_base64"], result.get("carrier", ""),
+                context.get("serial_number", ""), context.get("request_log_id"),
+            )
+            context["_kefu_artifacts"].append({"doc_type": "label", "artifact": artifact})
         if step.step_type == "query_storage_history" and (result or {}).get("export_detail_requested"):
             # QueryStorageHistoryHandler already skipped its own Smart-Robot-
             # only download-link build for this channel (source_channel ==
@@ -650,7 +664,7 @@ def _finish_execution(db: DBSession, context: dict, service: dict, session, log)
 
 def confirm_kefu_turn(db: DBSession, context: dict, service: dict, session) -> str:
     """Apply one confirmed mutation; caller owns the guarded execution claim."""
-    from core.workflow_errors import TargetOperationRejected
+    from core.workflow_errors import TargetOperationRejected, LabelCreationRejected
 
     log = _load_log(db, session)
     _set_context_for_session(context, session, log)
@@ -696,6 +710,26 @@ def confirm_kefu_turn(db: DBSession, context: dict, service: dict, session) -> s
         # caller exactly as if this were any other outcome; the
         # surrounding turn (case_turn/execution-ledger state) finalizes
         # normally in the same transaction.
+        session.status = "cancelled"
+        reply = e.user_message
+        _append(session, "assistant", reply)
+        return reply
+    except LabelCreationRejected as e:
+        # The carrier rejected this shipment for a business reason (bad
+        # phone, bad address, etc.) -- create_label was the label
+        # workflow's first step, so no prior step in this turn made any
+        # DB writes worth preserving. Unlike TargetOperationRejected
+        # (which never owns/touches its log, by design), this session DOES
+        # own a freshly-created log that would otherwise be stuck at
+        # 'processing' forever -- mark it failed here. No explicit
+        # rollback/commit: this transaction still holds the CaseExecution
+        # claim row and this turn's replay bookkeeping, same reasoning as
+        # the TargetOperationRejected branch above -- the caller's own
+        # single outer commit finalizes everything together.
+        if log is not None:
+            log.status = "failed"
+            log.error_detail = e.carrier_message
+            log.completed_at = datetime.now(timezone.utc)
         session.status = "cancelled"
         reply = e.user_message
         _append(session, "assistant", reply)

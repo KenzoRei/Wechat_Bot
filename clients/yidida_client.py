@@ -18,6 +18,23 @@ Pricing flow (separate endpoint, confirmed against a real quote sample):
 import requests
 import config
 
+
+class ShipmentRejected(RuntimeError):
+    """
+    YiDiDa/the carrier rejected this specific shipment for a business
+    reason (invalid phone, bad address, etc.) -- distinct from every other
+    RuntimeError this module raises (auth failure, malformed response,
+    unexpected shape), which represent a genuine infra problem and must
+    keep propagating as plain RuntimeError so callers don't mistake one
+    for the other. Carries the carrier's own raw message, untranslated --
+    handlers/label/base.py is responsible for turning this into a
+    user-facing instruction (core.workflow_errors.LabelCreationRejected).
+    """
+
+    def __init__(self, carrier_message: str):
+        self.carrier_message = carrier_message
+        super().__init__(carrier_message)
+
 BASE_URL = config.YIDIDA_BASE_URL.rstrip("/")
 
 
@@ -258,7 +275,7 @@ def _parse_response(data: dict) -> dict:
     if isinstance(data.get("data"), list) and data["data"]:
         item = data["data"][0]
         if item.get("code") != 200:
-            raise RuntimeError(f"YiDiDa shipment failed: {item.get('message', item)}")
+            raise ShipmentRejected(str(item.get("message", item)))
         return {
             "tracking_number": item.get("zhuanDanHao", ""),
             "label_base64":    item.get("label", ""),    # base64-encoded PDF

@@ -1,0 +1,21 @@
+-- V28: store the label PDF's own bytes on label_shipment.
+--
+-- Sending a shipping label as a native Kefu file attachment (instead of
+-- only a download link) needs a durable, replay-safe byte source.
+-- core/kefu_delivery.py's file-delivery path regenerates its payload on
+-- demand from (request_log_id, doc_type) on every send/retry/process
+-- restart (see models/kefu.py's KefuOutboundDelivery docstring) -- correct
+-- for a PDF stub or an invoice workbook, which are pure functions of
+-- already-stored data, but WRONG for a label: label_base64 comes from a
+-- one-time, real YiDiDa API call (create_label) that creates an actual
+-- carrier shipment. Regenerating it by calling create_label again would
+-- create a SECOND, duplicate, separately-billed shipment.
+--
+-- label_pdf stores the already-created label's own bytes at creation
+-- time (handlers/oms_create_workorder.py's _record_label_shipment), so
+-- core/kefu_artifact_loader.py's "label" doc_type can regenerate the
+-- Artifact by reading this column back -- never by calling YiDiDa again.
+--
+-- Idempotent for both an existing deployment and a fresh database.
+
+ALTER TABLE label_shipment ADD COLUMN IF NOT EXISTS label_pdf BYTEA;

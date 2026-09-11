@@ -27,7 +27,7 @@ def send_message(context: dict, content: str) -> None:
 from handlers.registry import HANDLER_REGISTRY
 from models.workflow import WorkflowStep
 from models.service import ServiceType
-from core.workflow_errors import TargetOperationRejected
+from core.workflow_errors import TargetOperationRejected, LabelCreationRejected
 
 
 def _session_provenance_kwargs(context: dict) -> dict:
@@ -1083,6 +1083,17 @@ def _execute_workflow_and_finish(context: dict, session, db: DBSession) -> None:
             db.commit()
         except TargetOperationRejected as e:
             _close_as_target_rejected(context, session, db, e)
+        except LabelCreationRejected as e:
+            # Carrier rejected the shipment for a business reason (bad
+            # phone, bad address, etc.) -- create_label is always this
+            # workflow's first step, so nothing durable from this turn
+            # needs preserving. Same terminal shape as the generic
+            # Exception branch below, but with the carrier's own specific
+            # message instead of a generic one.
+            db.rollback()
+            request_logger.mark_failed(db, session.request_log_id, error_detail=e.carrier_message)
+            session_manager.close_session(db, session, status="cancelled")
+            send_message(context, e.user_message)
         except Exception as e:
             import traceback
             print(f"[workflow] STEP FAILED: {e}", flush=True)

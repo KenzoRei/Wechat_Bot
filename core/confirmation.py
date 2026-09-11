@@ -5,9 +5,12 @@ registry-with-default-fallback for building the (display_name, sections)
 that go into it — mirroring handlers/registry.py's idiom. Most services
 (flat scalar fields, nothing to look up) never need a registry entry.
 """
+import logging
 from typing import Callable
 from sqlalchemy.orm import Session as DBSession
 from core.message_sections import render_sections
+
+logger = logging.getLogger(__name__)
 
 
 def build_confirmation_message(
@@ -166,24 +169,81 @@ def _sku_label(sku_labels: dict[str, str], sku_code: str) -> str:
 
 # ── Sections builders ────────────────────────────────────────────────────────
 
-def _label_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
-    """FedEx/UPS — preserves the original shipper/recipient/package grouping."""
-    oms_order_no = collected_fields.get("oms_outbound_order_no")
-    shipper   = {_field_label(k): v for k, v in collected_fields.items() if k.startswith("shipper_")}
-    recipient = {_field_label(k): v for k, v in collected_fields.items() if k.startswith("recipient_")}
-    other     = {
-        _field_label(k): v for k, v in collected_fields.items()
-        if not k.startswith("shipper_") and not k.startswith("recipient_") and k != "oms_outbound_order_no"
-    }
+def _label_quote_section(carrier: str, collected_fields: dict, db: DBSession) -> dict | None:
+    """
+    Estimated price via YiDiDa's /price endpoint, shown at confirm time --
+    previously sales_amount was only ever fetched (and only ever stored,
+    never displayed) AFTER the label was already created, so a customer
+    had no way to see cost before committing. Deliberately labeled
+    "预计费用" (estimated), not a firm number: the actual create_label
+    charge is a separate YiDiDa call and could in principle diverge
+    slightly from this quote. Non-fatal like every other quote/OMS call in
+    this pipeline -- missing credentials, a missing channel, or a genuine
+    API failure just omits this section rather than blocking the
+    confirmation the customer is about to see.
+    """
+    from core import customer_directory
+    from clients.yidida_client import get_price_quote
 
-    sections = []
-    if oms_order_no:
-        sections.append({"label": "订单信息", "type": "kv", "items": {"OMS出库单号": oms_order_no}})
-    sections.append({"label": "发件人", "type": "kv", "items": shipper})
-    sections.append({"label": "收件人", "type": "kv", "items": recipient})
-    if other:
-        sections.append({"label": "包裹信息", "type": "kv", "items": other})
-    return sections
+    billing_customer_id = collected_fields.get("billing_customer_id")
+    if not billing_customer_id:
+        return None
+
+    creds = customer_directory.get_credentials(db, billing_customer_id)
+    username, password = creds.get("ydd_username"), creds.get("ydd_password")
+    if not username or not password:
+        return None
+
+    customer = customer_directory.get_customer(db, billing_customer_id)
+    channel_id = (customer.ydd_channel_id or {}).get(carrier) if customer else None
+    if not channel_id:
+        return None
+
+    try:
+        quote_fields = {**collected_fields, "ydd_cust_id": username, "ydd_channel_id": channel_id}
+        sales_amount = get_price_quote(fields=quote_fields, api_key=password)["sales_amount"]
+    except Exception as exc:
+        logger.warning(
+            "Pre-confirm price quote failed for customer %s (carrier=%s): %s",
+            billing_customer_id, carrier, exc,
+        )
+        return None
+
+    return {"label": None, "type": "raw", "items": [f"预计费用：${sales_amount:.2f}（实际费用以标签生成后为准）"]}
+
+
+def _label_sections_builder(carrier: str) -> Callable[[dict, DBSession], list[dict]]:
+    """
+    Factory, not a bare function -- the shared builder needs to know which
+    carrier it's rendering for (to look up ydd_channel_id[carrier] for the
+    quote section below), but CONFIRMATION_BUILDERS dispatches by
+    service_type_name alone. Same closure-factory idiom as
+    core/pre_confirm_validators.py's _valid_cancel_target_and_owner(direction).
+    """
+
+    def builder(collected_fields: dict, db: DBSession) -> list[dict]:
+        """FedEx/UPS — preserves the original shipper/recipient/package grouping."""
+        oms_order_no = collected_fields.get("oms_outbound_order_no")
+        shipper   = {_field_label(k): v for k, v in collected_fields.items() if k.startswith("shipper_")}
+        recipient = {_field_label(k): v for k, v in collected_fields.items() if k.startswith("recipient_")}
+        other     = {
+            _field_label(k): v for k, v in collected_fields.items()
+            if not k.startswith("shipper_") and not k.startswith("recipient_") and k != "oms_outbound_order_no"
+        }
+
+        sections = []
+        if oms_order_no:
+            sections.append({"label": "订单信息", "type": "kv", "items": {"OMS出库单号": oms_order_no}})
+        sections.append({"label": "发件人", "type": "kv", "items": shipper})
+        sections.append({"label": "收件人", "type": "kv", "items": recipient})
+        if other:
+            sections.append({"label": "包裹信息", "type": "kv", "items": other})
+        quote_section = _label_quote_section(carrier, collected_fields, db)
+        if quote_section:
+            sections.append(quote_section)
+        return sections
+
+    return builder
 
 
 def _inbound_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
@@ -557,8 +617,8 @@ def _default_sections_builder(collected_fields: dict, db: DBSession) -> list[dic
 
 
 CONFIRMATION_BUILDERS: dict[str, Callable[[dict, DBSession], list[dict]]] = {
-    "fedex_label":              _label_sections_builder,
-    "ups_label":                _label_sections_builder,
+    "fedex_label":              _label_sections_builder("fedex"),
+    "ups_label":                _label_sections_builder("ups"),
     "uchoice_inbound_request":    _inbound_sections_builder,
     "uchoice_outbound_request":   _outbound_sections_builder,
     "confirm_inbound_completion": _inbound_completion_sections_builder,
