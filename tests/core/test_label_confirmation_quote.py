@@ -122,6 +122,18 @@ def test_quote_section_omitted_without_billing_customer_id(db):
     assert not any(s.get("type") == "raw" and "预计费用" in s["items"][0] for s in sections)
 
 
+def test_none_valued_optional_field_shows_systemdefault_not_python_none(db):
+    """reference_number (or any other optional field) can land in
+    collected_fields as an explicit None rather than being absent
+    entirely -- must render as "系统默认", never Python's bare "None"."""
+    sections = confirmation.build_confirmation_sections(
+        "fedex_label", _fields("F000000", reference_number=None), db,
+    )
+    package_section = next(s for s in sections if s["label"] == "包裹信息")
+    assert package_section["items"]["参考编号"] == "系统默认"
+    assert "None" not in str(package_section["items"].values())
+
+
 def test_dim_warning_shown_when_dimensions_missing(db):
     """_fields() never includes length_in/width_in/height_in -- the default
     case, and the one that matters most since these are optional fields

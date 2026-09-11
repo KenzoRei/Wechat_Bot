@@ -2,7 +2,15 @@
 OMS (xlwms) API client.
 
 Auth: HMAC-SHA256 signature
-  1. Sort data fields alphabetically (case-insensitive)
+  1. Sort data fields alphabetically (case-insensitive), RECURSIVELY --
+     every nested dict's own keys must also be sorted, not just the
+     top level (confirmed the hard way: every request body sent by this
+     client was flat until workVasitemList's nested item dicts were
+     added, at which point OMS started rejecting the signature with
+     [11006] 验签不通过 -- a top-level-only sort no longer matched what
+     OMS recomputes server-side. A working reference implementation,
+     D:\\Project\\TWNJ_Helper\\core\\oms_client.py's _deep_sort_keys,
+     confirms nested dicts/lists must be sorted too.)
   2. Concatenate: appKey + sorted_data_json + reqTime
   3. HMAC-SHA256(key=appSecret, msg=concat) → hex → authcode
   4. authcode passed as GET query param; body contains appKey + reqTime + data
@@ -33,15 +41,29 @@ WORK_TYPE_GENERAL = 1906097515340062720
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
 
+def _deep_sort_keys(obj):
+    """Recursively sorts every dict's keys alphabetically (case-insensitive)
+    -- OMS's signature verification recomputes the canonical JSON the same
+    way, so a shallow (top-level-only) sort silently mismatches as soon as
+    any nested dict (e.g. a workVasitemList entry) is involved."""
+    if isinstance(obj, dict):
+        return {k: _deep_sort_keys(obj[k]) for k in sorted(obj.keys(), key=lambda k: k.lower())}
+    if isinstance(obj, list):
+        return [_deep_sort_keys(item) for item in obj]
+    return obj
+
+
 def _sign(app_key: str, app_secret: str, data: dict) -> tuple[str, str, str]:
     """
     Returns (req_time, data_json, authcode).
-    data_json is the JSON-encoded sorted data (used in request body).
+    data_json is the JSON-encoded, recursively key-sorted data (used in
+    request body -- sent pre-sorted so the server's raw-string signature
+    verification sees the exact same byte sequence that was signed).
     authcode is the HMAC-SHA256 hex digest (used as query param).
     """
     req_time = str(int(time.time()))
 
-    sorted_data = dict(sorted(data.items(), key=lambda x: x[0].lower()))
+    sorted_data = _deep_sort_keys(data)
     data_json   = json.dumps(sorted_data, ensure_ascii=False, separators=(',', ':'))
     concat      = app_key + data_json + req_time
 
