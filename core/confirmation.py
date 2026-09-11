@@ -111,6 +111,17 @@ def _field_label(field_key: str) -> str:
     return _FIELD_LABELS.get(field_key, field_key)
 
 
+def _display_value(value):
+    """
+    An optional field can land in collected_fields as an explicit None
+    rather than being absent entirely (e.g. reference_number when the
+    customer didn't provide one) -- shown as "系统默认" instead of
+    Python's bare "None" leaking into a customer-facing confirmation
+    message.
+    """
+    return "系统默认" if value is None else value
+
+
 _CHARGE_TYPE_LABELS = {
     "short_delivery":  "短途配送",
     "delivery":        "配送",
@@ -246,10 +257,10 @@ def _label_sections_builder(carrier: str) -> Callable[[dict, DBSession], list[di
     def builder(collected_fields: dict, db: DBSession) -> list[dict]:
         """FedEx/UPS — preserves the original shipper/recipient/package grouping."""
         oms_order_no = collected_fields.get("oms_outbound_order_no")
-        shipper   = {_field_label(k): v for k, v in collected_fields.items() if k.startswith("shipper_")}
-        recipient = {_field_label(k): v for k, v in collected_fields.items() if k.startswith("recipient_")}
+        shipper   = {_field_label(k): _display_value(v) for k, v in collected_fields.items() if k.startswith("shipper_")}
+        recipient = {_field_label(k): _display_value(v) for k, v in collected_fields.items() if k.startswith("recipient_")}
         other     = {
-            _field_label(k): v for k, v in collected_fields.items()
+            _field_label(k): _display_value(v) for k, v in collected_fields.items()
             if not k.startswith("shipper_") and not k.startswith("recipient_") and k != "oms_outbound_order_no"
         }
 
@@ -637,7 +648,7 @@ def _cancel_request_sections_builder(collected_fields: dict, db: DBSession) -> l
 
 
 def _default_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
-    items = {_field_label(k): v for k, v in collected_fields.items()}
+    items = {_field_label(k): _display_value(v) for k, v in collected_fields.items()}
     return [{"label": "详情", "type": "kv", "items": items}]
 
 
