@@ -144,8 +144,8 @@ def get_vas_list(wh_code: str, app_key: str, app_secret: str) -> list[dict]:
 # yet"; create_work_order below skips the VAS line (logged, non-fatal)
 # rather than sending a nonsense billItemId/ruleId until these are filled in.
 VAS_LOGISTICS_FEE_NAME        = "物流费"
-VAS_LOGISTICS_FEE_BILL_ITEM_ID: int | None = None  # TODO: fill in via scripts/fetch_oms_vas_list.py
-VAS_LOGISTICS_FEE_RULE_ID:      int | None = None  # TODO: fill in via scripts/fetch_oms_vas_list.py
+VAS_LOGISTICS_FEE_BILL_ITEM_ID: int | None = 2050303347482492928
+VAS_LOGISTICS_FEE_RULE_ID:      int | None = 2062901791998910464
 
 
 # ── Endpoint 2b: Create work order ─────────────────────────────────────────────
