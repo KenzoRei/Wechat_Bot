@@ -19,6 +19,19 @@ IS blocked there).
 import clients.oms_client as oms_client
 
 
+def test_logistics_fee_constants_are_configured():
+    """
+    Regression guard: these were None (VAS line silently skipped, logged)
+    until a real lookup via scripts/fetch_oms_vas_list.py against this
+    OMS account's catalog. Fails loudly if anyone ever reverts them to
+    None, rather than that silently degrading back to "no VAS line" in
+    production with only a log line to notice it.
+    """
+    assert oms_client.VAS_LOGISTICS_FEE_NAME == "物流费"
+    assert oms_client.VAS_LOGISTICS_FEE_BILL_ITEM_ID == 2050303347482492928
+    assert oms_client.VAS_LOGISTICS_FEE_RULE_ID == 2062901791998910464
+
+
 def _mock_response(monkeypatch, json_body):
     class FakeResp:
         def raise_for_status(self):
