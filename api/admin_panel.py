@@ -211,6 +211,7 @@ _PANEL_HTML = """<!doctype html>
     <button class="tab-btn active" data-tab="staff" onclick="switchTab('staff')">Staff &amp; Groups</button>
     <button class="tab-btn" data-tab="transactions" onclick="switchTab('transactions')">Transactions</button>
     <button class="tab-btn" data-tab="customers" onclick="switchTab('customers')">Customers</button>
+    <button class="tab-btn" data-tab="warehouses" onclick="switchTab('warehouses')">Warehouses</button>
   </div>
 
   <div id="tab-staff" class="tab-panel active">
@@ -299,6 +300,33 @@ _PANEL_HTML = """<!doctype html>
         <tbody id="customerRows"></tbody>
       </table>
       <div class="error" id="customerError"></div>
+    </div>
+  </div>
+
+  <div id="tab-warehouses" class="tab-panel">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <h3>Warehouses</h3>
+          <div class="meta">Company shipping directory (address/contact per location) — used to resolve a bare warehouse abbreviation (e.g. "从LAX到DE") to shipper OR recipient info when creating a FedEx/UPS label, depending on which side of the shipment it's on. Not the same as U-Choice's own JFK/DE/NJ inventory warehouse codes.</div>
+        </div>
+        <button onclick="showNewWarehouseForm()">+ New warehouse</button>
+      </div>
+      <div id="newWarehouseForm" style="display:none;" class="filters">
+        <input type="text" id="newWarehouseAbbr" placeholder="e.g. LAX" style="width:80px;">
+        <input type="text" id="newWarehouseCompanyName" placeholder="Company name, e.g. TWF-LAX" style="width:140px;">
+        <input type="text" id="newWarehouseAddr" placeholder="Address">
+        <input type="text" id="newWarehouseCity" placeholder="City" style="width:120px;">
+        <input type="text" id="newWarehouseState" placeholder="State" style="width:70px;">
+        <input type="text" id="newWarehouseZip" placeholder="Zip" style="width:90px;">
+        <button onclick="createWarehouse()">Create</button>
+        <button class="secondary" onclick="hideNewWarehouseForm()">Cancel</button>
+      </div>
+      <table>
+        <thead><tr><th>Abbr</th><th>Company</th><th>Address</th><th>City</th><th>State</th><th>Zip</th><th>Contact</th><th>Phone</th><th>Email</th><th></th></tr></thead>
+        <tbody id="warehouseRows"></tbody>
+      </table>
+      <div class="error" id="warehouseError"></div>
     </div>
   </div>
 
@@ -510,6 +538,10 @@ function switchTab(name) {
   if (name === "customers" && !_customersLoadedOnce) {
     _customersLoadedOnce = true;
     loadCustomers();
+  }
+  if (name === "warehouses" && !_warehousesLoadedOnce) {
+    _warehousesLoadedOnce = true;
+    loadWarehouses();
   }
 }
 
@@ -860,6 +892,87 @@ async function promptSetCredential(customerId, credentialType) {
   } catch (e) {
     if (e.message === "UNAUTHORIZED") throw e;
     document.getElementById("customerError").textContent = "Failed to set credential: " + e.message;
+  }
+}
+
+// ── Warehouses ───────────────────────────────────────────────────────────────
+let _warehousesLoadedOnce = false;
+
+function showNewWarehouseForm() { document.getElementById("newWarehouseForm").style.display = ""; }
+function hideNewWarehouseForm() {
+  document.getElementById("newWarehouseForm").style.display = "none";
+  ["newWarehouseAbbr", "newWarehouseCompanyName", "newWarehouseAddr", "newWarehouseCity", "newWarehouseState", "newWarehouseZip"].forEach(id => {
+    document.getElementById(id).value = "";
+  });
+}
+
+async function createWarehouse() {
+  document.getElementById("warehouseError").textContent = "";
+  const warehouse_abbr = document.getElementById("newWarehouseAbbr").value.trim().toUpperCase();
+  const company_name = document.getElementById("newWarehouseCompanyName").value.trim();
+  const addr = document.getElementById("newWarehouseAddr").value.trim();
+  const city = document.getElementById("newWarehouseCity").value.trim();
+  const state = document.getElementById("newWarehouseState").value.trim();
+  const zip_code = document.getElementById("newWarehouseZip").value.trim();
+  if (!warehouse_abbr || !company_name || !addr || !city || !state || !zip_code) {
+    document.getElementById("warehouseError").textContent = "Abbr, company name, address, city, state, and zip are all required.";
+    return;
+  }
+  try {
+    await authedPost("/admin/warehouses", { warehouse_abbr, company_name, addr, city, state, zip_code, created_by: "admin_panel" });
+    hideNewWarehouseForm();
+    await loadWarehouses();
+  } catch (e) {
+    if (e.message === "UNAUTHORIZED") throw e;
+    document.getElementById("warehouseError").textContent = "Create failed: " + e.message;
+  }
+}
+
+async function loadWarehouses() {
+  document.getElementById("warehouseError").textContent = "";
+  try {
+    const resp = await authedFetch("/admin/warehouses");
+    const warehouses = resp.data || [];
+    const rowsEl = document.getElementById("warehouseRows");
+    if (warehouses.length === 0) {
+      rowsEl.innerHTML = '<tr><td colspan="10" class="empty">No warehouses yet.</td></tr>';
+      return;
+    }
+    rowsEl.innerHTML = warehouses.map(warehouseRowHtml).join("");
+  } catch (e) {
+    if (e.message === "UNAUTHORIZED") throw e;
+    document.getElementById("warehouseError").textContent = "Failed to load: " + e.message;
+  }
+}
+
+function warehouseRowHtml(w) {
+  const field = (name, value, width) =>
+    `<input type="text" value='${escapeHtml(value || "")}' id="wh-${name}-${w.warehouse_abbr}" style="width:${width}px;">
+     <button class="secondary" onclick="saveWarehouseField('${w.warehouse_abbr}', '${name}', document.getElementById('wh-${name}-${w.warehouse_abbr}').value)">Save</button>`;
+  return `
+    <tr>
+      <td>${escapeHtml(w.warehouse_abbr)}</td>
+      <td>${field("company_name", w.company_name, 120)}</td>
+      <td>${field("addr", w.addr, 180)}</td>
+      <td>${field("city", w.city, 100)}</td>
+      <td>${field("state", w.state, 60)}</td>
+      <td>${field("zip_code", w.zip_code, 80)}</td>
+      <td>${field("contact", w.contact, 100)}</td>
+      <td>${field("phone", w.phone, 110)}</td>
+      <td>${field("email", w.email, 160)}</td>
+      <td></td>
+    </tr>
+  `;
+}
+
+async function saveWarehouseField(warehouseAbbr, field, value) {
+  document.getElementById("warehouseError").textContent = "";
+  try {
+    await authedPatch(`/admin/warehouses/${encodeURIComponent(warehouseAbbr)}`, { [field]: value, updated_by: "admin_panel" });
+    await loadWarehouses();
+  } catch (e) {
+    if (e.message === "UNAUTHORIZED") throw e;
+    document.getElementById("warehouseError").textContent = "Save failed: " + e.message;
   }
 }
 

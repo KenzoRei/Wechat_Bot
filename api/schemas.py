@@ -300,3 +300,40 @@ class CustomerCredentialSet(BaseModel):
     credential_type: str    # 'oms_app_key' | 'oms_app_secret' | 'ydd_username' | 'ydd_password'
     value:           str
     updated_by:      str
+
+
+class CompanyWarehouseCreate(BaseModel):
+    warehouse_abbr: str    # natural key, e.g. "JFK" -- what customers/staff already say in conversation
+    company_name:   str    # legal/billing entity operating this location, e.g. "TWF-JFK" -- maps to shipper_corp_name
+    addr:           str
+    city:           str
+    state:          str
+    zip_code:       str
+    contact:        str | None = None
+    phone:          str | None = None
+    email:          str | None = None
+    created_by:     str    # who created this — manual until per-admin auth exists, matches CustomerCreate's convention
+
+
+class CompanyWarehouseUpdate(BaseModel):
+    company_name: str | None = None
+    addr:       str | None = None
+    city:       str | None = None
+    state:      str | None = None
+    zip_code:   str | None = None
+    contact:    str | None = None
+    phone:      str | None = None
+    email:      str | None = None
+    updated_by: str
+
+
+class CompanyWarehouseResponse(BaseModel):
+    warehouse_abbr: str
+    company_name:   str
+    addr:           str
+    city:           str
+    state:          str
+    zip_code:       str
+    contact:        str | None
+    phone:          str | None
+    email:          str | None

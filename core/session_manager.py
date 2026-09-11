@@ -7,6 +7,7 @@ from models.request_log import RequestLog
 from models.service import ServiceType
 from core.access_control import AccessResult
 from core import uchoice_context
+from core import warehouse_directory
 from core.uchoice_constants import VALID_WAREHOUSE_CODES
 import config
 
@@ -471,6 +472,19 @@ def _build_uchoice_candidates(
 
     if "role_change" in names:
         candidates["members"] = uchoice_context.member_candidates(db, access.group_id)
+
+    if names & {"fedex_label", "ups_label"}:
+        # Company-wide shipping directory (models/company_warehouse.py) --
+        # distinct from VALID_WAREHOUSE_CODES/uchoice's own inventory
+        # warehouse_code concept (JFK/DE/NJ only). Lets the AI resolve a
+        # bare abbreviation mention (e.g. "从LAX到DE") to real shipper_*
+        # OR recipient_* fields, the same way sku_catalog/address_candidates
+        # resolve their own bare-mention cases for other services -- one of
+        # our own warehouses can be either side of a shipment (e.g. "送到
+        # JFK" makes JFK the recipient, an inbound-to-us case), so which
+        # field group it fills is a per-request judgment call for the AI
+        # (see ai/prompt_builder.py's instruction), not fixed here.
+        candidates["company_warehouses"] = warehouse_directory.warehouse_candidates(db)
 
     if "explain_service" in names:
         # Scoped to this group's own granted services — NOT system-wide.
