@@ -229,6 +229,59 @@ def test_create_work_order_failure_is_recorded_not_raised(monkeypatch):
         db.close()
 
 
+def test_logistics_fee_qty_derived_from_sales_amount_and_truncated(monkeypatch):
+    """logistics_fee_qty must be int(sales_amount) -- the estimated quote,
+    truncated per the explicit "qty = int(quote price)" requirement --
+    and passed through to create_work_order."""
+    db = SessionLocal()
+    customer_id = _fresh_customer_id()
+    try:
+        cd.upsert_customer(db, customer_id, actor="test", display_name="VAS Qty Co", oms_wh_code="DE19713")
+        cd.set_credential(db, customer_id, "oms_app_key", "key", actor="test")
+        cd.set_credential(db, customer_id, "oms_app_secret", "secret", actor="test")
+
+        captured = {}
+        def fake_create(**kw):
+            captured.update(kw)
+            return "WO-VAS-001"
+        monkeypatch.setattr(oms_handler_module, "create_work_order", fake_create)
+
+        context = _base_context(customer_id)
+        context["result"]["sales_amount"] = 42.99
+        OMSCreateWorkorderHandler().handle(context, {}, db=db)
+        assert captured["logistics_fee_qty"] == 42
+    finally:
+        db.execute(text("delete from customer_credential where customer_id = :cid"), {"cid": customer_id})
+        db.execute(text("delete from customer where customer_id = :cid"), {"cid": customer_id})
+        db.commit()
+        db.close()
+
+
+def test_logistics_fee_qty_none_when_sales_amount_missing(monkeypatch):
+    """No quote (e.g. it failed non-fatally) -- must not guess a qty, just
+    omit the VAS line entirely (create_work_order treats None as no-op)."""
+    db = SessionLocal()
+    customer_id = _fresh_customer_id()
+    try:
+        cd.upsert_customer(db, customer_id, actor="test", display_name="No Quote Co", oms_wh_code="DE19713")
+        cd.set_credential(db, customer_id, "oms_app_key", "key", actor="test")
+        cd.set_credential(db, customer_id, "oms_app_secret", "secret", actor="test")
+
+        captured = {}
+        def fake_create(**kw):
+            captured.update(kw)
+            return "WO-NOVAS-001"
+        monkeypatch.setattr(oms_handler_module, "create_work_order", fake_create)
+
+        OMSCreateWorkorderHandler().handle(_base_context(customer_id), {}, db=db)
+        assert captured["logistics_fee_qty"] is None
+    finally:
+        db.execute(text("delete from customer_credential where customer_id = :cid"), {"cid": customer_id})
+        db.execute(text("delete from customer where customer_id = :cid"), {"cid": customer_id})
+        db.commit()
+        db.close()
+
+
 def test_records_label_shipment_row_regardless_of_oms_outcome(monkeypatch):
     """Companion ledger (plan §2): one row per label, linked to request_log,
     populated even when OMS is skipped entirely (no credentials)."""
