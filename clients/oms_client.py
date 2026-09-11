@@ -12,9 +12,12 @@ Base URL: https://api.xlwms.com/openapi
 import hmac
 import hashlib
 import json
+import logging
 import time
 import requests
 import config
+
+logger = logging.getLogger(__name__)
 
 BASE_URL = config.OMS_BASE_URL.rstrip("/")
 
@@ -108,7 +111,44 @@ def query_outbound_order(outbound_order_no: str, app_key: str, app_secret: str) 
     return records[0]
 
 
-# ── Endpoint 2: Create work order ─────────────────────────────────────────────
+# ── Value-added services (VAS) ────────────────────────────────────────────────
+# https://apidoc-oms.xlwms.com/reference/getworkordervaslistusingpost.md
+#
+# get_vas_list is a thin, reusable wrapper around the real endpoint --
+# kept here (not duplicated elsewhere) since it needs this module's own
+# _post()/HMAC-signing machinery. It is NOT called by create_work_order
+# below or anywhere else in the request-handling pipeline: a work order is
+# created on every single label request, and this app deliberately does
+# not want a live VAS-catalog lookup (with its own latency/failure modes)
+# on that hot path for a value that essentially never changes. Instead,
+# scripts/fetch_oms_vas_list.py is a standalone, manually-run tool that
+# calls this function once to find "物流费"'s real billItemId/ruleId for
+# this OMS account -- paste its output into the VAS_LOGISTICS_FEE_*
+# constants below, then re-run only if OMS's VAS catalog ever changes.
+
+def get_vas_list(wh_code: str, app_key: str, app_secret: str) -> list[dict]:
+    """
+    Returns the raw list of available VAS items for this warehouse, each a
+    dict with billItemId, billItemName, billCode, billCodeDesc,
+    currencyCode, unitPrice, ruleId.
+
+    Endpoint: POST /v1/workOrder/vas/list
+    """
+    result = _post("/v1/workOrder/vas/list", app_key, app_secret, {"whCode": wh_code})
+    return result.get("data") or []
+
+
+# Hardcoded from a one-time run of scripts/fetch_oms_vas_list.py against
+# this OMS account's real VAS catalog -- see that script's docstring to
+# refresh these if the catalog ever changes. None means "not configured
+# yet"; create_work_order below skips the VAS line (logged, non-fatal)
+# rather than sending a nonsense billItemId/ruleId until these are filled in.
+VAS_LOGISTICS_FEE_NAME        = "物流费"
+VAS_LOGISTICS_FEE_BILL_ITEM_ID: int | None = None  # TODO: fill in via scripts/fetch_oms_vas_list.py
+VAS_LOGISTICS_FEE_RULE_ID:      int | None = None  # TODO: fill in via scripts/fetch_oms_vas_list.py
+
+
+# ── Endpoint 2b: Create work order ─────────────────────────────────────────────
 
 def create_work_order(
     third_no:                    str,
@@ -120,6 +160,7 @@ def create_work_order(
     associated_tracking_no:      str = "",
     associated_tracking_no_type: int = 0,
     unmatched_oms_order_no:      str = "",
+    logistics_fee_qty:           int | None = None,
 ) -> str:
     """
     Creates an OMS work order (workTypeCode = 通用).
@@ -139,6 +180,21 @@ def create_work_order(
         dropping it or (the previous, incorrect behavior) still claiming a
         verified link via associated_tracking_no to an order OMS just said
         doesn't exist. Never set together with associated_tracking_no.
+
+    logistics_fee_qty:
+        When set (and > 0), attaches a "物流费" (logistics fee) VAS line
+        with this quantity -- the ESTIMATED shipping cost (int(quote
+        price) from YiDiDa's /price, see handlers/label/base.py), a
+        placeholder finance updates manually once the carrier's real
+        invoice comes out. Uses the hardcoded VAS_LOGISTICS_FEE_* constants
+        above (see workVasitemList's schema at
+        https://apidoc-oms.xlwms.com/reference/createworkorderusingpost.md:
+        billItemId/ruleId/qty required, billItemName/omsRemark optional) --
+        deliberately NOT a live VAS-catalog lookup on this hot path (see
+        the constants' own comment for why). If they're still unconfigured
+        (None), the VAS line is skipped (logged) rather than sending a
+        nonsense billItemId/ruleId -- non-fatal, same as every other OMS
+        failure mode in this pipeline.
     """
     remark = _build_remark(tracking_number, collected_fields, unmatched_oms_order_no)
 
@@ -154,6 +210,21 @@ def create_work_order(
     if associated_tracking_no_type and associated_tracking_no:
         data["associatedTrackingNoType"] = associated_tracking_no_type
         data["associatedTrackingNo"]     = associated_tracking_no
+
+    if logistics_fee_qty and logistics_fee_qty > 0:
+        if VAS_LOGISTICS_FEE_BILL_ITEM_ID is None or VAS_LOGISTICS_FEE_RULE_ID is None:
+            logger.warning(
+                "VAS_LOGISTICS_FEE_BILL_ITEM_ID/RULE_ID not configured -- "
+                "run scripts/fetch_oms_vas_list.py and fill them in. "
+                "Creating work order without the 物流费 line."
+            )
+        else:
+            data["workVasitemList"] = [{
+                "billItemId":   VAS_LOGISTICS_FEE_BILL_ITEM_ID,
+                "ruleId":       VAS_LOGISTICS_FEE_RULE_ID,
+                "qty":          logistics_fee_qty,
+                "billItemName": VAS_LOGISTICS_FEE_NAME,
+            }]
 
     result = _post("/v1/workOrder/create", app_key, app_secret, data)
     return result.get("data", "")

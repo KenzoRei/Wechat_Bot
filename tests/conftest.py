@@ -99,13 +99,15 @@ def block_operational_clients(monkeypatch):
     monkeypatch.setattr("clients.oms_client.query_outbound_order", blocked)
     monkeypatch.setattr("clients.oms_client.create_work_order", blocked)
     monkeypatch.setattr("clients.yidida_client.create_label", blocked)
-    # get_price_quote is deliberately NOT blocked at this layer (unlike
-    # create_label/create_work_order/query_outbound_order above) --
-    # tests/core/test_yidida_price_quote.py tests it directly with its own
-    # requests.post/_get_token mocks, the same way no test exercises
-    # clients.oms_client's functions directly either. The real production
-    # call path (handlers/label/base.py's imported alias) is still blocked
-    # below, plus the transport-level kill switch further down.
+    # get_price_quote / get_vas_list are deliberately NOT blocked at this
+    # layer (unlike create_label/create_work_order/query_outbound_order
+    # above, which create or mutate a real shipment/work order) -- both
+    # are read-only lookups with no side effect, and
+    # tests/core/test_yidida_price_quote.py / test_oms_vas_list.py test
+    # them directly with their own requests.post/_get_token mocks. The
+    # real production call path (handlers/label/base.py's and
+    # handlers/oms_create_workorder.py's imported aliases) is still
+    # blocked below, plus the transport-level kill switch further down.
 
     # Layer 2: already-bound aliases in every module that imports these by
     # value (`from clients.x import y`) -- confirmed by direct grep of every

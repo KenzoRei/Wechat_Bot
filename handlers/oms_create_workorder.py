@@ -76,6 +76,17 @@ class OMSCreateWorkorderHandler(BaseHandler):
         serial_number = context.get("serial_number", "")
         oms_order_no  = (fields.get("oms_outbound_order_no") or "").strip()
 
+        # Estimated shipping cost (YiDiDa's /price quote, handlers/label/
+        # base.py) -- attached to the work order as a "物流费" VAS line so
+        # it's visible in OMS immediately, not just in this bot's own
+        # label_shipment table. Explicitly an ESTIMATE: finance updates
+        # this manually once the carrier's real invoice comes out (per
+        # the 2026-09 workorder-VAS discussion) -- None when the quote
+        # itself failed (non-fatal elsewhere), in which case no VAS line
+        # is attached at all rather than guessing a number.
+        sales_amount = context.get("result", {}).get("sales_amount")
+        logistics_fee_qty = int(sales_amount) if sales_amount is not None else None
+
         if not customer_directory.has_credentials(db, billing_customer_id, "oms_app_key", "oms_app_secret"):
             logger.info("No OMS credentials configured for customer %s -- skipping OMS push", billing_customer_id)
             return {"oms_work_order": None, "oms_error": None}
@@ -107,6 +118,7 @@ class OMSCreateWorkorderHandler(BaseHandler):
                         app_secret=app_secret,
                         associated_tracking_no=oms_order_no,
                         associated_tracking_no_type=2,
+                        logistics_fee_qty=logistics_fee_qty,
                     )
                     logger.info("OMS work order created: %s  (linked to %s)", work_order_no, oms_order_no)
                     return {"oms_work_order": work_order_no, "oms_order_linked": oms_order_no}
@@ -140,6 +152,7 @@ class OMSCreateWorkorderHandler(BaseHandler):
                 app_secret=app_secret,
                 # associated fields intentionally omitted
                 unmatched_oms_order_no=unmatched_note,
+                logistics_fee_qty=logistics_fee_qty,
             )
             logger.info("OMS work order created: %s  (no linked order)", work_order_no)
             return {"oms_work_order": work_order_no}
