@@ -104,7 +104,7 @@ _KEFU_ENABLED_SERVICES = frozenset({
     "cancel_inbound_request", "cancel_outbound_request",
     "adjust_storage", "recount_storage", "move_storage",
     # Label creation via YiDiDa -- previously Smart-Bot-only despite being
-    # grantable through group_service_role here too; the gap had no
+    # grantable through role_service_permission here too; the gap had no
     # functional justification (see docs/reviews/active/2026-09-customer-
     # service-and-label-pipeline/plan.md).
     "fedex_label", "ups_label",
@@ -118,7 +118,7 @@ _KEFU_ENABLED_SERVICES = frozenset({
 })
 
 # purge_kefu_sessions is DELIBERATELY absent from the set above. It's
-# granted via group_service_role purely so explain_service/check_services
+# granted via role_service_permission purely so explain_service/check_services
 # can describe it (see V15's migration comment); its workflow has zero
 # steps and nothing ever dispatches through it. If the AI ever
 # misclassifies a message as this service, leaving it out of the allowlist
@@ -129,7 +129,7 @@ _KEFU_ENABLED_SERVICES = frozenset({
 # pre-AI command.
 
 # check_services must only advertise what a Kefu caller can actually
-# invoke. A service can be granted via group_service_role (so it appears
+# invoke. A service can be granted via role_service_permission (so it appears
 # in context["allowed_services"]) while still being rejected by
 # _kefu_rollout_denial_reason below -- adjust_storage/recount_storage/
 # move_storage are exactly this today, staged out until they get the same

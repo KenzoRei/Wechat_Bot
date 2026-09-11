@@ -214,9 +214,9 @@ def test_synthetic_cancel_only_role_sees_cancelable_candidates(
         db.refresh(role)
         role_id = role.role_id
 
-        from models.group import GroupServiceRole
-        db.add(GroupServiceRole(
-            group_id=group_id, role_id=role_id,
+        from models.role import RoleServicePermission
+        db.add(RoleServicePermission(
+            role_id=role_id,
             service_type_id=_service_type_id(db, cancel_service_name),
             created_by="test_completion_cancel_candidate_gating",
         ))
@@ -241,7 +241,8 @@ def test_synthetic_cancel_only_role_sees_cancelable_candidates(
         if staff:
             _cleanup_staff(db, staff.staff_id)
         if role_id:
-            db.execute(text("delete from group_service_role where role_id = :rid"), {"rid": role_id})
+            # role_service_permission cascades on role deletion (ON DELETE
+            # CASCADE) -- no separate delete needed here.
             db.execute(text("delete from role where role_id = :rid"), {"rid": role_id})
             db.commit()
         db.close()
@@ -249,19 +250,24 @@ def test_synthetic_cancel_only_role_sees_cancelable_candidates(
 
 def test_disabling_creation_service_for_group_does_not_hide_existing_processing_request():
     """Codex-driven redesign of this test: proves catalog-independence
-    without ever deleting a real group_service row (group_service_role's
-    FK to group_service is ON DELETE CASCADE -- deleting a real group's
-    uchoice_outbound_request group_service row would silently wipe every
-    role's grant for it in that group, with no way to restore them from
-    just re-inserting group_service). Builds a fully synthetic group that
-    is granted confirm_outbound_completion but NEVER has a group_service
+    without ever deleting a real group_service row. (Historical note: this
+    used to also matter because the old, per-group group_service_role had
+    an ON DELETE CASCADE FK to group_service, so deleting a real group's
+    uchoice_outbound_request row would have silently wiped every role's
+    grant for it in that group. role_service_permission is now global with
+    no relationship to group_service at all, so that specific risk no
+    longer applies -- but a synthetic group is still the right way to test
+    this without touching real group_service data regardless.) Builds a
+    fully synthetic group that is granted confirm_outbound_completion but
+    NEVER has a group_service
     row for uchoice_outbound_request at all -- functionally equivalent to
     "an admin removed the creation service", reached with zero destructive
     steps and zero risk to the shared fixture group."""
     db = SessionLocal()
     group_id = role_id = staff = session_id = log_id = None
     try:
-        from models.group import GroupConfig as GC, GroupService, GroupServiceRole
+        from models.group import GroupConfig as GC, GroupService
+        from models.role import RoleServicePermission
         from models.workflow import Workflow
 
         group = GC(
@@ -293,8 +299,8 @@ def test_disabling_creation_service_for_group_does_not_hide_existing_processing_
         db.refresh(role)
         role_id = role.role_id
 
-        db.add(GroupServiceRole(
-            group_id=group_id, role_id=role_id, service_type_id=completion_service_id,
+        db.add(RoleServicePermission(
+            role_id=role_id, service_type_id=completion_service_id,
             created_by="test_completion_cancel_candidate_gating",
         ))
         db.commit()
@@ -321,7 +327,8 @@ def test_disabling_creation_service_for_group_does_not_hide_existing_processing_
         if staff:
             _cleanup_staff(db, staff.staff_id)
         if role_id:
-            db.execute(text("delete from group_service_role where role_id = :rid"), {"rid": role_id})
+            # role_service_permission cascades on role deletion (ON DELETE
+            # CASCADE) -- no separate delete needed here.
             db.execute(text("delete from role where role_id = :rid"), {"rid": role_id})
             db.commit()
         if group_id:
@@ -358,7 +365,7 @@ def test_warehouseman_completes_real_outbound_request_via_kefu_turn_end_to_end(m
     from datetime import datetime, timedelta, timezone
     from ai.base import AIResponse
     from core.kefu_contracts import KefuIdentity
-    from models.group import GroupConfig as GC, GroupService, GroupServiceRole
+    from models.group import GroupConfig as GC, GroupService
     from models.request_log import RequestLog
     from models.session import ConversationSession
     from models.workflow import Workflow
@@ -393,12 +400,15 @@ def test_warehouseman_completes_real_outbound_request_via_kefu_turn_end_to_end(m
         # this test only exercises completion, mirroring the real
         # warehouseman grant shape (see module docstring).
 
-        db.add(GroupServiceRole(
-            group_id=group_id, role_id=role_id, service_type_id=completion_service_id,
-            created_by="test_completion_cancel_candidate_gating",
-        ))
-        db.commit()
-        role_grant_created = True
+        # role_service_permission is now GLOBAL (see models.role.
+        # RoleServicePermission) -- the real "warehouseman" role already
+        # has confirm_outbound_completion granted in production seed data,
+        # so nothing needs creating (or, later, deleting) here. Creating
+        # one anyway would duplicate-key-fail; deleting one afterward by
+        # (role_id, service_type_id) alone -- with no group_id left to
+        # scope it -- would risk removing a real, legitimate global grant
+        # this test didn't create.
+        role_grant_created = False
 
         staff = KefuStaff(
             open_kfid=f"kf-gating-e2e-{uuid.uuid4().hex[:8]}",
@@ -482,10 +492,10 @@ def test_warehouseman_completes_real_outbound_request_via_kefu_turn_end_to_end(m
             db.execute(text("delete from kefu_staff_case_context where staff_id=:staff"), {"staff": staff_id})
             db.execute(text("delete from conversation_session where session_id=any(:sessions)"), {"sessions": sessions})
             db.execute(text("delete from kefu_staff where staff_id=:staff"), {"staff": staff_id})
-        if role_grant_created:
-            db.execute(text(
-                "delete from group_service_role where group_id = :gid and role_id = :rid"
-            ), {"gid": group_id, "rid": role_id})
+        # role_grant_created is always False now -- see the comment where
+        # it's set, above -- kept as a variable only so this block's shape
+        # doesn't need to change if a future variant of this test ever
+        # does need to create+clean up a real global grant.
         if group_id:
             db.execute(text("delete from group_service where group_id = :gid"), {"gid": group_id})
             db.execute(text("delete from group_config where group_id = :gid"), {"gid": group_id})

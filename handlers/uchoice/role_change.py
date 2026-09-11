@@ -18,7 +18,8 @@ class RoleChangeHandler(BaseHandler):
         from models.group import GroupMember
         from models.role import Role
         from core.admin_invariants import lock_group_admin_invariant, would_remove_last_admin
-        from core.uchoice_constants import ASSIGNABLE_ROLE_NAMES, VALID_WAREHOUSE_CODES
+        from core.role_registry import ASSIGNABLE_ROLE_NAMES
+        from core.uchoice_constants import VALID_WAREHOUSE_CODES
         from core.role_identity import parse_target_identity
 
         fields = context.get("collected_fields", {})

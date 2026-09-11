@@ -201,7 +201,7 @@ def build_context(
 def _service_type_id_by_name(db: DBSession, service_name: str) -> str | None:
     """
     Global, permanent service-catalog lookup -- independent of both the
-    caller's own role grants (group_service_role) and the group's current
+    caller's own role grants (role_service_permission) and the group's current
     service enablement (group_service). Neither of those answers the
     question this needs: "what service_type_id does uchoice_outbound_request
     have", a fact about the catalog, not about who's asking or whether the
@@ -429,8 +429,11 @@ def _build_uchoice_candidates(
     # with a different trigger for the same bug, since
     # DELETE /admin/groups/{id}/services/{id} hard-deletes the
     # group_service row (api/admin/services.py) with no check for
-    # existing 'processing' requests, and group_service_role cascades on
-    # it too. request_log.service_type_id is a plain FK straight to
+    # existing 'processing' requests. (role_service_permission is now
+    # global and has no FK relationship to group_service at all, so this
+    # deletion no longer cascades any permission grants the way the old,
+    # per-group group_service_role once did -- one less thing this needs
+    # to worry about.) request_log.service_type_id is a plain FK straight to
     # service_type (ON DELETE SET NULL, models/request_log.py) with no
     # relationship to group_service at all -- this is a permanent,
     # global catalog fact, resolved the same way regardless of who's

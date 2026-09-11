@@ -294,7 +294,8 @@ def _valid_role_change_target_and_role(context: dict, collected_fields: dict, db
     didn't go through the same sanitizer call, and is itself backstopped by
     the execution-time check in handlers/uchoice/role_change.py.
     """
-    from core.uchoice_constants import ASSIGNABLE_ROLE_NAMES, VALID_WAREHOUSE_CODES
+    from core.role_registry import ASSIGNABLE_ROLE_NAMES
+    from core.uchoice_constants import VALID_WAREHOUSE_CODES
     from core.role_identity import parse_target_identity
 
     target_openid = collected_fields.get("target_openid")

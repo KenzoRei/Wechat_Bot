@@ -49,19 +49,11 @@ class GroupService(Base):
     config:          Mapped[dict]      = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
 
 
-class GroupServiceRole(Base):
-    """
-    Deny-by-default permission grant: a (group_id, service_type_id) pair is
-    invisible to a role unless a matching row exists here.
-    Composite FK to group_service ensures you can't grant access to a service
-    the group was never assigned in the first place.
-    """
-    __tablename__ = "group_service_role"
-
-    group_id:        Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
-    service_type_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
-    role_id:         Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("role.role_id", ondelete="CASCADE"), primary_key=True)
-    created_by:      Mapped[str]       = mapped_column(String(128), nullable=False)
-    created_at:      Mapped[datetime]  = mapped_column(DateTime(timezone=True), server_default=text("now()"))
-    # Composite FK (group_id, service_type_id) -> group_service(group_id, service_type_id)
-    # is declared in the migration SQL, not here — ORM doesn't need it for queries.
+    # GroupServiceRole (per-group role->service grants) was removed in V30 --
+    # replaced by the GLOBAL models.role.RoleServicePermission. See that
+    # class's docstring for why: a role represents a job function that
+    # should behave identically regardless of which tenant/group a person
+    # belongs to; the per-group axis added no real differentiation in
+    # practice, just per-group admin busywork. Real multi-tenancy (which
+    # services a tenant has access to at all) still lives in GroupService
+    # above, untouched by this change.

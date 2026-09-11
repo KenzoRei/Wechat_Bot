@@ -212,6 +212,7 @@ _PANEL_HTML = """<!doctype html>
     <button class="tab-btn" data-tab="transactions" onclick="switchTab('transactions')">Transactions</button>
     <button class="tab-btn" data-tab="customers" onclick="switchTab('customers')">Customers</button>
     <button class="tab-btn" data-tab="warehouses" onclick="switchTab('warehouses')">Warehouses</button>
+    <button class="tab-btn" data-tab="roles" onclick="switchTab('roles')">Roles</button>
   </div>
 
   <div id="tab-staff" class="tab-panel active">
@@ -330,6 +331,41 @@ _PANEL_HTML = """<!doctype html>
     </div>
   </div>
 
+  <div id="tab-roles" class="tab-panel">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <h3>Roles</h3>
+          <div class="meta">Role catalog. "Assignable" (green) means the role can actually be assigned to a person right now — a code-level allowlist (core/role_registry.py), kept separate from this table on purpose so a brand-new role name needs a deliberate code change before it's usable, not just a form submission here.</div>
+        </div>
+        <button onclick="showNewRoleForm()">+ New role</button>
+      </div>
+      <div id="newRoleForm" style="display:none;" class="filters">
+        <input type="text" id="newRoleName" placeholder="Role name">
+        <input type="text" id="newRoleDescription" placeholder="Description">
+        <button onclick="createRole()">Create</button>
+        <button class="secondary" onclick="hideNewRoleForm()">Cancel</button>
+      </div>
+      <table>
+        <thead><tr><th>Name</th><th>Description</th><th>Assignable</th><th>Created</th><th></th></tr></thead>
+        <tbody id="roleRows"></tbody>
+      </table>
+      <div class="error" id="roleError"></div>
+    </div>
+
+    <div class="card" id="rolePermissionsCard" style="display:none;">
+      <div class="card-header">
+        <div>
+          <h3>Permissions for: <span id="rolePermissionsRoleName"></span></h3>
+          <div class="meta">Global grants — apply the same way in every group. Whether a given group even has a service enabled at all is separate (Staff &amp; Groups' group setup), unaffected by this.</div>
+        </div>
+        <button class="secondary" onclick="closeRolePermissions()">Close</button>
+      </div>
+      <div id="rolePermissionsList"></div>
+      <div class="error" id="rolePermissionsError"></div>
+    </div>
+  </div>
+
   <div class="error" id="loadError"></div>
 </div>
 
@@ -374,6 +410,10 @@ async function authedPatch(path, body) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+async function authedDelete(path) {
+  return authedFetch(path, { method: "DELETE" });
 }
 
 async function authedPost(path, body) {
@@ -542,6 +582,10 @@ function switchTab(name) {
   if (name === "warehouses" && !_warehousesLoadedOnce) {
     _warehousesLoadedOnce = true;
     loadWarehouses();
+  }
+  if (name === "roles" && !_rolesTabLoadedOnce) {
+    _rolesTabLoadedOnce = true;
+    loadRolesTab();
   }
 }
 
@@ -973,6 +1017,124 @@ async function saveWarehouseField(warehouseAbbr, field, value) {
   } catch (e) {
     if (e.message === "UNAUTHORIZED") throw e;
     document.getElementById("warehouseError").textContent = "Save failed: " + e.message;
+  }
+}
+
+// ── Roles & permissions ──────────────────────────────────────────────────────
+let _rolesTabLoadedOnce = false;
+let _openRolePermissionsRoleId = null;
+
+function showNewRoleForm() { document.getElementById("newRoleForm").style.display = ""; }
+function hideNewRoleForm() {
+  document.getElementById("newRoleForm").style.display = "none";
+  document.getElementById("newRoleName").value = "";
+  document.getElementById("newRoleDescription").value = "";
+}
+
+async function createRole() {
+  document.getElementById("roleError").textContent = "";
+  const name = document.getElementById("newRoleName").value.trim();
+  const description = document.getElementById("newRoleDescription").value.trim();
+  if (!name) {
+    document.getElementById("roleError").textContent = "Role name is required.";
+    return;
+  }
+  try {
+    const resp = await authedPost("/admin/roles", { name, description: description || null });
+    hideNewRoleForm();
+    _rolesCache = null;  // invalidate the Kefu-staff dropdown's cache too
+    await loadRolesTab();
+    if (!resp.data.assignable) {
+      document.getElementById("roleError").textContent =
+        `Role "${name}" was created but is NOT yet assignable — add it to core/role_registry.py's ASSIGNABLE_ROLES and deploy before anyone can be assigned this role.`;
+    }
+  } catch (e) {
+    if (e.message === "UNAUTHORIZED") throw e;
+    document.getElementById("roleError").textContent = "Create failed: " + e.message;
+  }
+}
+
+async function loadRolesTab() {
+  document.getElementById("roleError").textContent = "";
+  try {
+    const resp = await authedFetch("/admin/roles");
+    const roles = resp.data || [];
+    const rowsEl = document.getElementById("roleRows");
+    if (roles.length === 0) {
+      rowsEl.innerHTML = '<tr><td colspan="5" class="empty">No roles yet.</td></tr>';
+      return;
+    }
+    rowsEl.innerHTML = roles.map(roleRowHtml).join("");
+  } catch (e) {
+    if (e.message === "UNAUTHORIZED") throw e;
+    document.getElementById("roleError").textContent = "Failed to load: " + e.message;
+  }
+}
+
+function roleRowHtml(r) {
+  const assignableBadge = r.assignable
+    ? '<span class="badge ok">assignable</span>'
+    : '<span class="badge bad">not assignable</span>';
+  const created = r.created_at ? new Date(r.created_at).toLocaleString() : "";
+  return `
+    <tr>
+      <td>${escapeHtml(r.name)}</td>
+      <td>${escapeHtml(r.description || "")}</td>
+      <td>${assignableBadge}</td>
+      <td>${escapeHtml(created)}</td>
+      <td><button class="secondary" onclick="openRolePermissions('${r.role_id}', '${escapeHtml(r.name)}')">Manage permissions</button></td>
+    </tr>
+  `;
+}
+
+async function openRolePermissions(roleId, roleName) {
+  _openRolePermissionsRoleId = roleId;
+  document.getElementById("rolePermissionsError").textContent = "";
+  document.getElementById("rolePermissionsRoleName").textContent = roleName;
+  document.getElementById("rolePermissionsCard").style.display = "";
+  document.getElementById("rolePermissionsList").innerHTML = "Loading…";
+  try {
+    const [allServices, granted] = await Promise.all([
+      authedFetch("/admin/service-types"),
+      authedFetch(`/admin/roles/${encodeURIComponent(roleId)}/services`),
+    ]);
+    const grantedIds = new Set((granted.data || []).map(g => g.service_type_id));
+    const items = (allServices.data || []).sort((a, b) => a.name.localeCompare(b.name)).map(st => {
+      const checked = grantedIds.has(st.service_type_id) ? "checked" : "";
+      return `<label style="display:block;padding:4px 0;">
+        <input type="checkbox" ${checked} onchange="toggleRolePermission('${roleId}', '${st.service_type_id}', this.checked)">
+        ${escapeHtml(st.name)}
+      </label>`;
+    });
+    document.getElementById("rolePermissionsList").innerHTML = items.join("") || '<div class="empty">No services in the catalog.</div>';
+  } catch (e) {
+    if (e.message === "UNAUTHORIZED") throw e;
+    document.getElementById("rolePermissionsError").textContent = "Failed to load: " + e.message;
+  }
+}
+
+function closeRolePermissions() {
+  _openRolePermissionsRoleId = null;
+  document.getElementById("rolePermissionsCard").style.display = "none";
+}
+
+async function toggleRolePermission(roleId, serviceTypeId, grant) {
+  document.getElementById("rolePermissionsError").textContent = "";
+  try {
+    if (grant) {
+      await authedPost(`/admin/roles/${encodeURIComponent(roleId)}/services/${encodeURIComponent(serviceTypeId)}`, { created_by: "admin_panel" });
+    } else {
+      await authedDelete(`/admin/roles/${encodeURIComponent(roleId)}/services/${encodeURIComponent(serviceTypeId)}`);
+    }
+  } catch (e) {
+    if (e.message === "UNAUTHORIZED") throw e;
+    document.getElementById("rolePermissionsError").textContent = "Save failed: " + e.message;
+    // Re-sync the checkbox state with the server rather than trusting the
+    // click that just failed.
+    if (_openRolePermissionsRoleId) {
+      const roleName = document.getElementById("rolePermissionsRoleName").textContent;
+      await openRolePermissions(_openRolePermissionsRoleId, roleName);
+    }
   }
 }
 

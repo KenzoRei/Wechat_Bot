@@ -92,7 +92,7 @@ def _sanitize_role_change_fields_before_persistence(extracted_fields: dict, db: 
     """
     target_openid is a candidate-backed identifier like sku_code:
     accept it only if it names a current group_member of this group. Accept
-    new_role only if it's in the server allowlist (core.uchoice_constants
+    new_role only if it's in the server allowlist (core.role_registry
     .ASSIGNABLE_ROLE_NAMES -- an explicit allowlist, not "anything but
     pending", so a future internal role can't be exposed by omission).
     Invalid values are omitted individually, not merged, so an otherwise
@@ -104,7 +104,7 @@ def _sanitize_role_change_fields_before_persistence(extracted_fields: dict, db: 
 
     from models.group import GroupMember
     from models.kefu import KefuStaff
-    from core.uchoice_constants import ASSIGNABLE_ROLE_NAMES
+    from core.role_registry import ASSIGNABLE_ROLE_NAMES
     from core.role_identity import parse_target_identity
 
     result = dict(extracted_fields)

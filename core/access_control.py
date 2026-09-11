@@ -1,9 +1,9 @@
 from dataclasses import dataclass
 from uuid import UUID
 from sqlalchemy.orm import Session as DBSession
-from models.group import GroupConfig, GroupMember, GroupService, GroupServiceRole
+from models.group import GroupConfig, GroupMember, GroupService
 from models.service import ServiceType
-from models.role import Role
+from models.role import Role, RoleServicePermission
 
 
 @dataclass
@@ -82,15 +82,18 @@ def check_access(
         )
 
     # 3. load allowed services — DENY BY DEFAULT.
-    # A (group_id, service_type_id) is only included if a matching row exists
-    # in group_service_role for this member's role_id.
+    # A service_type_id is only included if BOTH: the group has it enabled
+    # at all (GroupService -- real multi-tenancy: different tenants can
+    # have different services enabled) AND this member's role has been
+    # globally granted it (RoleServicePermission -- a role's own
+    # capability, consistent across every tenant; see that model's
+    # docstring for why this is no longer per-group).
     rows = (
         db.query(GroupService, ServiceType)
         .join(ServiceType, GroupService.service_type_id == ServiceType.service_type_id)
-        .join(GroupServiceRole, (
-            (GroupServiceRole.group_id == GroupService.group_id) &
-            (GroupServiceRole.service_type_id == GroupService.service_type_id) &
-            (GroupServiceRole.role_id == member.role_id)
+        .join(RoleServicePermission, (
+            (RoleServicePermission.service_type_id == GroupService.service_type_id) &
+            (RoleServicePermission.role_id == member.role_id)
         ))
         .filter(
             GroupService.group_id == group.group_id,
@@ -138,8 +141,8 @@ def check_kefu_access(
     Kefu-side equivalent of check_access(), reached through kefu_staff rather
     than GroupMember.
     (open_kfid, external_userid) -> kefu_staff row -> kefu_staff.group_id
-    + role_id -> the same group_service_role grant table Smart Robot
-    already uses -- no new grant table, same deny-by-default mechanism.
+    + role_id -> the same GroupService/RoleServicePermission tables Smart
+    Robot already uses -- no separate grant mechanism, same deny-by-default.
     """
     from models.kefu import KefuStaff
 
@@ -179,10 +182,9 @@ def check_kefu_access(
     rows = (
         db.query(GroupService, ServiceType)
         .join(ServiceType, GroupService.service_type_id == ServiceType.service_type_id)
-        .join(GroupServiceRole, (
-            (GroupServiceRole.group_id == GroupService.group_id) &
-            (GroupServiceRole.service_type_id == GroupService.service_type_id) &
-            (GroupServiceRole.role_id == staff.role_id)
+        .join(RoleServicePermission, (
+            (RoleServicePermission.service_type_id == GroupService.service_type_id) &
+            (RoleServicePermission.role_id == staff.role_id)
         ))
         .filter(
             GroupService.group_id == staff.group_id,

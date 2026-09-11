@@ -61,7 +61,7 @@ def try_handle_purge_command(db: DBSession, role: str, content: str) -> str | No
     Admin-only: a non-admin sending either exact phrase falls through to
     normal processing (deny-by-default, same posture as every other
     service -- there is no grant to bypass here since this never goes
-    through the group_service/group_service_role machinery at all).
+    through the group_service/role_service_permission machinery at all).
     """
     if role != "admin":
         return None

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from middleware.admin_auth import verify_admin_key
 from core.admin_invariants import lock_group_admin_invariant, would_remove_last_admin
-from core.uchoice_constants import ASSIGNABLE_ROLE_NAMES
+from core.role_registry import ASSIGNABLE_ROLE_NAMES
 from core import customer_directory
 from models.group import GroupConfig, GroupMember
 from models.role import Role

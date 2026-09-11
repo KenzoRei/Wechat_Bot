@@ -12,7 +12,7 @@ CONTEXT = {
         {"service_type_id": "svc-view-storage", "name": "view_storage"},
         {"service_type_id": "svc-inbound", "name": "uchoice_inbound_request"},
         {"service_type_id": "svc-role-change", "name": "role_change"},
-        # Granted via group_service_role (so it's in allowed_services) but
+        # Granted via role_service_permission (so it's in allowed_services) but
         # deliberately not real -- stands in for "a service the group has a
         # grant for that hasn't been rolled out to Kefu yet," without tying
         # this test to any one real service's current staging status.

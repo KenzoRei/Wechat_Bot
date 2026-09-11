@@ -7,17 +7,16 @@ the other way around.
 """
 
 # The platform's warehouses. No group-to-warehouse grant table exists in
-# the schema (group_service_role grants services, not warehouses; group_config
+# the schema (role_service_permission grants services, not warehouses; group_config
 # .context is a location preset, not an authorization catalog) -- this is the
 # platform-wide set, confirmed against jobs/uchoice_daily.py's prior local
 # WAREHOUSES list before extraction.
 VALID_WAREHOUSE_CODES = frozenset({"JFK", "DE", "NJ"})
 
-# Explicit positive allowlist for role_change targets. An exclusion rule
-# ("every role except pending") would silently
-# expose any future internal/system role the moment it's added. pending is
-# deliberately absent -- system-assigned only, via self-registration.
-ASSIGNABLE_ROLE_NAMES = frozenset({"admin", "customer", "warehouseman", "accountant", "label_agent"})
+# ASSIGNABLE_ROLE_NAMES moved to core/role_registry.py -- it isn't a
+# U-Choice-specific concept (label_agent, customer, and Kefu role
+# assignment all depend on it too), and it deserved a home that could
+# carry more than a bare set of strings. Import from there instead.
 
 # Shared between jobs/uchoice_daily.py's push digest and the on-demand
 # view_pending_digest service (handlers/uchoice/queries.py) so both agree on

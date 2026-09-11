@@ -82,7 +82,7 @@ class RoleResponse(BaseModel):
     name:        str
     description: str | None
     created_at:  datetime
-    # True iff this role is in core.uchoice_constants.ASSIGNABLE_ROLE_NAMES --
+    # True iff this role is in core.role_registry.ASSIGNABLE_ROLE_NAMES --
     # the same allowlist api/admin/kefu_staff.py and api/admin/members.py
     # enforce server-side. Lets the admin panel filter its role dropdown to
     # only options accepted by the assignable-role APIs; internal roles such
@@ -113,15 +113,15 @@ class KefuStaffResponse(BaseModel):
     created_at:      datetime
 
 
-class GroupServiceRoleGrant(BaseModel):
-    role:       str    # role name, e.g. "admin"
+class RoleServicePermissionGrant(BaseModel):
     created_by: str    # who granted this — manual until per-admin auth exists
 
 
-class GroupServiceRoleResponse(BaseModel):
-    group_id:        UUID
-    service_type_id: UUID
+class RoleServicePermissionResponse(BaseModel):
+    role_id:         UUID
     role:            str
+    service_type_id: UUID
+    service_name:    str
     created_by:      str
     created_at:      datetime
 
@@ -251,7 +251,7 @@ class CustomerCreate(BaseModel):
     bank_account:     str | None = None
     status:           str = "active"
     notes:            str | None = None
-    created_by:       str    # who created this — manual until per-admin auth exists, matches GroupServiceRoleGrant's convention
+    created_by:       str    # who created this — manual until per-admin auth exists, matches RoleServicePermissionGrant's convention
 
 
 class CustomerUpdate(BaseModel):

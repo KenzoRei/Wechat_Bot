@@ -547,7 +547,7 @@ def _actor_default_warehouse_code(context: dict) -> str | None:
     JFK unless actually authorized for it; the caller must be asked
     instead. Not reachable through current role grants (V17 removed
     uchoice_inbound_request from warehouseman; only the unscoped customer
-    role submits these today), but group_service_role is admin-configurable
+    role submits these today), but role_service_permission is admin-configurable
     data, not a code invariant.
     """
     caller_warehouses = context.get("warehouse_codes")
