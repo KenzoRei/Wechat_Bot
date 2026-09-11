@@ -2,7 +2,7 @@
 
 **Status:** Current route inventory
 **Owner:** Engineering
-**Last verified against commit:** `c89cf6f` (2026-08-14)
+**Last verified against commit:** `aaf3191` (2026-09-11)
 
 The generated FastAPI OpenAPI schema is the field-level authority. This document
 defines route purpose, composition, and authentication. Admin examples are in
@@ -30,12 +30,14 @@ All routes below require `X-Admin-Key`.
 | Smart Bot members | create/list/update/delete under `/admin/groups/{group_id}/members` |
 | Kefu staff | `GET /admin/kefu-staff`, `PATCH /admin/kefu-staff/{staff_id}` |
 | Group services | create/list/delete under `/admin/groups/{group_id}/services` |
-| Service role grants | create/list/delete under `/admin/groups/{group_id}/services/{service_type_id}/roles` |
 | Roles | `GET/POST /admin/roles` |
+| Role service permissions (global, deny-by-default) | create/list/delete under `/admin/roles/{role_id}/services` |
 | Catalog | `GET /admin/service-types`, `GET /admin/workflows` |
 | Logs | `GET /admin/request-logs`, `GET /admin/request-logs/{serial_number}` |
 | Sessions | `GET /admin/sessions` |
 | Invoices | `GET /admin/invoices/export`, `GET /admin/invoices/export-link` |
+| Customers (master data + credentials) | create/list/get/update under `/admin/customers`, credential status/set under `/admin/customers/{customer_id}/credentials` |
+| Company warehouses | create/list/get/update under `/admin/warehouses` |
 
 The previous v1 contract, including obsolete Railway/ngrok references, is
 preserved as [historical](../archive/designs/api-contracts-v1.md).

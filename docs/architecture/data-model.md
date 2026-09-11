@@ -2,7 +2,7 @@
 
 **Status:** Current overview
 **Owner:** Engineering
-**Last verified against commit:** `c89cf6f` (2026-08-14)
+**Last verified against commit:** `aaf3191` (2026-09-11)
 
 PostgreSQL schema is defined by the ordered SQL files in `db/migrations/` and
 represented at runtime by models in `models/`. If this overview conflicts with
@@ -12,11 +12,13 @@ a constraint or column in those sources, the migration/model is authoritative.
 
 | Domain | Principal tables |
 |---|---|
-| Groups and authorization | `group_config`, `group_member`, `role`, `group_service`, `group_service_role` |
+| Groups and authorization | `group_config`, `group_member`, `role`, `group_service`, `role_service_permission` |
 | Service catalog | `service_type`, `workflow`, `workflow_step` |
 | Conversation lifecycle | `conversation_session`, `request_log`, `interaction_log` |
 | U-Choice | `uchoice_customer`, `uchoice_sku`, `uchoice_storage`, `uchoice_storage_txn`, `uchoice_address`, fee/digest tables |
 | Kefu identities and durability | `kefu_staff`, `case_turn`, `case_execution`, staff-case context, inbound/sync/delivery tables |
+| Customer master data and labels | `customer`, `customer_credential`, `label_shipment` |
+| Company warehouse directory | `company_warehouse` |
 
 ## Cross-channel identity
 
@@ -35,9 +37,33 @@ a constraint or column in those sources, the migration/model is authoritative.
 - U-Choice inventory mutation is recorded in transaction history and protected
   by PostgreSQL locking/constraints.
 
+## Authorization model
+
+A role's actually-reachable services in a group are the intersection of two,
+independently-managed tables:
+
+- `role_service_permission` — **global**, role → service. Deny-by-default:
+  a role has zero access to any service until a row here grants it,
+  regardless of group. Managed via `GET/POST/DELETE
+  /admin/roles/{role_id}/services[/{service_type_id}]`.
+- `group_service` — per-group, which services a tenant/group has enabled at
+  all (and its per-group config, e.g. YiDiDa/OMS credentials). Still the
+  real multi-tenancy boundary.
+
+The older `group_service_role` (per-group role→service grants) was replaced
+by `role_service_permission` in `V30` — see
+[`models/role.py`](../../models/role.py)'s `RoleServicePermission` docstring
+for the rationale (Kefu has exactly one group system-wide, and Smart Bot's
+available services are meant to be consistent across groups, so per-group
+role scoping added no real isolation).
+
+`ASSIGNABLE_ROLE_NAMES` (`core/role_registry.py`) is a separate, hardcoded
+allowlist gating which role *names* can be assigned to a member/staff at
+all — a `role` table row alone doesn't make a role assignable.
+
 ## Migration authority
 
-There are currently sixteen sequential migrations, V1 through V16. They are
+Migrations are sequential SQL files, currently V1 through V30. They are
 forward-only operational SQL; the project does not currently use Alembic,
 Flyway, or a schema-version ledger. See [Migrations](../operations/migrations.md).
 

@@ -7,7 +7,7 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
-## [Unreleased]
+## [1.1.0] - 2026-09-11
 
 ### Added
 - New `customer`/`customer_credential`/`label_shipment` tables and
@@ -43,6 +43,62 @@ here.
   `ups_label` are now grantable and enabled on the Kefu channel as well
   (previously Smart-Bot-only despite being grantable via
   `group_service_role`).
+- OMS work orders now attach a `物流费` (logistics fee) VAS line item
+  (`workVasitemList`) with `qty = int(estimated quote price)`, using
+  hardcoded catalog values (`VAS_LOGISTICS_FEE_BILL_ITEM_ID`/`_RULE_ID` in
+  `clients/oms_client.py`) rather than a live per-request lookup — the VAS
+  catalog doesn't change per shipment, so `scripts/fetch_oms_vas_list.py`
+  is a standalone, not-wired-into-the-pipeline CLI for refreshing these
+  values by hand if the catalog is ever updated. Estimated price only; the
+  qty is expected to be corrected manually once a carrier invoice comes in.
+- New `company_warehouse` table (`V29`) and `core/warehouse_directory.py`:
+  the company's own physical shipping-origin directory (`JFK`/`DE`/`LAX`/
+  `ORD`/`NJ`, each with a `company_name` billing entity — most are
+  `TWF-*`, `NJ` is `TWW`), deliberately separate from U-Choice's
+  `VALID_WAREHOUSE_CODES` concept. Injected into AI context so a bare
+  warehouse abbreviation in a label request (e.g. "从LAX到DE") resolves to
+  a full address on whichever side — shipper or recipient — the phrasing
+  indicates; both directions are handled explicitly since a request like
+  "送一个包裹到JFK" makes our warehouse the *recipient*, not the shipper.
+  Admin panel "Warehouses" tab and `/admin/warehouses` CRUD.
+- Global role→service permission model: new `role_service_permission`
+  table (`V30`, role_id + service_type_id, no group_id) replaces the old
+  per-group `group_service_role`. A role's actually-reachable services are
+  now the intersection of this global grant and the group's own
+  `group_service` (still per-group — real tenant differentiation).
+  Confirmed lossless: every existing grant already targeted the same
+  single production group. `core/role_registry.py` relocates and enriches
+  `ASSIGNABLE_ROLE_NAMES` (now backed by an `AssignableRole` dataclass with
+  a description) out of `core/uchoice_constants.py`. New global endpoints
+  `GET/POST/DELETE /admin/roles/{role_id}/services[/{service_type_id}]`
+  replace the removed per-group `/admin/groups/{group_id}/services/
+  {service_type_id}/roles`. Admin panel gets a "Roles" tab: role catalog
+  with an assignable/not badge, a "+ New role" form, and a per-role
+  permission checklist against the full service catalog.
+
+### Fixed
+- `clients/yidida_client.py`: label creation (`/yundans`) never actually
+  applied the package dimensions it sent — `changDu`/`kuanDu`/`gaoGao`
+  don't exist in YiDiDa's real request schema and were silently dropped;
+  the real fields are `danJianList[].chang/kuan/gao`, in cm, and weight
+  needed lbs→kg conversion (`shouHuoShiZhong` was previously sent
+  unconverted, ~2.2x off). Fixed by rebuilding the body against YiDiDa's
+  real Swagger schema. The separate quote endpoint (`/price`) needed an
+  entirely different `unitModelList` (English field names, also cm/kg)
+  shape, previously missing outright.
+- `clients/oms_client.py::_sign()` only sorted top-level dict keys before
+  computing the HMAC-SHA256 signature; every payload had been flat until
+  `workVasitemList` (nested dicts) was introduced above, which OMS then
+  rejected with `[11006] 验签不通过`. Fixed with a recursive
+  `_deep_sort_keys()`.
+- Label success messages on Kefu no longer show a redundant
+  "[点击下载标签]" line — the label file is already attached as a native
+  message on that channel; Smart Bot (which has no file-attachment path)
+  keeps the download link.
+- Label confirmation messages now warn when the customer never provided
+  package dimensions, instead of silently proceeding with defaults; and
+  render missing/optional fields as "系统默认" instead of Python's bare
+  `None`.
 
 ### Changed
 - `handlers/label/base.py` now reads OMS/YDD credentials from

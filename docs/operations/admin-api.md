@@ -2,7 +2,7 @@
 
 **Status:** Current operational examples
 **Owner:** Operations
-**Last verified against commit:** `c89cf6f` (2026-08-14)
+**Last verified against commit:** `aaf3191` (2026-09-11)
 # Logistics WeChat Bot Platform — v1
 
 **Base URL (Render testing):** `https://wechat-bot-atse.onrender.com`
@@ -258,27 +258,37 @@ Invoke-RestMethod "$base/admin/groups/{group_id}/services/{service_type_id}" -Me
 
 ---
 
-## Service Permission Grants (role gating)
+## Role Service Permissions (role gating, global)
 
-**Deny by default:** a service assigned to a group via `POST /admin/groups/{id}/services` is invisible to every role until explicitly granted. Do this right after assigning the service, or nobody — including admins — will see it.
+**Deny by default, and global — not per-group.** A role has zero access to
+any service until a matching row exists here, regardless of which group a
+caller belongs to. This replaced the old per-group
+`/admin/groups/{group_id}/services/{service_type_id}/roles` endpoints in
+`V30` — real tenant differentiation still lives in `group_service` (whether
+a *group* has the service enabled at all, and its per-group config); a
+role's actually-reachable services are the intersection of both. See
+[Data model](../architecture/data-model.md#authorization-model).
 
 ### Grant a role access to a service
 ```powershell
-Invoke-RestMethod "$base/admin/groups/{group_id}/services/{service_type_id}/roles" -Method POST -Headers $h `
+Invoke-RestMethod "$base/admin/roles/{role_id}/services/{service_type_id}" -Method POST -Headers $h `
   -ContentType "application/json" `
-  -Body '{"role": "admin", "created_by": "kenzo"}'
+  -Body '{"created_by": "kenzo"}'
 ```
-`created_by` is manually supplied for now — there's no per-admin identity yet, just the one shared `X-Admin-Key`.
+`role_id` is the role's UUID (from `GET /admin/roles`), not its name.
+`created_by` is manually supplied for now — there's no per-admin identity
+yet, just the one shared `X-Admin-Key`. 409 if already granted.
 
-### List grants for a service
+### List a role's granted services
 ```powershell
-Invoke-RestMethod "$base/admin/groups/{group_id}/services/{service_type_id}/roles" -Headers $h | ConvertTo-Json -Depth 3
+Invoke-RestMethod "$base/admin/roles/{role_id}/services" -Headers $h | ConvertTo-Json -Depth 3
 ```
 
 ### Revoke a role's access
 ```powershell
-Invoke-RestMethod "$base/admin/groups/{group_id}/services/{service_type_id}/roles/{role_name}" -Method DELETE -Headers $h
+Invoke-RestMethod "$base/admin/roles/{role_id}/services/{service_type_id}" -Method DELETE -Headers $h
 ```
+404 if the role didn't have that grant.
 
 ---
 
@@ -366,6 +376,78 @@ there is no way to deliver it privately to just the person who asked.
 
 ---
 
+## Customers (master data + label credentials)
+
+`customer_id` is the natural key (`F######`, validated against the DB CHECK
+constraint). Holds profile data plus per-carrier `ydd_channel_id`/
+`rate_multiplier` and encrypted OMS/YDD credentials. A `GroupMember` with
+role `customer` binds to one of these via `billing_customer_id`.
+
+### Create / list / get / update
+```powershell
+Invoke-RestMethod "$base/admin/customers" -Method POST -Headers $h `
+  -ContentType "application/json" `
+  -Body '{"customer_id": "F000123", "display_name": "Acme Co", "created_by": "kenzo"}'
+
+Invoke-RestMethod "$base/admin/customers" -Headers $h | ConvertTo-Json -Depth 5
+Invoke-RestMethod "$base/admin/customers/F000123" -Headers $h | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod "$base/admin/customers/F000123" -Method PATCH -Headers $h `
+  -ContentType "application/json" `
+  -Body '{"status": "active", "oms_wh_code": "DE19713", "updated_by": "kenzo"}'
+```
+`status` is one of `pending`, `active`, `inactive`. `?status=active` filters
+the list.
+
+### Credentials (write-only — never read back)
+```powershell
+# Status only -- which credential types are set and when, never the value
+Invoke-RestMethod "$base/admin/customers/F000123/credentials" -Headers $h | ConvertTo-Json -Depth 3
+
+# Set/rotate one credential
+Invoke-RestMethod "$base/admin/customers/F000123/credentials" -Method POST -Headers $h `
+  -ContentType "application/json" `
+  -Body '{"credential_type": "oms_app_key", "value": "<secret>", "updated_by": "kenzo"}'
+```
+`credential_type` is one of `oms_app_key`, `oms_app_secret`, `ydd_username`,
+`ydd_password`. Values are AES-256-GCM-encrypted at rest; no endpoint ever
+returns a decrypted or encrypted value.
+
+---
+
+## Company Warehouses
+
+The company's own physical shipping-origin directory (`JFK`/`DE`/`LAX`/
+`ORD`/`NJ`) — distinct from U-Choice's `warehouse_codes` concept (`JFK`/
+`DE`/`NJ` only). Injected into AI context so a bare abbreviation in a label
+request (e.g. "从LAX到DE") resolves to a full shipper or recipient address;
+the AI decides which side based on phrasing, since our warehouse can be
+either sender or receiver of a given shipment.
+
+### Create / list / get / update
+```powershell
+Invoke-RestMethod "$base/admin/warehouses" -Method POST -Headers $h `
+  -ContentType "application/json" `
+  -Body '{
+    "warehouse_abbr": "LAX", "company_name": "TWF-LAX",
+    "addr": "293 E REDONDO BEACH BLVD", "city": "GARDENA", "state": "CA", "zip_code": "90248",
+    "contact": "Paul Yang", "phone": "626-242-5505", "created_by": "kenzo"
+  }'
+
+Invoke-RestMethod "$base/admin/warehouses" -Headers $h | ConvertTo-Json -Depth 5
+Invoke-RestMethod "$base/admin/warehouses/LAX" -Headers $h | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod "$base/admin/warehouses/LAX" -Method PATCH -Headers $h `
+  -ContentType "application/json" `
+  -Body '{"phone": "626-242-5506", "updated_by": "kenzo"}'
+```
+`warehouse_abbr` is the natural key and can't be changed after creation.
+`company_name` is the legal/billing entity operating that location (varies
+per warehouse — most are `TWF-*`, NJ is `TWW`) and maps to
+`shipper_corp_name`/`recipient_corp_name` in label requests.
+
+---
+
 ## Typical Onboarding Flow (New Customer Group)
 
 ```
@@ -377,8 +459,9 @@ there is no way to deliver it privately to just the person who asked.
 6. POST  /admin/groups/{id}/members                        → add yourself (role: admin)
 7. POST  /admin/groups/{id}/services                       → assign service with credentials
    (repeat for each service the group needs)
-8. POST  /admin/groups/{id}/services/{service_type_id}/roles → grant roles access to each service
-   (deny-by-default — a service is invisible to everyone until granted; repeat per role per service)
+8. POST  /admin/roles/{role_id}/services/{service_type_id} → grant roles access to each service
+   (deny-by-default and GLOBAL — a service is invisible to every role until granted, once, for
+   that role; not repeated per group. Repeat per role per service only)
 9. PATCH /admin/groups/{id}                                 → set context (location presets)
 ```
 
