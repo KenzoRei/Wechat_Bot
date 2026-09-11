@@ -9,14 +9,27 @@ Shipment flow:
   POST /yundans  [YunDanModel]  →  tracking number + label URL
   (verified: this response carries NO pricing/fee/amount field of any
   kind -- "sales_amount" cannot come from here.)
+  Dimensions/weight are metric (cm/kg) per the real Swagger schema;
+  dimensions go in danJianList[] (chang/kuan/gao/shiZhong), not top-level.
 
 Pricing flow (separate endpoint, confirmed against a real quote sample):
   POST /price  {priceZoneType, searchType, channel, wayTypeList, weight (KG),
-                packageType, pieceCount, toCustomer}  →  one quote per
-  specific channel, with a "moneyTotal" (USD total) field.
+                packageType, pieceCount, toCustomer, unitModelList}  →  one
+  quote per specific channel, with a "moneyTotal" (USD total) field.
+  Dimensions go in unitModelList[] (length/width/height/weight, English
+  names) -- a different nested shape from /yundans's danJianList.
 """
 import requests
 import config
+
+# Unit conversions -- both /yundans and /price expect metric units per
+# their real Swagger schemas ("长度单位均为cm, 重量单位均为kg" on /yundans;
+# /price's own weight field was separately confirmed in kg against a real
+# test sample), while every dimension/weight this codebase collects from
+# a customer is in US customary units (weight_lbs, length_in/width_in/
+# height_in -- see api/schemas.py's field_hints).
+_LBS_TO_KG = 0.45359237
+_IN_TO_CM = 2.54
 
 
 class ShipmentRejected(RuntimeError):
@@ -143,7 +156,13 @@ def _build_shipment_body(fields: dict, shou_huo_qu_dao: str) -> dict:
         "shouJianRenYouBian":    fields.get("recipient_zip", ""),
 
         # ── Package info ────────────────────────────────────────────────────
-        "shouHuoShiZhong":       float(fields.get("weight_lbs", 0)),
+        # Both shouHuoShiZhong (shipment-level) and shiZhong (danJianList's
+        # per-piece weight, below) must be in KG -- confirmed against the
+        # real /yundans Swagger schema's own interface description:
+        # "长度单位均为cm, 重量单位均为kg". weight_lbs is always collected
+        # in pounds (see api/schemas.py's field_hints), so it's converted
+        # here, not left as a silent unit mismatch.
+        "shouHuoShiZhong":       float(fields.get("weight_lbs", 0)) * _LBS_TO_KG,
         "jianShu":               1,
         "keHuDanHao":            fields.get("ke_hu_dan_hao") or fields.get("reference_number", ""),
 
@@ -158,13 +177,29 @@ def _build_shipment_body(fields: dict, shou_huo_qu_dao: str) -> dict:
     if fields.get("recipient_corp_name"):
         body["shouJianRenGongSiMingCheng"] = fields["recipient_corp_name"]
 
-    # Optional: dimensions
-    if fields.get("length_in"):
-        body["changDu"] = float(fields["length_in"])
-    if fields.get("width_in"):
-        body["kuanDu"] = float(fields["width_in"])
-    if fields.get("height_in"):
-        body["gaoGao"] = float(fields["height_in"])
+    # Optional: dimensions. Verified against the real /yundans Swagger
+    # schema (twc.itdida.com/itdida-api/swagger-ui.html#/.../importYundanUsingPOST):
+    # there is NO top-level changDu/kuanDu/gaoGao on YunDanModel at all --
+    # those field names don't exist anywhere in the real API, so every
+    # dimension this codebase ever sent there was silently dropped by
+    # YiDiDa (unrecognized JSON keys), never actually affecting a real
+    # shipment. Real dimensions live nested inside danJianList[] (单件信息,
+    # per-piece info) as chang(长)/kuan(宽)/gao(高)/shiZhong(实重), in CM
+    # per that same "长度单位均为cm" interface description. danJianList
+    # itself is optional (labels have always been created successfully
+    # without it, using only the shipment-level shouHuoShiZhong above), so
+    # this is purely additive -- only sent when at least one dimension was
+    # actually collected, one entry matching this shipment's single piece
+    # (jianShu=1 above).
+    if any(fields.get(k) for k in ("length_in", "width_in", "height_in")):
+        dan_jian = {"shiZhong": body["shouHuoShiZhong"]}
+        if fields.get("length_in"):
+            dan_jian["chang"] = float(fields["length_in"]) * _IN_TO_CM
+        if fields.get("width_in"):
+            dan_jian["kuan"] = float(fields["width_in"]) * _IN_TO_CM
+        if fields.get("height_in"):
+            dan_jian["gao"] = float(fields["height_in"]) * _IN_TO_CM
+        body["danJianList"] = [dan_jian]
 
     return body
 
@@ -173,8 +208,6 @@ def _build_shipment_body(fields: dict, shou_huo_qu_dao: str) -> dict:
 # Genuinely separate from /yundans (label creation) -- confirmed against a
 # real /yundans response that it carries no pricing field at all. Given a
 # specific channel (shouHuoQuDao), YiDiDa returns exactly one quote.
-
-_LBS_TO_KG = 0.45359237
 
 
 def get_price_quote(fields: dict, api_key: str) -> dict:
@@ -215,21 +248,30 @@ def get_price_quote(fields: dict, api_key: str) -> dict:
 
 def _build_price_query_body(fields: dict, shou_huo_qu_dao: str) -> dict:
     """
-    Maps our collected_fields to YiDiDa's /price query params.
+    Maps our collected_fields to YiDiDa's /price query params
+    (QueryPriceParamsModel, verified against the real Swagger schema at
+    twc.itdida.com/itdida-api/swagger-ui.html#/.../queryPricesUsingPOST).
 
-    weight is in KILOGRAMS here (confirmed against a real /price test
-    script's own printed summary: "Weight: {weight} kg") -- unlike
-    /yundans's shouHuoShiZhong, which this codebase passes weight_lbs into
-    directly with no conversion (a separate, pre-existing convention on
-    that endpoint, not touched here).
+    Top-level weight is in KILOGRAMS (confirmed against a real /price test
+    script's own printed summary: "Weight: {weight} kg").
+
+    Dimensions live in unitModelList[] (单件信息, per-unit info) -- a
+    COMPLETELY different nested shape from /yundans's danJianList: English
+    field names (length/width/height/weight), not chang/kuan/gao/shiZhong.
+    unitModelList itself is optional; only sent when at least one
+    dimension was actually collected, so a quote with no dimensions is
+    unaffected (matches create_label's own dimension handling). Real
+    dim-weight-vs-actual-weight comparison happens server-side once
+    dimensions are present, reflected in the response's chargeableWeight.
     """
     weight_lbs = float(fields.get("weight_lbs", 0))
-    return {
+    weight_kg = weight_lbs * _LBS_TO_KG
+    body = {
         "priceZoneType": 1,   # 1 = postal code
         "searchType":    2,   # 2 = customer (negotiated) pricing, not public
         "channel":       shou_huo_qu_dao,
         "wayTypeList":   [0],  # 0 = express export, matches label creation's own shipment type
-        "weight":        weight_lbs * _LBS_TO_KG,
+        "weight":        weight_kg,
         "packageType":   1,
         "pieceCount":    1,
         "toCustomer": {
@@ -239,6 +281,18 @@ def _build_price_query_body(fields: dict, shou_huo_qu_dao: str) -> dict:
             "stateCode":   fields.get("recipient_state", ""),
         },
     }
+
+    if any(fields.get(k) for k in ("length_in", "width_in", "height_in")):
+        unit = {"weight": weight_kg}
+        if fields.get("length_in"):
+            unit["length"] = float(fields["length_in"]) * _IN_TO_CM
+        if fields.get("width_in"):
+            unit["width"] = float(fields["width_in"]) * _IN_TO_CM
+        if fields.get("height_in"):
+            unit["height"] = float(fields["height_in"]) * _IN_TO_CM
+        body["unitModelList"] = [unit]
+
+    return body
 
 
 def _parse_price_response(data: dict) -> dict:
