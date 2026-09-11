@@ -575,6 +575,20 @@ def _workflow_steps(db: DBSession, context: dict, service: dict, session) -> Non
             merged["_defer_commit"] = True
         result = handler_class().handle(context, merged, db)
         context["result"].update(result or {})
+        if step.step_type in ("create_fedex_label", "create_ups_label") and (result or {}).get("label_base64"):
+            # Kefu can send the label PDF itself as a native chat file,
+            # unlike Smart Robot's group-webhook response_url, which can't
+            # carry a file at all and must stay link-based. Built from the
+            # step's own just-returned label_base64 (the real, one-time
+            # YiDiDa API response) -- never regenerated later by calling
+            # create_label again; see core/kefu_label_export.py's docstring.
+            from core.kefu_label_export import build_label_artifact_from_base64
+
+            artifact = build_label_artifact_from_base64(
+                result["label_base64"], result.get("carrier", ""),
+                context.get("serial_number", ""), context.get("request_log_id"),
+            )
+            context["_kefu_artifacts"].append({"doc_type": "label", "artifact": artifact})
         if step.step_type == "query_storage_history" and (result or {}).get("export_detail_requested"):
             # QueryStorageHistoryHandler already skipped its own Smart-Robot-
             # only download-link build for this channel (source_channel ==

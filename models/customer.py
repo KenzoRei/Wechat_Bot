@@ -125,4 +125,13 @@ class LabelShipment(Base):
     oms_error:           Mapped[str | None]  = mapped_column(Text)
     sales_amount:        Mapped[float | None] = mapped_column(Numeric(12, 2))
     status:              Mapped[str]         = mapped_column(String(20), nullable=False, default="created")
+    # The label's own PDF bytes, stored once at creation time -- NOT
+    # re-derivable later. Unlike a PDF stub or invoice workbook (pure
+    # functions of already-stored data, safely regenerable on every Kefu
+    # delivery retry), this came from a one-time, real YiDiDa API call
+    # that already created an actual carrier shipment; regenerating it by
+    # calling create_label again would create a SECOND, duplicate,
+    # separately-billed shipment. core/kefu_artifact_loader.py's "label"
+    # doc_type reads this column back instead of ever calling YiDiDa again.
+    label_pdf:           Mapped[bytes | None] = mapped_column(BYTEA)
     created_at:          Mapped[datetime]    = mapped_column(DateTime(timezone=True), server_default=text("now()"))
