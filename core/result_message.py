@@ -118,13 +118,21 @@ def _label_sections_builder(context: dict, db: DBSession) -> list[dict]:
     all) and even there only when OMS wasn't skipped/failed
     (handlers/oms_create_workorder.py's oms_result), so it's appended
     conditionally rather than always shown.
+
+    The download-link line is Smart-Robot-only: Kefu already attaches the
+    label PDF itself as a native chat file (core/kefu_turn_apply.py's
+    _workflow_steps, see core/kefu_label_export.py) once
+    create_fedex_label/create_ups_label returns label_base64 -- showing
+    the link there too would be a redundant second way to get the same
+    file. Smart Robot's group-webhook response_url can't carry a file at
+    all, so it keeps the link as its only option.
     """
     result = context.get("result", {})
     tracking_number = result.get("tracking_number", "")
     has_label = bool(result.get("label_base64", ""))
 
     items = [f"标签追踪号：{tracking_number}"]
-    if has_label:
+    if has_label and context.get("source_channel") != "kefu":
         serial_number = context.get("serial_number", "")
         label_url = f"{_LABEL_BASE_URL}/labels/{serial_number}"
         items.append(f"[点击下载标签]({label_url})")
