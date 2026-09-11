@@ -8,20 +8,26 @@ from core import customer_directory
 logger = logging.getLogger(__name__)
 
 
-def _generate_ke_hu_dan_hao(context: dict) -> str:
+def _generate_ke_hu_dan_hao(context: dict, billing_customer_id: str) -> str:
     """
     Generates YiDiDa customer order number (客户单号).
-    Format: ChatBot_<group8>_<user8>_<YYYYMMDD>_<serial3>
-    Example: ChatBot_TestGrou_Simon_20260429_005
+    Format: ChatBot_<billing_customer_id>_<user8>_<YYYYMMDD>_<serial3>
+    Example: ChatBot_F000225_Simon_20260429_005
+
+    Uses billing_customer_id, not the WeCom group's own description --
+    that field is arbitrary human-entered text scoped to a single WeCom
+    group (e.g. "U-Choice main group"), and labels are no longer a
+    U-Choice-only service: any customer, in any group, can now generate
+    one. billing_customer_id is the one identity that's actually
+    consistent across every customer and every group.
     """
-    group = re.sub(r'\s+', '', context.get("group_description") or "")[:8]
-    user  = re.sub(r'\s+', '', context.get("display_name") or "")[:8]
-    date  = datetime.now(timezone.utc).strftime("%Y%m%d")
+    user = re.sub(r'\s+', '', context.get("display_name") or "")[:8]
+    date = datetime.now(timezone.utc).strftime("%Y%m%d")
 
     serial_number = context.get("serial_number", "")
     serial_3 = serial_number.split("-")[-1][-3:] if serial_number else "001"
 
-    return f"ChatBot_{group}_{user}_{date}_{serial_3}"
+    return f"ChatBot_{billing_customer_id}_{user}_{date}_{serial_3}"
 
 
 class YDDLabelBaseHandler(BaseHandler):
@@ -92,7 +98,7 @@ class YDDLabelBaseHandler(BaseHandler):
             **fields,
             "ydd_cust_id":      username,
             "ydd_channel_id":   channel_id,
-            "ke_hu_dan_hao":    _generate_ke_hu_dan_hao(context),
+            "ke_hu_dan_hao":    _generate_ke_hu_dan_hao(context, billing_customer_id),
         }
 
         result = create_label(carrier=carrier, fields=api_fields, api_key=password)

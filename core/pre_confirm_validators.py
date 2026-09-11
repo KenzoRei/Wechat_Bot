@@ -781,6 +781,29 @@ _valid_cancel_inbound_target_and_owner = _valid_cancel_target_and_owner("inbound
 _valid_cancel_outbound_target_and_owner = _valid_cancel_target_and_owner("outbound")
 
 
+def _valid_label_phone_numbers(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """
+    fedex_label/ups_label: shipper_phone and recipient_phone must each
+    contain at least 10 digits — YiDiDa/the carrier reject malformed
+    numbers late, after label generation has already been attempted, so
+    catch an obviously-too-short number (missing digits, a placeholder
+    like "123", an area-code-only entry) here instead. Counts digits only,
+    so formatting (dashes, spaces, parentheses, a leading +1) never causes
+    a false rejection.
+    """
+    del context
+    import re
+
+    for field_name, label in (("shipper_phone", "寄件人电话"), ("recipient_phone", "收件人电话")):
+        value = collected_fields.get(field_name)
+        if value is None:
+            continue
+        digit_count = len(re.sub(r"\D", "", str(value)))
+        if digit_count < 10:
+            return f"{label}「{value}」位数不足，电话号码至少需要包含10位数字，请核实后重新提供。"
+    return None
+
+
 PRE_CONFIRM_VALIDATORS = {
     "role_change": _compose(
         _valid_role_change_target_and_role,
@@ -814,6 +837,8 @@ PRE_CONFIRM_VALIDATORS = {
     "view_storage_history": _valid_caller_warehouse_scope,
     "view_invoice": _valid_caller_warehouse_scope,
     "upsert_address": _valid_upsert_address_warehouse_scope,
+    "fedex_label": _valid_label_phone_numbers,
+    "ups_label": _valid_label_phone_numbers,
     "confirm_outbound_completion": _compose(
         _valid_outbound_completion_skus,
         _loose_outbound_pick_required,

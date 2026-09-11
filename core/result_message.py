@@ -111,7 +111,14 @@ def build_result_title(service_type_name: str | None, context: dict) -> str:
 # ── Sections builders ────────────────────────────────────────────────────────
 
 def _label_sections_builder(context: dict, db: DBSession) -> list[dict]:
-    """fedex_label / ups_label — preserves the original flat layout exactly (no bullets/spacers)."""
+    """
+    fedex_label / ups_label — preserves the original flat layout exactly
+    (no bullets/spacers). oms_work_order is only present on the
+    fedex_workorder workflow (ups_only has no oms_create_workorder step at
+    all) and even there only when OMS wasn't skipped/failed
+    (handlers/oms_create_workorder.py's oms_result), so it's appended
+    conditionally rather than always shown.
+    """
     result = context.get("result", {})
     tracking_number = result.get("tracking_number", "")
     has_label = bool(result.get("label_base64", ""))
@@ -121,6 +128,14 @@ def _label_sections_builder(context: dict, db: DBSession) -> list[dict]:
         serial_number = context.get("serial_number", "")
         label_url = f"{_LABEL_BASE_URL}/labels/{serial_number}"
         items.append(f"[点击下载标签]({label_url})")
+
+    oms_work_order = result.get("oms_work_order")
+    if oms_work_order:
+        items.append(f"OMS工单号：{oms_work_order}")
+        linked_order = result.get("oms_order_linked")
+        if linked_order:
+            items.append(f"已关联OMS出库订单：{linked_order}")
+
     return [{"type": "raw", "items": items}]
 
 
