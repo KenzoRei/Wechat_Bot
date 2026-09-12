@@ -43,3 +43,16 @@ ASSIGNABLE_ROLES: tuple[AssignableRole, ...] = (
 # per-role metadata (e.g. a default set of services to suggest granting on
 # creation) should be added going forward, without another rename/relocate.
 ASSIGNABLE_ROLE_NAMES = frozenset(r.name for r in ASSIGNABLE_ROLES)
+
+# Names a role can never be deleted under, regardless of whether it's
+# currently assigned to anyone -- same code-level-allowlist philosophy as
+# ASSIGNABLE_ROLES above, and for the same reason: this governs a real
+# safety invariant, not something an admin-panel checkbox should control.
+# "admin" per the obvious operational risk (locking everyone out of admin
+# actions). "pending" is less obvious but just as real: core/kefu_
+# registration.py (and core/self_registration.py) look it up by literal
+# name at self-registration time -- deleting it would silently break every
+# future 注册成员 registration with no clear symptom, even though no user
+# row ever holds "pending" permanently (it's a transient landing role), so
+# the "not assigned to any user" check alone would never catch this one.
+PROTECTED_ROLE_NAMES = frozenset({"admin", "pending"})

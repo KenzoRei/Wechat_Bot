@@ -1076,15 +1076,37 @@ function roleRowHtml(r) {
     ? '<span class="badge ok">assignable</span>'
     : '<span class="badge bad">not assignable</span>';
   const created = r.created_at ? new Date(r.created_at).toLocaleString() : "";
+  // "admin"/"pending" are protected server-side regardless of this button --
+  // hiding it here is just so the confirm dialog isn't dangled in front of
+  // an action that will always 409, not the actual enforcement.
+  const deleteBtn = (r.name === "admin" || r.name === "pending")
+    ? ""
+    : `<button class="secondary" onclick="deleteRole('${r.role_id}', '${escapeHtml(r.name)}')">Delete</button>`;
   return `
     <tr>
       <td>${escapeHtml(r.name)}</td>
       <td>${escapeHtml(r.description || "")}</td>
       <td>${assignableBadge}</td>
       <td>${escapeHtml(created)}</td>
-      <td><button class="secondary" onclick="openRolePermissions('${r.role_id}', '${escapeHtml(r.name)}')">Manage permissions</button></td>
+      <td>
+        <button class="secondary" onclick="openRolePermissions('${r.role_id}', '${escapeHtml(r.name)}')">Manage permissions</button>
+        ${deleteBtn}
+      </td>
     </tr>
   `;
+}
+
+async function deleteRole(roleId, roleName) {
+  document.getElementById("roleError").textContent = "";
+  if (!confirm(`Delete role "${roleName}"? This cannot be undone.`)) return;
+  try {
+    await authedDelete(`/admin/roles/${encodeURIComponent(roleId)}`);
+    _rolesCache = null;  // invalidate the Kefu-staff dropdown's cache too
+    await loadRolesTab();
+  } catch (e) {
+    if (e.message === "UNAUTHORIZED") throw e;
+    document.getElementById("roleError").textContent = "Delete failed: " + e.message;
+  }
 }
 
 async function openRolePermissions(roleId, roleName) {

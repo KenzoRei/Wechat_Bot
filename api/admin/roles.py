@@ -3,8 +3,10 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from middleware.admin_auth import verify_admin_key
-from core.role_registry import ASSIGNABLE_ROLE_NAMES
+from core.role_registry import ASSIGNABLE_ROLE_NAMES, PROTECTED_ROLE_NAMES
 from core.uchoice_constants import VALID_WAREHOUSE_CODES
+from models.group import GroupMember
+from models.kefu import KefuStaff
 from models.role import Role, RoleServicePermission
 from models.service import ServiceType
 from api.schemas import RoleCreate, RoleResponse, RoleServicePermissionGrant, RoleServicePermissionResponse
@@ -45,6 +47,32 @@ def create_role(body: RoleCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(role)
     return {"data": _to_response(role)}
+
+
+@router.delete("/{role_id}")
+def delete_role(role_id: str, db: Session = Depends(get_db)):
+    role = db.query(Role).filter_by(role_id=role_id).first()
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+
+    if role.name in PROTECTED_ROLE_NAMES:
+        raise HTTPException(status_code=409, detail=f'Role "{role.name}" is protected and can never be removed')
+
+    member_count = db.query(GroupMember).filter_by(role_id=role_id).count()
+    staff_count = db.query(KefuStaff).filter_by(role_id=role_id).count()
+    assigned_count = member_count + staff_count
+    if assigned_count:
+        raise HTTPException(
+            status_code=409,
+            detail=f'Role "{role.name}" is currently assigned to {assigned_count} user(s) and cannot be removed',
+        )
+
+    # role_service_permission rows cascade (models/role.py's ondelete="CASCADE")
+    # -- a role's own permission grants are its data, not a second "in use"
+    # signal, so no separate check needed for those.
+    db.delete(role)
+    db.commit()
+    return {"data": {"message": "role removed"}}
 
 
 # ── Role->service permission grants (deny-by-default, GLOBAL) ───────────────
