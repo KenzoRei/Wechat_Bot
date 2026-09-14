@@ -295,9 +295,10 @@ def _resolve_label_billing_customer(context: dict, service: dict, session, db: D
     if service["name"] not in ("fedex_label", "ups_label"):
         return False
     from core import customer_directory
+    from core.role_registry import CUSTOMER_IDENTITY_ROLE_NAMES
     extracted = (session.collected_fields or {}).get("billing_customer_id")
     resolved_id, error = customer_directory.resolve_billing_customer_id(
-        db, context.get("role") == "customer", context.get("requester_billing_customer_id"), extracted
+        db, context.get("role") in CUSTOMER_IDENTITY_ROLE_NAMES, context.get("requester_billing_customer_id"), extracted
     )
     if error:
         session_manager.update_collected_fields(db, session, {"billing_customer_id": None})

@@ -71,8 +71,9 @@ class YDDLabelBaseHandler(BaseHandler):
         # requester) their own binding having been reassigned, in the gap
         # between collection and confirmation -- not just re-checking the
         # same stale state twice.
+        from core.role_registry import CUSTOMER_IDENTITY_ROLE_NAMES
         revalidated_id, revalidation_error = customer_directory.resolve_billing_customer_id(
-            db, context.get("role") == "customer", context.get("requester_billing_customer_id"), billing_customer_id,
+            db, context.get("role") in CUSTOMER_IDENTITY_ROLE_NAMES, context.get("requester_billing_customer_id"), billing_customer_id,
         )
         if revalidation_error or revalidated_id != billing_customer_id:
             raise RuntimeError(

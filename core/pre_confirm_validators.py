@@ -294,7 +294,7 @@ def _valid_role_change_target_and_role(context: dict, collected_fields: dict, db
     didn't go through the same sanitizer call, and is itself backstopped by
     the execution-time check in handlers/uchoice/role_change.py.
     """
-    from core.role_registry import ASSIGNABLE_ROLE_NAMES
+    from core.role_registry import ASSIGNABLE_ROLE_NAMES, CUSTOMER_IDENTITY_ROLE_NAMES
     from core.uchoice_constants import VALID_WAREHOUSE_CODES
     from core.role_identity import parse_target_identity
 
@@ -327,14 +327,12 @@ def _valid_role_change_target_and_role(context: dict, collected_fields: dict, db
             codes_list = "、".join(sorted(VALID_WAREHOUSE_CODES))
             return f"指派为仓库管理员需要提供至少一个有效的仓库代码（{codes_list}）。"
 
-    if new_role == "customer":
-        # KefuStaff has no billing_customer_id column at all -- internal
-        # staff are never customers themselves, so this must be rejected
-        # here, before confirmation, not silently accepted and then fail
-        # (or worse, be silently ignored) at the mutation boundary.
-        target_identity = parse_target_identity(target_openid) if target_openid else None
-        if target_identity and target_identity.kind == "kefu":
-            return "客服账号不能设置为客户角色。"
+    if new_role in CUSTOMER_IDENTITY_ROLE_NAMES:
+        # Both GroupMember and KefuStaff support this binding since V31 --
+        # a customer-identity role (customer, fedex_label_agent) always
+        # needs a real, active F###### binding before confirmation, on
+        # either channel, per core.role_registry.CUSTOMER_IDENTITY_ROLE_
+        # NAMES's docstring on why this categorization matters.
         billing_customer_id = collected_fields.get("billing_customer_id")
         if not billing_customer_id:
             return "指派为客户角色需要提供关联的客户编号（格式 F 加 6 位数字）。"

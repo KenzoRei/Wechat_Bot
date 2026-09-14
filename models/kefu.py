@@ -26,11 +26,19 @@ class UchoiceCustomer(Base):
 
 class KefuStaff(Base):
     """
-    A staff member's Kefu identity. Reuses the self-registration pattern
-    (pending role, admin
-    promotes) -- not the group_member table, which is WeCom-group-shaped
-    and doesn't fit Kefu's 1:1 model. group_id is fixed per open_kfid at
-    deployment time, never chosen by staff or inferred from a message.
+    A registered Kefu identity -- despite the table/class name, this is NOT
+    staff-only. It's every person who has ever self-registered on the Kefu
+    channel (`注册成员`), regardless of what role an admin later assigns
+    them: internal staff (admin/warehouseman/accountant/label_agent) AND
+    external customers (customer/fedex_label_agent) both live in this same
+    table, distinguished only by role_id. The name predates customer-role
+    Kefu registrations being a supported case; kept as-is rather than
+    renamed mid-adoption, but don't read "staff" as an invariant anywhere
+    in this codebase -- check role_id instead. Reuses the self-registration
+    pattern (pending role, admin promotes) -- not the group_member table,
+    which is WeCom-group-shaped and doesn't fit Kefu's 1:1 model. group_id
+    is fixed per open_kfid at deployment time, never chosen by the
+    registrant or inferred from a message.
     """
     __tablename__ = "kefu_staff"
 
@@ -40,6 +48,13 @@ class KefuStaff(Base):
     group_id:       Mapped[uuid.UUID]      = mapped_column(UUID(as_uuid=True), ForeignKey("group_config.group_id", ondelete="RESTRICT"), nullable=False)
     role_id:        Mapped[uuid.UUID]      = mapped_column(UUID(as_uuid=True), ForeignKey("role.role_id", ondelete="RESTRICT"), nullable=False)
     warehouse_codes: Mapped[list[str] | None] = mapped_column(ARRAY(String(20)))
+    # Set only for role in core.role_registry.CUSTOMER_IDENTITY_ROLE_NAMES
+    # (customer, fedex_label_agent) -- mirrors GroupMember.billing_customer_id
+    # exactly (V27), added later (V31) once Kefu-side customer-identity
+    # roles became a supported case. Enforced the same way: application
+    # layer only (core/pre_confirm_validators.py, handlers/uchoice/
+    # role_change.py), not a DB constraint tying it to role_id.
+    billing_customer_id: Mapped[str | None] = mapped_column(String(7), ForeignKey("customer.customer_id"))
     display_name:   Mapped[str | None]     = mapped_column(String(200))
     is_active:      Mapped[bool]           = mapped_column(Boolean, nullable=False, default=True)
     created_at:     Mapped[datetime]       = mapped_column(DateTime(timezone=True), server_default=text("now()"))

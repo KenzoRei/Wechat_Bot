@@ -14,7 +14,7 @@ class AccessResult:
     role_id:           UUID
     display_name:      str | None
     warehouse_codes:   list[str] | None  # set only for role=warehouseman
-    billing_customer_id: str | None      # set only for role=customer -- see core.customer_directory.resolve_billing_customer_id
+    billing_customer_id: str | None      # set only for core.role_registry.CUSTOMER_IDENTITY_ROLE_NAMES roles -- see core.customer_directory.resolve_billing_customer_id
     allowed_services:  list[dict]
     group_context:     dict | None    # location presets, aliases — passed to AI
     group_description: str | None     # human label for the group — used in keHuDanHao
@@ -216,7 +216,7 @@ def check_kefu_access(
         role_id=staff.role_id,
         display_name=staff.display_name,
         warehouse_codes=staff.warehouse_codes,
-        billing_customer_id=None,  # KefuStaff has no billing_customer_id column -- staff are never customers themselves
+        billing_customer_id=staff.billing_customer_id,  # set only for CUSTOMER_IDENTITY_ROLE_NAMES roles (V31)
         allowed_services=allowed_services,
         group_context=group.context,
         group_description=group.description,

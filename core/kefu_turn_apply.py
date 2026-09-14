@@ -890,19 +890,21 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
                 return reply
 
     if service["name"] in ("fedex_label", "ups_label"):
-        # context["requester_billing_customer_id"] is always None on the
-        # Kefu channel (KefuStaff has no billing_customer_id column --
-        # staff are never customers themselves). is_customer_role is
-        # nonetheless computed the same way as workflow_engine.py's
-        # equivalent call, not hardcoded False: if a Kefu account were ever
-        # mis-assigned role='customer' (never supposed to happen
-        # operationally), resolve_billing_customer_id must REJECT it for
-        # having no binding, not silently fall through to the staff path
-        # and let it select an arbitrary customer's billing account.
+        # context["requester_billing_customer_id"] comes from KefuStaff.
+        # billing_customer_id via check_kefu_access -> AccessResult ->
+        # session_manager.build_context (shared with Smart Robot, same
+        # wiring as workflow_engine.py's equivalent call) -- V31 added this
+        # column; before that it was hardcoded None here. is_customer_role
+        # checks membership in CUSTOMER_IDENTITY_ROLE_NAMES, not a bare
+        # "== customer" string -- fedex_label_agent is also a customer-
+        # identity role (a narrower one, FedEx only) and must be rejected
+        # the same way if its own binding isn't set, never falling through
+        # to the staff path and selecting an arbitrary customer's account.
         from core import customer_directory
+        from core.role_registry import CUSTOMER_IDENTITY_ROLE_NAMES
         extracted_billing_id = (session.collected_fields or {}).get("billing_customer_id")
         resolved_id, billing_error = customer_directory.resolve_billing_customer_id(
-            db, context.get("role") == "customer", context.get("requester_billing_customer_id"), extracted_billing_id
+            db, context.get("role") in CUSTOMER_IDENTITY_ROLE_NAMES, context.get("requester_billing_customer_id"), extracted_billing_id
         )
         if billing_error:
             # Reject the invalid value so the required-field prompt re-asks
@@ -913,10 +915,9 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
             _append(session, "assistant", billing_error)
             return billing_error
         elif resolved_id and resolved_id != extracted_billing_id:
-            # Auto-filled from the requester's own identity (never happens
-            # on Kefu today, but keeps this block symmetric with workflow_
-            # engine.py's equivalent for whichever channel gains a
-            # customer-role Kefu concept later).
+            # Auto-filled from the requester's own bound identity -- now a
+            # real case since V31 (a customer/fedex_label_agent Kefu
+            # registrant), same as workflow_engine.py's equivalent.
             session.collected_fields = {**(session.collected_fields or {}), "billing_customer_id": resolved_id}
             context["collected_fields"] = session.collected_fields
 

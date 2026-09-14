@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from middleware.admin_auth import verify_admin_key
 from core.admin_invariants import lock_group_admin_invariant, would_remove_last_admin
-from core.role_registry import ASSIGNABLE_ROLE_NAMES
+from core.role_registry import ASSIGNABLE_ROLE_NAMES, CUSTOMER_IDENTITY_ROLE_NAMES
 from core import customer_directory
 from models.group import GroupConfig, GroupMember
 from models.role import Role
@@ -61,7 +61,7 @@ def _resolve_billing_customer_id(db: Session, raw: str | None) -> str:
     checks; both must independently reject the same bad values.
     """
     if not raw or not raw.strip():
-        raise HTTPException(status_code=400, detail="billing_customer_id is required for role=customer")
+        raise HTTPException(status_code=400, detail="billing_customer_id is required for a customer-identity role")
     customer_id = raw.strip()
     record = customer_directory.get_customer(db, customer_id)
     if record is None:
@@ -96,7 +96,7 @@ def add_member(group_id: str, body: MemberCreate, db: Session = Depends(get_db))
     if role.name == "warehouseman" and not warehouse_codes:
         raise HTTPException(status_code=400, detail="warehouse_codes is required for role=warehouseman")
 
-    billing_customer_id = _resolve_billing_customer_id(db, body.billing_customer_id) if role.name == "customer" else None
+    billing_customer_id = _resolve_billing_customer_id(db, body.billing_customer_id) if role.name in CUSTOMER_IDENTITY_ROLE_NAMES else None
 
     existing = db.query(GroupMember).filter_by(
         wechat_openid=body.wechat_openid, group_id=group_id
@@ -178,15 +178,16 @@ def update_member(
         else:
             # cleared automatically whenever a member's role changes away from warehouseman
             member.warehouse_codes = None
-        if role.name == "customer":
+        if role.name in CUSTOMER_IDENTITY_ROLE_NAMES:
             new_billing_id = body.billing_customer_id if body.billing_customer_id is not None else member.billing_customer_id
             member.billing_customer_id = _resolve_billing_customer_id(db, new_billing_id)
         else:
             # Cleared automatically whenever a member's role changes away
-            # from customer -- a former customer's stale binding must never
-            # be left in place once they're reassigned to a staff role,
-            # where it would otherwise be silently ignored rather than
-            # actively wrong, but clearing it is the safer default.
+            # from a customer-identity role -- a former holder's stale
+            # binding must never be left in place once they're reassigned
+            # to a staff role, where it would otherwise be silently
+            # ignored rather than actively wrong, but clearing it is the
+            # safer default.
             member.billing_customer_id = None
     elif body.warehouse_codes is not None:
         # role unchanged this call — only meaningful if the member is already a warehouseman
@@ -198,9 +199,9 @@ def update_member(
         member.warehouse_codes = cleaned
 
     if new_role is None and body.billing_customer_id is not None:
-        # role unchanged this call — only meaningful if the member is already a customer
-        if not current_role or current_role.name != "customer":
-            raise HTTPException(status_code=400, detail="billing_customer_id only applies to role=customer")
+        # role unchanged this call — only meaningful if the member already holds a customer-identity role
+        if not current_role or current_role.name not in CUSTOMER_IDENTITY_ROLE_NAMES:
+            raise HTTPException(status_code=400, detail="billing_customer_id only applies to a customer-identity role")
         member.billing_customer_id = _resolve_billing_customer_id(db, body.billing_customer_id)
 
     if body.is_active is not None:

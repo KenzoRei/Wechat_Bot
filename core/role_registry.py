@@ -35,8 +35,8 @@ ASSIGNABLE_ROLES: tuple[AssignableRole, ...] = (
     AssignableRole("customer", "Standard requester — access limited to explicitly granted services"),
     AssignableRole("warehouseman", "Confirms inbound/outbound completions, corrects storage (adjust/recount/move)"),
     AssignableRole("accountant", "Read-only financial visibility — storage and invoice viewing"),
-    AssignableRole("label_agent", "Creates FedEx/UPS shipping labels"),
-    AssignableRole("fedex_label_agent", "Creates FedEx shipping labels only"),
+    AssignableRole("label_agent", "Staff — creates FedEx/UPS shipping labels on behalf of any customer named per-request"),
+    AssignableRole("fedex_label_agent", "Customer — creates FedEx labels for their own bound customer account only, not UPS"),
 )
 
 # Kept as a plain frozenset for every existing call site's `name in
@@ -57,3 +57,38 @@ ASSIGNABLE_ROLE_NAMES = frozenset(r.name for r in ASSIGNABLE_ROLES)
 # row ever holds "pending" permanently (it's a transient landing role), so
 # the "not assigned to any user" check alone would never catch this one.
 PROTECTED_ROLE_NAMES = frozenset({"admin", "pending"})
+
+# Roles representing an external customer's OWN identity -- these callers
+# get a mandatory, fixed billing_customer_id binding (GroupMember/KefuStaff)
+# that no message they send can override, and core.customer_directory.
+# resolve_billing_customer_id() REJECTS them outright if that binding isn't
+# set (see its docstring). Every other role (label_agent, warehouseman,
+# admin, ...) is staff: they specify WHICH customer a label is for on each
+# request, validated only for existence + active status, not tied to any
+# personal binding, because staff legitimately act on behalf of many
+# different customers across different requests.
+#
+# "customer" is the original, unrestricted customer role. "fedex_label_agent"
+# is a narrower customer role (e.g. yestech) -- same self-identity binding
+# requirement, just scoped to fedex_label only, not the full uchoice_*
+# service set "customer" gets. Getting this categorization wrong is a real
+# security issue, not just a premature-access one: a role mistakenly typed
+# as staff lets every holder bill a label to ANY active customer in the
+# whole directory just by typing that customer's F###### code (see
+# resolve_billing_customer_id's "otherwise" branch) -- there is no
+# secondary check tying a specific staff member to a specific customer.
+#
+# Deliberately still code-level for this version, same as ASSIGNABLE_ROLE_
+# NAMES/PROTECTED_ROLE_NAMES above -- NOT because a DB column here would be
+# insecure in principle (an admin already fully controls a role's real
+# permissions via the self-service "Manage permissions" UI with zero
+# review, so "no code review" was never a strong argument for this
+# specific flag either). The actual reasoning: while there is exactly one
+# admin-panel operator, the cost of "needs a deploy" is low and any
+# mistake would be fully attributed via created_by in the logs regardless.
+# If role management ever needs to become a clean, fully self-service SOP
+# (multiple admins, frequent new customer-scoped roles), the better fix is
+# a real DB column PLUS a deliberate 2-step confirmation on changing it --
+# not removing the safeguard, just moving it out of source control. Revisit
+# then; don't add the DB column without also adding that confirmation step.
+CUSTOMER_IDENTITY_ROLE_NAMES = frozenset({"customer", "fedex_label_agent"})

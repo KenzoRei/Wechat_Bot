@@ -13,6 +13,7 @@ import pytest
 from core import pre_confirm_validators, workflow_engine
 from core.role_identity import tag_kefu_identity
 from handlers.uchoice.role_change import RoleChangeHandler
+from models.customer import Customer
 from models.group import GroupMember
 from models.kefu import KefuStaff
 from models.role import Role
@@ -43,6 +44,7 @@ class _Query:
                     staff_id=staff_id,
                     role_id=f"role-{role_name}",
                     warehouse_codes=None,
+                    billing_customer_id=self.db.kefu_billing.get(staff_id),
                     is_active=is_active,
                 )
             return None
@@ -74,7 +76,7 @@ class _Query:
 
 
 class _MockDB:
-    def __init__(self, smart_robot_members=None, kefu_members=None):
+    def __init__(self, smart_robot_members=None, kefu_members=None, kefu_billing=None, customers=None):
         # each dict: {key: role_name} or {key: (role_name, is_active)}
         self.smart_robot_members = {
             k: (v if isinstance(v, tuple) else (v, True))
@@ -84,11 +86,26 @@ class _MockDB:
             k: (v if isinstance(v, tuple) else (v, True))
             for k, v in (kefu_members or {}).items()
         }
-        self.all_roles = {"admin", "customer", "warehouseman", "accountant", "pending"}
+        self.kefu_billing = dict(kefu_billing or {})
+        # {customer_id: status}, defaults to "active" -- matches core.
+        # customer_directory.get_customer's db.get(Customer, id) call.
+        self.customers = dict(customers or {})
+        self.all_roles = {"admin", "customer", "warehouseman", "accountant", "pending", "fedex_label_agent"}
         self.committed = False
 
     def query(self, model):
         return _Query(self, model)
+
+    def get(self, model, pk):
+        if model is Customer and pk in self.customers:
+            status = self.customers[pk]
+            return SimpleNamespace(
+                customer_id=pk, display_name="Test Co", display_name_cn=None, contact_name=None,
+                email=None, phone=None, addr_line1=None, city=None, state=None, zip=None, country=None,
+                bank_account=None, status=status, rate_multiplier={}, ydd_channel_id={}, oms_wh_code=None,
+                toggles={}, notes=None,
+            )
+        return None
 
     def commit(self):
         self.committed = True
@@ -147,17 +164,50 @@ def test_pre_confirm_accepts_valid_kefu_warehouseman_promotion():
     assert error is None
 
 
-def test_pre_confirm_rejects_kefu_target_for_customer_role():
-    """KefuStaff has no billing_customer_id column -- internal staff are
-    never customers themselves, so this must be rejected outright,
-    regardless of anything else about the request."""
+def test_pre_confirm_accepts_kefu_target_for_customer_role_with_valid_billing_id():
+    """V31: KefuStaff gained billing_customer_id, closing the gap the old
+    version of this test asserted (Kefu could never be assigned a
+    customer-identity role at all). A real, active customer binding is
+    now sufficient -- no channel-based rejection."""
+    db = _MockDB(kefu_members={KEFU_ID: "warehouseman"}, customers={"F000001": "active"})
+    error = pre_confirm_validators.run(
+        "role_change", {"group_id": "g1"},
+        {"target_openid": tag_kefu_identity(KEFU_ID), "new_role": "customer", "billing_customer_id": "F000001"}, db,
+    )
+    assert error is None
+
+
+def test_pre_confirm_accepts_kefu_target_for_fedex_label_agent_with_valid_billing_id():
+    """fedex_label_agent is also a customer-identity role (a narrower one,
+    FedEx only) -- must be accepted the same way as plain 'customer',
+    proving this isn't a one-off special case for that single role name."""
+    db = _MockDB(kefu_members={KEFU_ID: "warehouseman"}, customers={"F000002": "active"})
+    error = pre_confirm_validators.run(
+        "role_change", {"group_id": "g1"},
+        {"target_openid": tag_kefu_identity(KEFU_ID), "new_role": "fedex_label_agent", "billing_customer_id": "F000002"}, db,
+    )
+    assert error is None
+
+
+def test_pre_confirm_rejects_kefu_target_for_customer_role_without_billing_id():
+    """Missing binding is still rejected -- just for the right reason now
+    (no billing_customer_id provided), not a blanket channel-based ban."""
     db = _MockDB(kefu_members={KEFU_ID: "admin"})
     error = pre_confirm_validators.run(
         "role_change", {"group_id": "g1"},
         {"target_openid": tag_kefu_identity(KEFU_ID), "new_role": "customer"}, db,
     )
     assert error is not None
-    assert "客服账号" in error
+    assert "客户编号" in error
+
+
+def test_pre_confirm_rejects_kefu_target_for_customer_role_with_inactive_customer():
+    db = _MockDB(kefu_members={KEFU_ID: "admin"}, customers={"F000003": "inactive"})
+    error = pre_confirm_validators.run(
+        "role_change", {"group_id": "g1"},
+        {"target_openid": tag_kefu_identity(KEFU_ID), "new_role": "customer", "billing_customer_id": "F000003"}, db,
+    )
+    assert error is not None
 
 
 def test_pre_confirm_rejects_unknown_kefu_target():
@@ -237,6 +287,22 @@ def test_execution_backstop_rejects_kefu_target_not_a_member():
     }
     with pytest.raises(RuntimeError):
         RoleChangeHandler().handle(context, {}, db)
+
+
+def test_execution_backstop_persists_billing_customer_id_on_kefu_target():
+    """The actual mutation: RoleChangeHandler must write billing_customer_id
+    onto the KefuStaff row itself, not just validate it upstream."""
+    db = _MockDB(kefu_members={KEFU_ID: "warehouseman"}, customers={"F000004": "active"})
+    context = {
+        "collected_fields": {
+            "target_openid": tag_kefu_identity(KEFU_ID), "new_role": "fedex_label_agent",
+            "billing_customer_id": "F000004",
+        },
+        "group_id": "g1",
+    }
+    result = RoleChangeHandler().handle(context, {}, db)
+    assert result == {"target_openid": tag_kefu_identity(KEFU_ID), "new_role": "fedex_label_agent"}
+    assert db.committed is True
 
 
 def test_execution_backstop_still_works_for_smart_robot_targets():

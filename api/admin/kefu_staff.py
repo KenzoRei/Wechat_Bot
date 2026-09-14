@@ -6,7 +6,8 @@ import config
 from database import get_db
 from middleware.admin_auth import verify_admin_key
 from core.admin_invariants import lock_group_admin_invariant, would_remove_last_admin
-from core.role_registry import ASSIGNABLE_ROLE_NAMES
+from core.role_registry import ASSIGNABLE_ROLE_NAMES, CUSTOMER_IDENTITY_ROLE_NAMES
+from core import customer_directory
 from models.kefu import KefuStaff
 from models.role import Role
 from api.schemas import KefuStaffUpdate, KefuStaffResponse
@@ -47,6 +48,19 @@ def _clean_warehouse_codes(raw: list[str] | None) -> list[str] | None:
     return cleaned
 
 
+def _resolve_billing_customer_id(db: Session, raw: str | None) -> str:
+    """Matches api/admin/members.py's identical validation (V31 gave KefuStaff the same column)."""
+    if not raw or not raw.strip():
+        raise HTTPException(status_code=400, detail="billing_customer_id is required for a customer-identity role")
+    customer_id = raw.strip()
+    record = customer_directory.get_customer(db, customer_id)
+    if record is None:
+        raise HTTPException(status_code=400, detail=f"Unknown customer_id: '{customer_id}'. See GET /admin/customers")
+    if record.status != "active":
+        raise HTTPException(status_code=400, detail=f"Customer '{customer_id}' is not active (status={record.status!r})")
+    return customer_id
+
+
 def _to_response(staff: KefuStaff, role_name: str) -> KefuStaffResponse:
     return KefuStaffResponse(
         staff_id=staff.staff_id,
@@ -56,6 +70,7 @@ def _to_response(staff: KefuStaff, role_name: str) -> KefuStaffResponse:
         role=role_name,
         display_name=staff.display_name,
         warehouse_codes=staff.warehouse_codes,
+        billing_customer_id=staff.billing_customer_id,
         is_active=staff.is_active,
         created_at=staff.created_at,
     )
@@ -112,6 +127,12 @@ def update_kefu_staff(staff_id: str, body: KefuStaffUpdate, db: Session = Depend
         else:
             # cleared automatically whenever a staff member's role changes away from warehouseman
             staff.warehouse_codes = None
+        if role.name in CUSTOMER_IDENTITY_ROLE_NAMES:
+            new_billing_id = body.billing_customer_id if body.billing_customer_id is not None else staff.billing_customer_id
+            staff.billing_customer_id = _resolve_billing_customer_id(db, new_billing_id)
+        else:
+            # cleared automatically whenever a staff member's role changes away from a customer-identity role
+            staff.billing_customer_id = None
     elif body.warehouse_codes is not None:
         # role unchanged this call — only meaningful if the staff member is already a warehouseman
         if not current_role or current_role.name != "warehouseman":
@@ -120,6 +141,12 @@ def update_kefu_staff(staff_id: str, body: KefuStaffUpdate, db: Session = Depend
         if not cleaned:
             raise HTTPException(status_code=400, detail="warehouse_codes cannot be empty")
         staff.warehouse_codes = cleaned
+
+    if new_role is None and body.billing_customer_id is not None:
+        # role unchanged this call — only meaningful if the staff member already holds a customer-identity role
+        if not current_role or current_role.name not in CUSTOMER_IDENTITY_ROLE_NAMES:
+            raise HTTPException(status_code=400, detail="billing_customer_id only applies to a customer-identity role")
+        staff.billing_customer_id = _resolve_billing_customer_id(db, body.billing_customer_id)
 
     if body.display_name is not None:
         staff.display_name = body.display_name

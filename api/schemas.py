@@ -45,14 +45,14 @@ class MemberCreate(BaseModel):
     role:                str
     display_name:        str | None = None
     warehouse_codes:     list[str] | None = None   # required if role == "warehouseman", enforced in the route
-    billing_customer_id: str | None = None         # required if role == "customer", enforced in the route
+    billing_customer_id: str | None = None         # required if role is in core.role_registry.CUSTOMER_IDENTITY_ROLE_NAMES, enforced in the route
 
 
 class MemberUpdate(BaseModel):
     role:                str | None = None
     is_active:           bool | None = None
     warehouse_codes:     list[str] | None = None   # required if role becomes "warehouseman", enforced in the route
-    billing_customer_id: str | None = None         # required if role becomes "customer", enforced in the route
+    billing_customer_id: str | None = None         # required if role becomes a customer-identity role, enforced in the route
 
 
 class MemberResponse(BaseModel):
@@ -93,24 +93,26 @@ class RoleResponse(BaseModel):
 # ── Kefu Staff ────────────────────────────────────────────────────────────────
 
 class KefuStaffUpdate(BaseModel):
-    role:            str | None = None
-    is_active:       bool | None = None
-    warehouse_codes: list[str] | None = None   # required if role becomes "warehouseman", enforced in the route
-    display_name:    str | None = None
+    role:                str | None = None
+    is_active:           bool | None = None
+    warehouse_codes:     list[str] | None = None   # required if role becomes "warehouseman", enforced in the route
+    billing_customer_id: str | None = None         # required if role becomes a customer-identity role (V31), enforced in the route
+    display_name:        str | None = None
 
 
 class KefuStaffResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    staff_id:        UUID
-    open_kfid:       str
-    external_userid: str
-    group_id:        UUID
-    role:            str
-    display_name:    str | None
-    warehouse_codes: list[str] | None
-    is_active:       bool
-    created_at:      datetime
+    staff_id:            UUID
+    open_kfid:           str
+    external_userid:     str
+    group_id:            UUID
+    role:                str
+    display_name:        str | None
+    warehouse_codes:     list[str] | None
+    billing_customer_id: str | None
+    is_active:           bool
+    created_at:          datetime
 
 
 class RoleServicePermissionGrant(BaseModel):
