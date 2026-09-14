@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from middleware.admin_auth import verify_admin_key
-from core.role_registry import ASSIGNABLE_ROLE_NAMES, PROTECTED_ROLE_NAMES
+from core.role_registry import ASSIGNABLE_ROLE_NAMES, PROTECTED_ROLE_NAMES, CUSTOMER_IDENTITY_ROLE_NAMES
 from core.uchoice_constants import VALID_WAREHOUSE_CODES
 from models.group import GroupMember
 from models.kefu import KefuStaff
@@ -21,6 +21,7 @@ def _to_response(role: Role) -> RoleResponse:
         description=role.description,
         created_at=role.created_at,
         assignable=role.name in ASSIGNABLE_ROLE_NAMES,
+        customer_identity=role.name in CUSTOMER_IDENTITY_ROLE_NAMES,
     )
 
 

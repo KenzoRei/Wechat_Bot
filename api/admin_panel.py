@@ -225,7 +225,7 @@ _PANEL_HTML = """<!doctype html>
         <button class="secondary" onclick="refreshKefuNames()">Refresh names from WeCom</button>
       </div>
       <table>
-        <thead><tr><th>Name</th><th>external_userid</th><th>Role</th><th>Warehouse</th><th>Status</th><th>Registered</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>external_userid</th><th>Role</th><th>Warehouse</th><th>Billing Customer</th><th>Status</th><th>Registered</th><th></th></tr></thead>
         <tbody id="kefuStaffRows"></tbody>
       </table>
       <div class="error" id="kefuStaffError"></div>
@@ -463,6 +463,14 @@ function warehouseChecksHtml(staffId, selectedCodes, visible) {
   return `<div class="warehouse-checks" id="kefu-wh-${staffId}" style="${visible ? "" : "display:none"}">${boxes}</div>`;
 }
 
+function billingCustomerInputHtml(staffId, currentId, visible) {
+  return `
+    <input type="text" class="kefu-billing-input" id="kefu-billing-${staffId}"
+           value="${escapeHtml(currentId || "")}" placeholder="F000000"
+           style="${visible ? "" : "display:none"}; width:9em;">
+  `;
+}
+
 function kefuRoleRowHtml(s, roles) {
   // Offer only roles accepted by the PATCH endpoint; internal roles such as
   // "pending" are not assignable.
@@ -476,12 +484,17 @@ function kefuRoleRowHtml(s, roles) {
     `<option value="${escapeHtml(r)}" ${r === s.role ? "selected" : ""}>${escapeHtml(r)}</option>`
   ).join("");
   const isWarehouseman = s.role === "warehouseman";
+  // customer_identity comes from the server (core.role_registry.
+  // CUSTOMER_IDENTITY_ROLE_NAMES via GET /admin/roles) -- never hardcode
+  // role names here, same discipline as the warehouse_codes list above.
+  const isCustomerIdentity = (roles.find(r => r.name === s.role) || {}).customer_identity === true;
   return `
     <tr id="kefu-row-${s.staff_id}">
       <td>${escapeHtml(s.display_name || "(no name)")}</td>
       <td>${escapeHtml(s.external_userid)}</td>
       <td><select id="kefu-role-${s.staff_id}" onchange="onKefuRoleChange('${s.staff_id}')">${options}</select></td>
       <td>${warehouseChecksHtml(s.staff_id, s.warehouse_codes, isWarehouseman)}</td>
+      <td>${billingCustomerInputHtml(s.staff_id, s.billing_customer_id, isCustomerIdentity)}</td>
       <td>${s.is_active ? '<span class="badge ok">active</span>' : '<span class="badge bad">suspended</span>'}</td>
       <td>${fmtDate(s.created_at)}</td>
       <td class="actions">
@@ -493,8 +506,11 @@ function kefuRoleRowHtml(s, roles) {
 }
 
 function onKefuRoleChange(staffId) {
-  const role = document.getElementById(`kefu-role-${staffId}`).value;
+  const select = document.getElementById(`kefu-role-${staffId}`);
+  const role = select.value;
   document.getElementById(`kefu-wh-${staffId}`).style.display = role === "warehouseman" ? "" : "none";
+  const roleMeta = (_rolesCache || []).find(r => r.name === role) || {};
+  document.getElementById(`kefu-billing-${staffId}`).style.display = roleMeta.customer_identity ? "" : "none";
 }
 
 async function saveKefuRole(staffId) {
@@ -510,6 +526,15 @@ async function saveKefuRole(staffId) {
       return;
     }
     body.warehouse_codes = codes;
+  }
+  const roleMeta = (_rolesCache || []).find(r => r.name === role) || {};
+  if (roleMeta.customer_identity) {
+    const billingId = document.getElementById(`kefu-billing-${staffId}`).value.trim();
+    if (!billingId) {
+      document.getElementById("kefuStaffError").textContent = "billing_customer_id is required for this role.";
+      return;
+    }
+    body.billing_customer_id = billingId;
   }
   try {
     await authedPatch(`/admin/kefu-staff/${staffId}`, body);
@@ -550,7 +575,7 @@ async function loadKefuStaff() {
   const rowsEl = document.getElementById("kefuStaffRows");
   rowsEl.innerHTML = staff.length
     ? staff.map(s => kefuRoleRowHtml(s, roles)).join("")
-    : '<tr><td colspan="7" class="empty">No Kefu staff registered yet.</td></tr>';
+    : '<tr><td colspan="8" class="empty">No Kefu staff registered yet.</td></tr>';
 }
 
 async function deleteKefuStaff(staffId) {

@@ -88,6 +88,11 @@ class RoleResponse(BaseModel):
     # only options accepted by the assignable-role APIs; internal roles such
     # as "pending" must never appear here.
     assignable:  bool
+    # True iff this role is in core.role_registry.CUSTOMER_IDENTITY_ROLE_
+    # NAMES -- lets the admin panel show/require the billing_customer_id
+    # input only for roles that actually need it, without hardcoding role
+    # names client-side (same reasoning as `assignable` above).
+    customer_identity: bool
 
 
 # ── Kefu Staff ────────────────────────────────────────────────────────────────
