@@ -36,6 +36,7 @@ ASSIGNABLE_ROLES: tuple[AssignableRole, ...] = (
     AssignableRole("warehouseman", "Confirms inbound/outbound completions, corrects storage (adjust/recount/move)"),
     AssignableRole("accountant", "Read-only financial visibility — storage and invoice viewing"),
     AssignableRole("label_agent", "Creates FedEx/UPS shipping labels"),
+    AssignableRole("fedex_label_agent", "Creates FedEx shipping labels only"),
 )
 
 # Kept as a plain frozenset for every existing call site's `name in
