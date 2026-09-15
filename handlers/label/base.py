@@ -21,8 +21,16 @@ def _generate_ke_hu_dan_hao(context: dict, billing_customer_id: str) -> str:
     U-Choice-only service: any customer, in any group, can now generate
     one. billing_customer_id is the one identity that's actually
     consistent across every customer and every group.
+
+    display_name is a real person's WeCom nickname and is very often
+    Chinese (e.g. "白小白") -- CJK characters are stripped before
+    truncating to 8, not after, so a mixed-script name keeps its
+    meaningful ASCII portion (e.g. "客服Simon" -> "Simon") instead of
+    truncating first and risking cutting it off while keeping the
+    Chinese prefix.
     """
-    user = re.sub(r'\s+', '', context.get("display_name") or "")[:8]
+    user = re.sub(r'\s+', '', context.get("display_name") or "")
+    user = re.sub(r'[一-鿿]', '', user)[:8]
     date = datetime.now(timezone.utc).strftime("%Y%m%d")
 
     serial_number = context.get("serial_number", "")
