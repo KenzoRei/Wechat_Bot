@@ -131,6 +131,11 @@ _PANEL_HTML = """<!doctype html>
   .carrier-fields label span { width: 40px; flex-shrink: 0; text-align: right; }
   .carrier-fields input { width: 120px; }
   .carrier-fields input[type=number] { width: 70px; }
+  /* Truncated long opaque ids (Users tab: external_userid) -- monospace so
+     the fixed-length tail doesn't jitter row-to-row, plus a small inline
+     copy button rather than showing/selecting the full string. */
+  .truncated-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .copy-btn { padding: 3px 8px; font-size: 11px; margin-left: 6px; }
   button {
     background: var(--accent);
     color: white;
@@ -458,6 +463,35 @@ function escapeHtml(s) {
   }[c]));
 }
 
+// Shows only the last `tailLength` characters of a long opaque id (e.g.
+// external_userid), with the full value in a title tooltip and copyable via
+// the button rendered right after this span -- full value never appears in
+// an onclick attribute (which would need its own JS-string escaping on top
+// of HTML escaping); the button just reads its sibling's data-full.
+function truncatedIdHtml(fullValue, tailLength = 8) {
+  const value = fullValue || "";
+  const tail = value.length > tailLength ? "…" + value.slice(-tailLength) : value;
+  const escapedFull = escapeHtml(value);
+  return `<span class="truncated-id" data-full="${escapedFull}" title="${escapedFull}">${escapeHtml(tail)}</span>` +
+    (value ? `<button class="secondary copy-btn" onclick="copyTruncatedId(this)" title="Copy full value">Copy</button>` : "");
+}
+
+async function copyTruncatedId(btn) {
+  const text = btn.previousElementSibling.dataset.full;
+  const original = btn.textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    btn.textContent = "Copied!";
+  } catch (e) {
+    // clipboard API can be unavailable (insecure context, unfocused
+    // document, permission denied) -- fall back to a manual-copy prompt
+    // rather than silently doing nothing.
+    window.prompt("Copy this value:", text);
+    return;
+  }
+  setTimeout(() => { btn.textContent = original; }, 1200);
+}
+
 function fmtDate(iso) {
   if (!iso) return "";
   try {
@@ -523,7 +557,7 @@ function kefuRoleRowHtml(s, roles) {
   return `
     <tr id="kefu-row-${s.staff_id}">
       <td>${escapeHtml(s.display_name || "(no name)")}</td>
-      <td>${escapeHtml(s.external_userid)}</td>
+      <td>${truncatedIdHtml(s.external_userid)}</td>
       <td><select id="kefu-role-${s.staff_id}" onchange="onKefuRoleChange('${s.staff_id}')">${options}</select></td>
       <td>${warehouseChecksHtml(s.staff_id, s.warehouse_codes, isWarehouseScoped)}</td>
       <td>${billingCustomerInputHtml(s.staff_id, s.billing_customer_id, isCustomerIdentity)}</td>
