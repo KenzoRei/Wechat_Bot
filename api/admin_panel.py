@@ -106,8 +106,31 @@ _PANEL_HTML = """<!doctype html>
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
   td.actions { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
   td.actions button { padding: 6px 10px; }
+  /* Lets a wide table (many columns, e.g. Users) scroll horizontally on its
+     own instead of squeezing every column down to fit the card -- that
+     squeeze was wrapping long cells (dates) onto 2-3 lines and pushing the
+     row-end action buttons out of easy reach. */
+  .table-scroll { overflow-x: auto; }
+  .nowrap-table { width: max-content; min-width: 100%; }
+  .nowrap-table th, .nowrap-table td { white-space: nowrap; }
+  /* Row actions (Save/Delete) stay reachable at any scroll position,
+     rather than being the part that scrolls out of view first -- a
+     background is required so scrolled-under cell content doesn't show
+     through the sticky column. */
+  .nowrap-table th:last-child, .nowrap-table td.actions {
+    position: sticky;
+    right: 0;
+    background: var(--card);
+  }
   th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
   tr:last-child td { border-bottom: none; }
+  /* Per-carrier inputs (Customers tab: YDD channel_id, rate multiplier) --
+     one labeled field per carrier instead of a single raw-JSON text input. */
+  .carrier-fields { display: flex; flex-direction: column; gap: 5px; margin-bottom: 6px; }
+  .carrier-fields label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .carrier-fields label span { width: 40px; flex-shrink: 0; text-align: right; }
+  .carrier-fields input { width: 120px; }
+  .carrier-fields input[type=number] { width: 70px; }
   button {
     background: var(--accent);
     color: white;
@@ -202,13 +225,13 @@ _PANEL_HTML = """<!doctype html>
       <div class="value" id="memberCount">–</div>
     </div>
     <div class="stat">
-      <div class="label">Pending Kefu staff</div>
+      <div class="label">Pending users</div>
       <div class="value" id="kefuPendingCount">–</div>
     </div>
   </div>
 
   <div class="tabs">
-    <button class="tab-btn active" data-tab="staff" onclick="switchTab('staff')">Staff &amp; Groups</button>
+    <button class="tab-btn active" data-tab="staff" onclick="switchTab('staff')">Users &amp; Groups</button>
     <button class="tab-btn" data-tab="transactions" onclick="switchTab('transactions')">Transactions</button>
     <button class="tab-btn" data-tab="customers" onclick="switchTab('customers')">Customers</button>
     <button class="tab-btn" data-tab="warehouses" onclick="switchTab('warehouses')">Warehouses</button>
@@ -219,15 +242,17 @@ _PANEL_HTML = """<!doctype html>
     <div class="card">
       <div class="card-header">
         <div>
-          <h3>Kefu Staff</h3>
-          <div class="meta">Assign a role to promote a staff member out of "pending". Warehouseman requires at least one warehouse.</div>
+          <h3>Users</h3>
+          <div class="meta">Assign a role to promote a user out of "pending". Warehouseman/Warehouse Admin requires at least one warehouse.</div>
         </div>
-        <button class="secondary" onclick="refreshKefuNames()">Refresh names from WeCom</button>
+        <button class="secondary" onclick="refreshKefuNames()">Refresh Names</button>
       </div>
-      <table>
-        <thead><tr><th>Name</th><th>external_userid</th><th>Role</th><th>Warehouse</th><th>Billing Customer</th><th>Status</th><th>Registered</th><th></th></tr></thead>
-        <tbody id="kefuStaffRows"></tbody>
-      </table>
+      <div class="table-scroll">
+        <table class="nowrap-table">
+          <thead><tr><th>Name</th><th>external_userid</th><th>Role</th><th>Warehouse</th><th>Billing Customer</th><th>Status</th><th>Registered</th><th></th></tr></thead>
+          <tbody id="kefuStaffRows"></tbody>
+        </table>
+      </div>
       <div class="error" id="kefuStaffError"></div>
     </div>
 
@@ -323,10 +348,12 @@ _PANEL_HTML = """<!doctype html>
         <button onclick="createWarehouse()">Create</button>
         <button class="secondary" onclick="hideNewWarehouseForm()">Cancel</button>
       </div>
-      <table>
-        <thead><tr><th>Abbr</th><th>Company</th><th>Address</th><th>City</th><th>State</th><th>Zip</th><th>Contact</th><th>Phone</th><th>Email</th><th></th></tr></thead>
-        <tbody id="warehouseRows"></tbody>
-      </table>
+      <div class="table-scroll">
+        <table class="nowrap-table">
+          <thead><tr><th>Abbr</th><th>Company</th><th>Address</th><th>City</th><th>State</th><th>Zip</th><th>Contact</th><th>Phone</th><th>Email</th><th></th></tr></thead>
+          <tbody id="warehouseRows"></tbody>
+        </table>
+      </div>
       <div class="error" id="warehouseError"></div>
     </div>
   </div>
@@ -357,7 +384,7 @@ _PANEL_HTML = """<!doctype html>
       <div class="card-header">
         <div>
           <h3>Permissions for: <span id="rolePermissionsRoleName"></span></h3>
-          <div class="meta">Global grants — apply the same way in every group. Whether a given group even has a service enabled at all is separate (Staff &amp; Groups' group setup), unaffected by this.</div>
+          <div class="meta">Global grants — apply the same way in every group. Whether a given group even has a service enabled at all is separate (Users &amp; Groups' group setup), unaffected by this.</div>
         </div>
         <button class="secondary" onclick="closeRolePermissions()">Close</button>
       </div>
@@ -433,7 +460,9 @@ function escapeHtml(s) {
 
 function fmtDate(iso) {
   if (!iso) return "";
-  try { return new Date(iso).toLocaleString(); } catch { return iso; }
+  try {
+    return new Date(iso).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
+  } catch { return iso; }
 }
 
 let _rolesCache = null;
@@ -903,6 +932,12 @@ async function loadCustomers() {
   }
 }
 
+function carrierFieldHtml(customerId, field, carrier, label, value, inputType) {
+  const id = `${field}-${carrier}-${customerId}`;
+  const attrs = inputType === "number" ? 'type="number" step="0.01"' : 'type="text" placeholder="channel name"';
+  return `<label><span>${label}</span><input ${attrs} value="${escapeHtml(value ?? "")}" id="${id}"></label>`;
+}
+
 async function customerRowHtml(c) {
   let credStatus = [];
   try {
@@ -912,7 +947,9 @@ async function customerRowHtml(c) {
     if (e.message === "UNAUTHORIZED") throw e;
   }
   const setTypes = new Set(credStatus.map(x => x.credential_type));
-  const credCells = CREDENTIAL_TYPES.map(t => {
+  const setCount = CREDENTIAL_TYPES.filter(t => setTypes.has(t)).length;
+  const summaryBadgeClass = setCount === CREDENTIAL_TYPES.length ? "ok" : setCount === 0 ? "bad" : "muted";
+  const credRows = CREDENTIAL_TYPES.map(t => {
     const isSet = setTypes.has(t);
     return `<div><label>${escapeHtml(t)}: ${isSet ? '<span class="badge ok">set</span>' : '<span class="badge bad">unset</span>'}
       <button class="secondary" onclick="promptSetCredential('${c.customer_id}','${t}')" style="margin-left:4px;">${isSet ? "Rotate" : "Set"}</button></label></div>`;
@@ -920,6 +957,8 @@ async function customerRowHtml(c) {
   const statusOptions = ["pending", "active", "inactive"].map(s =>
     `<option value="${s}" ${c.status === s ? "selected" : ""}>${s}</option>`
   ).join("");
+  const ch = c.ydd_channel_id || {};
+  const rm = c.rate_multiplier || {};
   return `
     <tr>
       <td>${escapeHtml(c.customer_id)}</td>
@@ -927,14 +966,38 @@ async function customerRowHtml(c) {
       <td><select id="status-${c.customer_id}" onchange="saveCustomerField('${c.customer_id}', 'status', document.getElementById('status-${c.customer_id}').value, false)">${statusOptions}</select></td>
       <td><input type="text" value='${escapeHtml(c.oms_wh_code || "")}' id="whcode-${c.customer_id}" style="width:100px;" placeholder="e.g. DE19713">
           <button class="secondary" onclick="saveCustomerField('${c.customer_id}', 'oms_wh_code', document.getElementById('whcode-${c.customer_id}').value, false)">Save</button></td>
-      <td><input type="text" value='${escapeHtml(JSON.stringify(c.ydd_channel_id || {}))}' id="channel-${c.customer_id}" style="width:160px;" placeholder='{"fedex":"...","ups":"..."}'>
-          <button class="secondary" onclick="saveCustomerField('${c.customer_id}', 'ydd_channel_id', document.getElementById('channel-${c.customer_id}').value, true)">Save</button></td>
-      <td><input type="text" value='${escapeHtml(JSON.stringify(c.rate_multiplier || {}))}' id="rate-${c.customer_id}" style="width:140px;">
-          <button class="secondary" onclick="saveCustomerField('${c.customer_id}', 'rate_multiplier', document.getElementById('rate-${c.customer_id}').value, true)">Save</button></td>
-      <td>${credCells}</td>
+      <td>
+        <div class="carrier-fields">
+          ${carrierFieldHtml(c.customer_id, "channel", "fedex", "FedEx", ch.fedex, "text")}
+          ${carrierFieldHtml(c.customer_id, "channel", "ups", "UPS", ch.ups, "text")}
+        </div>
+        <button class="secondary" onclick="saveCarrierField('${c.customer_id}', 'ydd_channel_id', 'channel')">Save</button>
+      </td>
+      <td>
+        <div class="carrier-fields">
+          ${carrierFieldHtml(c.customer_id, "rate", "fedex", "FedEx", rm.fedex, "number")}
+          ${carrierFieldHtml(c.customer_id, "rate", "ups", "UPS", rm.ups, "number")}
+        </div>
+        <button class="secondary" onclick="saveCarrierField('${c.customer_id}', 'rate_multiplier', 'rate')">Save</button>
+      </td>
+      <td>
+        <div>
+          <span class="badge ${summaryBadgeClass}">${setCount}/${CREDENTIAL_TYPES.length} set</span>
+          <button class="secondary" onclick="toggleCredDetail('${c.customer_id}')" id="cred-toggle-${c.customer_id}" style="margin-left:6px;">Manage</button>
+        </div>
+        <div id="cred-detail-${c.customer_id}" style="display:none; margin-top:6px;">${credRows}</div>
+      </td>
       <td></td>
     </tr>
   `;
+}
+
+function toggleCredDetail(customerId) {
+  const detail = document.getElementById(`cred-detail-${customerId}`);
+  const btn = document.getElementById(`cred-toggle-${customerId}`);
+  const showing = detail.style.display !== "none";
+  detail.style.display = showing ? "none" : "";
+  btn.textContent = showing ? "Manage" : "Hide";
 }
 
 async function saveCustomerField(customerId, field, rawValue, isJson) {
@@ -946,6 +1009,34 @@ async function saveCustomerField(customerId, field, rawValue, isJson) {
     } catch (e) {
       document.getElementById("customerError").textContent = `Invalid JSON for ${field}: ${e.message}`;
       return;
+    }
+  }
+  try {
+    await authedPatch(`/admin/customers/${encodeURIComponent(customerId)}`, { [field]: value, updated_by: "admin_panel" });
+    await loadCustomers();
+  } catch (e) {
+    if (e.message === "UNAUTHORIZED") throw e;
+    document.getElementById("customerError").textContent = "Save failed: " + e.message;
+  }
+}
+
+// field is "ydd_channel_id" or "rate_multiplier"; idPrefix is "channel" or "rate",
+// matching carrierFieldHtml's id scheme above. A blank input omits that carrier
+// from the saved object entirely, rather than writing an empty string/NaN --
+// "not configured for this carrier" and "configured as blank" are different
+// states, and only the former should be representable here.
+async function saveCarrierField(customerId, field, idPrefix) {
+  document.getElementById("customerError").textContent = "";
+  const value = {};
+  for (const carrier of ["fedex", "ups"]) {
+    const input = document.getElementById(`${idPrefix}-${carrier}-${customerId}`);
+    const raw = input.value.trim();
+    if (raw === "") continue;
+    if (input.type === "number") {
+      const num = parseFloat(raw);
+      if (!Number.isNaN(num)) value[carrier] = num;
+    } else {
+      value[carrier] = raw;
     }
   }
   try {
@@ -1022,10 +1113,11 @@ async function loadWarehouses() {
   }
 }
 
+const WAREHOUSE_FIELDS = ["company_name", "addr", "city", "state", "zip_code", "contact", "phone", "email"];
+
 function warehouseRowHtml(w) {
   const field = (name, value, width) =>
-    `<input type="text" value='${escapeHtml(value || "")}' id="wh-${name}-${w.warehouse_abbr}" style="width:${width}px;">
-     <button class="secondary" onclick="saveWarehouseField('${w.warehouse_abbr}', '${name}', document.getElementById('wh-${name}-${w.warehouse_abbr}').value)">Save</button>`;
+    `<input type="text" value='${escapeHtml(value || "")}' id="wh-${name}-${w.warehouse_abbr}" style="width:${width}px;">`;
   return `
     <tr>
       <td>${escapeHtml(w.warehouse_abbr)}</td>
@@ -1037,15 +1129,22 @@ function warehouseRowHtml(w) {
       <td>${field("contact", w.contact, 100)}</td>
       <td>${field("phone", w.phone, 110)}</td>
       <td>${field("email", w.email, 160)}</td>
-      <td></td>
+      <td class="actions"><button class="secondary" onclick="saveWarehouseRow('${w.warehouse_abbr}')">Save</button></td>
     </tr>
   `;
 }
 
-async function saveWarehouseField(warehouseAbbr, field, value) {
+// One Save per row: reads every field's current input value and PATCHes them
+// together, instead of the previous one-button-per-cell layout (nine buttons
+// per row) that also broke column alignment across rows.
+async function saveWarehouseRow(warehouseAbbr) {
   document.getElementById("warehouseError").textContent = "";
+  const body = { updated_by: "admin_panel" };
+  for (const f of WAREHOUSE_FIELDS) {
+    body[f] = document.getElementById(`wh-${f}-${warehouseAbbr}`).value;
+  }
   try {
-    await authedPatch(`/admin/warehouses/${encodeURIComponent(warehouseAbbr)}`, { [field]: value, updated_by: "admin_panel" });
+    await authedPatch(`/admin/warehouses/${encodeURIComponent(warehouseAbbr)}`, body);
     await loadWarehouses();
   } catch (e) {
     if (e.message === "UNAUTHORIZED") throw e;
