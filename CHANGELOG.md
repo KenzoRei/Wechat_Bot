@@ -7,6 +7,36 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.2.1] - 2026-09-15
+
+### Fixed
+- Admin panel, Users & Groups tab: renamed from "Staff & Groups" (the table
+  already mixes staff and customer-identity registrants, not just staff).
+  Tables wider than their card now scroll horizontally on their own instead
+  of squeezing columns and wrapping long cells onto multiple lines, which
+  had been pushing the Save/Delete buttons out of reach — those now stay
+  pinned to the visible edge (`position: sticky`) at any scroll position.
+- Admin panel, Customers tab: replaced the two raw-JSON dict inputs
+  (`ydd_channel_id`, `rate_multiplier`) with one labeled input per carrier
+  (FedEx/UPS), and collapsed the always-expanded 4-row credentials block
+  into a compact "N/4 set" summary with a Manage toggle — both were causing
+  uneven, hard-to-scan row heights.
+- Admin panel, Warehouses tab: one Save button per row instead of one per
+  field (nine per row), which also fixes the column misalignment the extra
+  buttons caused.
+- Documentation: corrected several inaccuracies found in a full audit of
+  every "Current"-status doc against the actual codebase — a false "no
+  migration ledger exists" claim, renamed env vars
+  (`WECHAT_TOKEN`/`WECHAT_ENCODING_AES_KEY` → `WECHAT_BOT_TOKEN`/
+  `WECHAT_BOT_ENCODING_AES_KEY`) still shown under their old names, a
+  missing required env var (`CUSTOMER_CREDENTIAL_KEY`), and the entire
+  `/admin/kefu-staff` API surface having no operational documentation.
+
+### Added
+- Admin panel, Users & Groups tab: `external_userid` now shows only the
+  last 8 characters plus a Copy button (full value in a tooltip and copied
+  to clipboard on click), instead of the full ~35-character opaque id.
+
 ## [1.2.0] - 2026-09-15
 
 ### Added
