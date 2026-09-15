@@ -294,9 +294,10 @@ def _valid_role_change_target_and_role(context: dict, collected_fields: dict, db
     didn't go through the same sanitizer call, and is itself backstopped by
     the execution-time check in handlers/uchoice/role_change.py.
     """
-    from core.role_registry import ASSIGNABLE_ROLE_NAMES, CUSTOMER_IDENTITY_ROLE_NAMES
+    from core.role_registry import ASSIGNABLE_ROLE_NAMES
     from core.uchoice_constants import VALID_WAREHOUSE_CODES
     from core.role_identity import parse_target_identity
+    from core import role_policy
 
     target_openid = collected_fields.get("target_openid")
     if target_openid:
@@ -317,31 +318,30 @@ def _valid_role_change_target_and_role(context: dict, collected_fields: dict, db
     if new_role and new_role not in ASSIGNABLE_ROLE_NAMES:
         return f"未知角色：{new_role}"
 
-    if new_role == "warehouseman":
-        warehouse_codes = collected_fields.get("warehouse_codes")
-        if (
-            not isinstance(warehouse_codes, list)
-            or not warehouse_codes
-            or any(code not in VALID_WAREHOUSE_CODES for code in warehouse_codes)
-        ):
-            codes_list = "、".join(sorted(VALID_WAREHOUSE_CODES))
-            return f"指派为仓库管理员需要提供至少一个有效的仓库代码（{codes_list}）。"
-
-    if new_role in CUSTOMER_IDENTITY_ROLE_NAMES:
-        # Both GroupMember and KefuStaff support this binding since V31 --
-        # a customer-identity role (customer, fedex_label_agent) always
-        # needs a real, active F###### binding before confirmation, on
-        # either channel, per core.role_registry.CUSTOMER_IDENTITY_ROLE_
-        # NAMES's docstring on why this categorization matters.
-        billing_customer_id = collected_fields.get("billing_customer_id")
-        if not billing_customer_id:
-            return "指派为客户角色需要提供关联的客户编号（格式 F 加 6 位数字）。"
-        from core import customer_directory
-        record = customer_directory.get_customer(db, billing_customer_id)
-        if record is None:
-            return f"未找到客户编号 {billing_customer_id}，请确认后重新提供。"
-        if record.status != "active":
-            return f"客户 {billing_customer_id} 当前状态为「{record.status}」，无法关联，请联系管理员。"
+    if new_role:
+        # One shared entry point for both assignment-level fields (ADR-010
+        # step 1) -- both GroupMember and KefuStaff support billing_customer_id
+        # since V31, needed on either channel per core.role_registry.
+        # CUSTOMER_IDENTITY_ROLE_NAMES's docstring on why this categorization
+        # matters. Backstopped again at execution time in
+        # handlers/uchoice/role_change.py.
+        try:
+            role_policy.normalize_assignment_fields(db, new_role, {
+                "warehouse_codes": collected_fields.get("warehouse_codes"),
+                "billing_customer_id": collected_fields.get("billing_customer_id"),
+            })
+        except role_policy.RoleAssignmentError as exc:
+            if exc.field == "warehouse_codes":
+                # Both "missing" and "unknown_codes" render the same way
+                # here -- this pre-confirm pass only needs to know whether
+                # to block, not which specific reason.
+                codes_list = "、".join(sorted(VALID_WAREHOUSE_CODES))
+                return f"指派为{new_role}需要提供至少一个有效的仓库代码（{codes_list}）。"
+            if exc.reason == "missing":
+                return "指派为客户角色需要提供关联的客户编号（格式 F 加 6 位数字）。"
+            if exc.reason == "not_found":
+                return f"未找到客户编号 {exc.info['customer_id']}，请确认后重新提供。"
+            return f"客户 {exc.info['customer_id']} 当前状态为「{exc.info['status']}」，无法关联，请联系管理员。"
 
     return None
 
@@ -640,24 +640,18 @@ def _valid_destination_address_required(context: dict, collected_fields: dict, d
 def _valid_caller_warehouse_scope(context: dict, collected_fields: dict, db: DBSession) -> str | None:
     """
     Rejects an explicitly-named target warehouse the caller isn't assigned
-    to. A warehouseman restricted to a subset of warehouses (or, before this
-    array conversion, a single one) could previously name any warehouse
-    explicitly and reach the mutation/query anyway -- no existing validator
-    compared collected_fields["warehouse_code"] (which warehouse the
-    operation targets) against context["warehouse_codes"] (which
-    warehouse(s) the caller is actually assigned to). Composed into every
-    service whose collected_fields carries a warehouse_code naming which
-    warehouse the operation concerns. context["warehouse_codes"] is None for
-    a genuinely unscoped caller (customer/admin/accountant) -- never
-    restricted by this check.
+    to, AND rejects a warehouse-scoped caller who has no warehouse_codes
+    assigned at all (core.role_policy.check_warehouse_scope -- fail-closed,
+    not the previous "codes is None means unrestricted" inference, which
+    couldn't distinguish a genuinely unscoped role from a scoped one with
+    missing assignment data). Composed into every service whose
+    collected_fields carries a warehouse_code naming which warehouse the
+    operation concerns.
     """
-    allowed = context.get("warehouse_codes")
-    if allowed is None:
-        return None
-    requested = collected_fields.get("warehouse_code")
-    if requested and requested not in allowed:
-        return "该仓库不在您的权限范围内。"
-    return None
+    from core import role_policy
+    return role_policy.check_warehouse_scope(
+        context.get("role"), context.get("warehouse_codes"), collected_fields.get("warehouse_code"),
+    )
 
 
 def _valid_upsert_address_warehouse_scope(context: dict, collected_fields: dict, db: DBSession) -> str | None:
@@ -678,20 +672,24 @@ def _valid_upsert_address_warehouse_scope(context: dict, collected_fields: dict,
     over. This checks the EXISTING address's own current warehouse_code too,
     not just the requested one.
     """
-    allowed = context.get("warehouse_codes")
-    if allowed is None:
+    from core import role_policy
+
+    if not role_policy.requires_warehouse_scope(context.get("role")):
         return None
+    allowed = context.get("warehouse_codes")
+    if not allowed:
+        return role_policy.MISSING_WAREHOUSE_SCOPE_MESSAGE
 
     matched_id = collected_fields.get("matched_address_id")
     if matched_id:
         from models.uchoice import UchoiceAddress
         addr = db.query(UchoiceAddress).filter_by(address_id=matched_id).first()
         if addr is not None and addr.warehouse_code and addr.warehouse_code not in allowed:
-            return "该仓库不在您的权限范围内。"
+            return role_policy.OUT_OF_WAREHOUSE_SCOPE_MESSAGE
 
     requested = collected_fields.get("warehouse_code")
     if requested and requested not in allowed:
-        return "该仓库不在您的权限范围内。"
+        return role_policy.OUT_OF_WAREHOUSE_SCOPE_MESSAGE
     return None
 
 

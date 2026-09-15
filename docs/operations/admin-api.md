@@ -2,7 +2,7 @@
 
 **Status:** Current operational examples
 **Owner:** Operations
-**Last verified against commit:** `aaf3191` (2026-09-11)
+**Last verified against commit:** `dbbc00f` (2026-09-15)
 # Logistics WeChat Bot Platform — v1
 
 **Base URL (Render testing):** `https://wechat-bot-atse.onrender.com`
@@ -55,6 +55,15 @@ Invoke-RestMethod "$base/admin/roles" -Method POST -Headers $h `
 No redeploy needed — new role names become usable immediately in `POST /admin/groups/{id}/members` and the service-permission grant endpoints below.
 
 Seeded by default: `admin`, `customer`.
+
+Each role in the response also carries a `required_fields` list —
+descriptors (`field_name`, `label`, `value_type`, `choice_source`) for
+whichever assignment-level fields that role requires (`warehouse_codes`
+for `warehouseman`/`warehouse_admin`, `billing_customer_id` for
+`customer`/`fedex_label_agent`). This is what the admin panel reads to
+decide which inputs to show/require per role — never hardcode a role name
+client-side to make that decision. See
+[ADR-010](../architecture/decisions/adr-010-role-service-policy-declarations.md).
 
 ---
 
@@ -146,7 +155,7 @@ Invoke-RestMethod "$base/admin/groups/{group_id}/members" -Method POST -Headers 
 | `wechat_openid` | ✅ | WeChat user ID (the `from` field in webhook messages) — there's no way to look this up in advance; have the person send one message in the target group first, then read it off the `[webhook] from=...` line in the server logs (or, for a *member's own* ID specifically, the bot's own self-service reply to an unregistered sender already includes it — no log-digging needed for that case) |
 | `role` | ✅ | Role name — must exist in the `role` table. See "Roles" section below to list/add roles |
 | `display_name` | — | Name shown in bot replies and request logs |
-| `warehouse_codes` | Required if `role` is `warehouseman` | Array of one or more codes from `JFK`, `DE`, `NJ` — which warehouse(s) this member is responsible for. 400 if empty/omitted for a `warehouseman`, or if any code is unknown. Cleared automatically if the member's role is later changed away from `warehouseman` |
+| `warehouse_codes` | Required if `role` is `warehouseman` or `warehouse_admin` | Array of one or more codes from `JFK`, `DE`, `NJ` — which warehouse(s) this member is responsible for. 400 if empty/omitted for a warehouse-scoped role, or if any code is unknown. Cleared automatically if the member's role is later changed away from a warehouse-scoped role |
 
 ### List members
 ```powershell
@@ -277,7 +286,11 @@ Invoke-RestMethod "$base/admin/roles/{role_id}/services/{service_type_id}" -Meth
 ```
 `role_id` is the role's UUID (from `GET /admin/roles`), not its name.
 `created_by` is manually supplied for now — there's no per-admin identity
-yet, just the one shared `X-Admin-Key`. 409 if already granted.
+yet, just the one shared `X-Admin-Key`. 409 if already granted; also 409
+if granting a warehouse-scoped service to a warehouse-scoped role would
+give an already-existing, incompletely-provisioned assignment (missing
+`warehouse_codes`) reachability to it — assign `warehouse_codes` to those
+members/staff first, then retry.
 
 ### List a role's granted services
 ```powershell
@@ -466,7 +479,7 @@ per warehouse — most are `TWF-*`, NJ is `TWW`) and maps to
 ```
 
 **For a U-Choice group specifically:**
-- Step 5/6: use `warehouseman`/`accountant` roles too where applicable, and pass `warehouse_codes` (a list) for any `warehouseman` — required, 400 without it.
+- Step 5/6: use `warehouseman`/`warehouse_admin`/`accountant` roles too where applicable, and pass `warehouse_codes` (a list) for any warehouse-scoped role — required, 400 without it.
 - Step 7: U-Choice services need no `config` at all — pass `{}`. See the U-Choice service catalog table above for the 12 `service_type_id`/`workflow_id` pairs.
 - MVP design is **one shared group** with all four roles as members, gated by step 8 — not separate groups per role. The original reasoning and deferred multi-tenant alternative are preserved in the [historical U-Choice design](../archive/designs/uchoice-original-design.md).
 - Step 9.5 (not in the numbered list above, easy to forget): `PATCH /admin/groups/{id}` with `group_robot_webhook_url` — without it, the daily digest, monthly invoice, cross-group completion notifications, and Excel invoice exports all silently no-op for that group.

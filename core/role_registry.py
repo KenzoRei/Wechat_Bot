@@ -37,6 +37,7 @@ ASSIGNABLE_ROLES: tuple[AssignableRole, ...] = (
     AssignableRole("accountant", "Read-only financial visibility — storage and invoice viewing"),
     AssignableRole("label_agent", "Staff — creates FedEx/UPS shipping labels on behalf of any customer named per-request"),
     AssignableRole("fedex_label_agent", "Customer — creates FedEx labels for their own bound customer account only, not UPS"),
+    AssignableRole("warehouse_admin", "Makes uchoice inbound/outbound requests and confirms their completion, scoped to assigned warehouse(s)"),
 )
 
 # Kept as a plain frozenset for every existing call site's `name in
@@ -92,3 +93,46 @@ PROTECTED_ROLE_NAMES = frozenset({"admin", "pending"})
 # not removing the safeguard, just moving it out of source control. Revisit
 # then; don't add the DB column without also adding that confirmation step.
 CUSTOMER_IDENTITY_ROLE_NAMES = frozenset({"customer", "fedex_label_agent"})
+
+# Roles whose holders must be assigned specific warehouse(s) --
+# warehouse_codes on GroupMember/KefuStaff is required and enforced (via
+# core.role_policy.normalize_warehouse_codes) for any role in this set, and
+# actively CLEARED for any role not in it. This is a role-level
+# classification, same code-owned-allowlist pattern as
+# CUSTOMER_IDENTITY_ROLE_NAMES above -- see
+# docs/architecture/decisions/adr-010-role-service-policy-declarations.md
+# for why this consolidates what was previously three separate
+# `role.name == "warehouseman"` branches (api/admin/members.py,
+# api/admin/kefu_staff.py, handlers/uchoice/role_change.py) plus a fourth in
+# core/pre_confirm_validators.py, and why it's a set of "scoped" role names
+# rather than a boolean on service_type: today's warehouse-scope check
+# (core.pre_confirm_validators._valid_caller_warehouse_scope) explicitly
+# allows genuinely UNSCOPED callers (customer, admin, accountant) to use the
+# very same warehouse-touching services without warehouse_codes -- a
+# service-level "requires warehouse scope" flag would force every holder of
+# that service to have warehouse data, which is not today's behavior. Which
+# roles are scoped is a fact about the ROLE, not the service.
+#
+# "warehouseman" is the original warehouse-scoped role. "warehouse_admin"
+# (added 2026-09-15) is a second warehouse-scoped role -- makes uchoice
+# inbound/outbound requests and confirms their completion, same warehouse
+# assignment requirement as warehouseman, different service grant set
+# (see RoleServicePermission, admin-panel self-service per role_registry.py's
+# own module docstring on why granting itself stays out of this allowlist).
+#
+# REQUIRED ORDER before shipping a change that adds a role to this set (or
+# that could newly apply to an already-populated role): 1) make the edit
+# to this set in your working tree, 2) run
+# `python scripts/check_role_policy_impact.py <role_name>` against the
+# target database and remediate any reported gap, 3) THEN deploy. Step 2
+# must run against a working tree that already has step 1's edit --
+# core.role_policy.warehouse_scope_compliance_gap raises ValueError (the
+# script exits 1) for a role not yet in this set, rather than silently
+# reporting "OK" the way an earlier version of this check did (2026-09-15
+# audit, third round). Unlike a RoleServicePermission grant (checked
+# automatically by api/admin/roles.py's warehouse_grant_impact), a
+# classification change like this has no admin-API call site to hook an
+# automatic check onto -- ADR-010 decision 4's impact-check promise,
+# satisfied here as a documented manual pre-deploy step rather than an
+# enforced one.
+WAREHOUSE_SCOPED_ROLE_NAMES = frozenset({"warehouseman", "warehouse_admin"})

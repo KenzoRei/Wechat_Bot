@@ -24,19 +24,34 @@ def _actor_id(context: dict) -> str:
     return str(actor)
 
 
-def _require_caller_warehouse_scope(context: dict, warehouse_code: str | None) -> None:
+def _require_caller_warehouse_scope(context: dict, warehouse_code: str | None, exception_cls=RuntimeError) -> None:
     """
     Execution-time backstop, matching the pre-confirm
     core.pre_confirm_validators._valid_caller_warehouse_scope check --
     closes the gap between that check and a later confirm-turn actually
     executing it (same reasoning already used for role_change's handler
-    re-checking what its own pre-confirm validator already checked). A
-    caller with warehouse_codes=None is genuinely unscoped and never
-    blocked here.
+    re-checking what its own pre-confirm validator already checked). Uses
+    core.role_policy.check_warehouse_scope -- fail-closed for a
+    warehouse-scoped caller with no warehouse_codes assigned, not the
+    previous "codes is None means unrestricted" inference.
+
+    `exception_cls` defaults to RuntimeError, correct for
+    AdjustStorageHandler/RecountStorageHandler/MoveStorageHandler below --
+    each of those mutates only the CALLING session's own request
+    (targets_existing_request=False for adjust_storage/recount_storage/
+    move_storage), so mark_failed() landing on session.request_log_id hits
+    the right row. ApplyInboundStorageHandler/ApplyOutboundStorageHandler
+    (confirm_*_completion, targets_existing_request=True) must instead pass
+    core.workflow_errors.TargetValidationError -- their session.request_
+    log_id is the pre-existing TARGET request, not something this session
+    owns (2026-09-15 audit finding 1: a plain RuntimeError here previously
+    caused a misprovisioned caller's rejected completion attempt to mark an
+    unrelated, perfectly valid target request 'failed').
     """
-    allowed = context.get("warehouse_codes")
-    if allowed is not None and warehouse_code and warehouse_code not in allowed:
-        raise RuntimeError("该仓库不在您的权限范围内。")
+    from core import role_policy
+    message = role_policy.check_warehouse_scope(context.get("role"), context.get("warehouse_codes"), warehouse_code)
+    if message:
+        raise exception_cls(message)
 
 
 class ApplyInboundStorageHandler(BaseHandler):
@@ -45,6 +60,17 @@ class ApplyInboundStorageHandler(BaseHandler):
     def handle(self, context: dict, config: dict, db) -> dict:
         target = context.get("_uchoice_target", {})
         warehouse_code = target.get("warehouse_code")
+        # Found missing during the 2026-09-15 audit (.collab/tasks/role-
+        # permission-attribute-architecture.md): unlike adjust/recount/move
+        # storage, this completion handler never checked the confirming
+        # caller's own warehouse scope against the request's warehouse --
+        # the fuzzy-match candidate list is pre-scoped upstream (core/
+        # uchoice_context.py), but an explicit reference_serial bypasses
+        # that, same defense-in-depth reasoning as every other handler here.
+        # TargetValidationError, not the default RuntimeError -- see
+        # _require_caller_warehouse_scope's docstring on exception_cls.
+        from core.workflow_errors import TargetValidationError
+        _require_caller_warehouse_scope(context, warehouse_code, exception_cls=TargetValidationError)
         original_fields = target.get("original_fields", {})
         received_lines = context["collected_fields"].get("received_lines") or original_fields.get("sku_lines", [])
         request_log_id = context.get("request_log_id")
@@ -82,6 +108,10 @@ class ApplyOutboundStorageHandler(BaseHandler):
     def handle(self, context: dict, config: dict, db) -> dict:
         target = context.get("_uchoice_target", {})
         warehouse_code = target.get("warehouse_code")
+        # See ApplyInboundStorageHandler's identical check above for why
+        # TargetValidationError, not RuntimeError.
+        from core.workflow_errors import TargetValidationError
+        _require_caller_warehouse_scope(context, warehouse_code, exception_cls=TargetValidationError)
         original_fields = target.get("original_fields", {})
         fulfillment_lines = context["collected_fields"].get("fulfillment_lines") or original_fields.get("sku_lines", [])
         request_log_id = context.get("request_log_id")

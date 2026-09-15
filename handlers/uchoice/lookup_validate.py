@@ -98,11 +98,16 @@ class LookupAndValidateCompletionHandler(BaseHandler):
         original_fields = get_original_fields(db, target)
         warehouse_code = original_fields.get("warehouse_code")
 
-        caller_warehouses = context.get("warehouse_codes")
-        if caller_warehouses is not None and warehouse_code and warehouse_code not in caller_warehouses:
-            raise TargetValidationError(
-                f"该申请属于 {warehouse_code} 仓库，与您的仓库权限（{'、'.join(caller_warehouses)}）不符。"
-            )
+        # Uses core.role_policy.check_warehouse_scope -- fail-closed for a
+        # warehouse-scoped caller (warehouseman/warehouse_admin) with no
+        # warehouse_codes assigned, not the previous "codes is None means
+        # unrestricted" inference (2026-09-15 audit finding). Raises
+        # TargetValidationError, not a bare RuntimeError -- see the comment
+        # above on why every rejection here must use that type.
+        from core import role_policy
+        message = role_policy.check_warehouse_scope(context.get("role"), context.get("warehouse_codes"), warehouse_code)
+        if message:
+            raise TargetValidationError(message)
 
         context["_uchoice_target"] = {
             "serial_number":   target.serial_number,

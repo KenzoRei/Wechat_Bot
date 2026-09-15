@@ -3,7 +3,8 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from middleware.admin_auth import verify_admin_key
-from core.role_registry import ASSIGNABLE_ROLE_NAMES, PROTECTED_ROLE_NAMES, CUSTOMER_IDENTITY_ROLE_NAMES
+from core.role_registry import ASSIGNABLE_ROLE_NAMES, PROTECTED_ROLE_NAMES, WAREHOUSE_SCOPED_ROLE_NAMES
+from core import role_policy
 from core.uchoice_constants import VALID_WAREHOUSE_CODES
 from models.group import GroupMember
 from models.kefu import KefuStaff
@@ -21,7 +22,7 @@ def _to_response(role: Role) -> RoleResponse:
         description=role.description,
         created_at=role.created_at,
         assignable=role.name in ASSIGNABLE_ROLE_NAMES,
-        customer_identity=role.name in CUSTOMER_IDENTITY_ROLE_NAMES,
+        required_fields=role_policy.field_descriptors_for_role(role.name),
     )
 
 
@@ -126,6 +127,26 @@ def grant_role_service_permission(
     existing = db.query(RoleServicePermission).filter_by(role_id=role_id, service_type_id=service_type_id).first()
     if existing:
         raise HTTPException(status_code=409, detail="Role already granted access to this service")
+
+    # Grant-impact preflight (ADR-010 decision 4): reject a grant that would
+    # give an already-existing, incompletely-provisioned assignment of a
+    # warehouse-scoped role reachability to a warehouse-scoped service,
+    # rather than silently shipping a grant that immediately locks those
+    # holders out (core.role_policy.check_warehouse_scope fail-closed) with
+    # no indication why.
+    impact = role_policy.warehouse_grant_impact(db, role.name, service.name)
+    if impact:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Granting '{service.name}' to role '{role.name}' would give "
+                f"{impact['member_count']} group member(s) and {impact['staff_count']} "
+                f"Kefu staff member(s) with no warehouse_codes assigned reachability to a "
+                f"warehouse-scoped service. Assign warehouse_codes to those assignments "
+                f"first (PATCH /admin/groups/{{group_id}}/members/{{wechat_openid}} or "
+                f"/admin/kefu-staff/{{staff_id}}), then retry this grant."
+            ),
+        )
 
     grant = RoleServicePermission(role_id=role_id, service_type_id=service_type_id, created_by=body.created_by)
     db.add(grant)

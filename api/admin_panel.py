@@ -483,17 +483,20 @@ function kefuRoleRowHtml(s, roles) {
   const options = optionNames.map(r =>
     `<option value="${escapeHtml(r)}" ${r === s.role ? "selected" : ""}>${escapeHtml(r)}</option>`
   ).join("");
-  const isWarehouseman = s.role === "warehouseman";
-  // customer_identity comes from the server (core.role_registry.
-  // CUSTOMER_IDENTITY_ROLE_NAMES via GET /admin/roles) -- never hardcode
-  // role names here, same discipline as the warehouse_codes list above.
-  const isCustomerIdentity = (roles.find(r => r.name === s.role) || {}).customer_identity === true;
+  // required_fields comes from the server (core.role_policy.
+  // field_descriptors_for_role via GET /admin/roles) -- never hardcode
+  // role names here. A role's own descriptor list, not a per-field
+  // boolean, so a role newly requiring an existing field needs no client
+  // change; only a genuinely new field needs a new named check like these.
+  const requiredFieldNames = new Set(((roles.find(r => r.name === s.role) || {}).required_fields || []).map(f => f.field_name));
+  const isWarehouseScoped = requiredFieldNames.has("warehouse_codes");
+  const isCustomerIdentity = requiredFieldNames.has("billing_customer_id");
   return `
     <tr id="kefu-row-${s.staff_id}">
       <td>${escapeHtml(s.display_name || "(no name)")}</td>
       <td>${escapeHtml(s.external_userid)}</td>
       <td><select id="kefu-role-${s.staff_id}" onchange="onKefuRoleChange('${s.staff_id}')">${options}</select></td>
-      <td>${warehouseChecksHtml(s.staff_id, s.warehouse_codes, isWarehouseman)}</td>
+      <td>${warehouseChecksHtml(s.staff_id, s.warehouse_codes, isWarehouseScoped)}</td>
       <td>${billingCustomerInputHtml(s.staff_id, s.billing_customer_id, isCustomerIdentity)}</td>
       <td>${s.is_active ? '<span class="badge ok">active</span>' : '<span class="badge bad">suspended</span>'}</td>
       <td>${fmtDate(s.created_at)}</td>
@@ -505,12 +508,17 @@ function kefuRoleRowHtml(s, roles) {
   `;
 }
 
+function requiredFieldNamesFor(role) {
+  const roleMeta = (_rolesCache || []).find(r => r.name === role) || {};
+  return new Set((roleMeta.required_fields || []).map(f => f.field_name));
+}
+
 function onKefuRoleChange(staffId) {
   const select = document.getElementById(`kefu-role-${staffId}`);
   const role = select.value;
-  document.getElementById(`kefu-wh-${staffId}`).style.display = role === "warehouseman" ? "" : "none";
-  const roleMeta = (_rolesCache || []).find(r => r.name === role) || {};
-  document.getElementById(`kefu-billing-${staffId}`).style.display = roleMeta.customer_identity ? "" : "none";
+  const requiredFieldNames = requiredFieldNamesFor(role);
+  document.getElementById(`kefu-wh-${staffId}`).style.display = requiredFieldNames.has("warehouse_codes") ? "" : "none";
+  document.getElementById(`kefu-billing-${staffId}`).style.display = requiredFieldNames.has("billing_customer_id") ? "" : "none";
 }
 
 async function saveKefuRole(staffId) {
@@ -518,17 +526,17 @@ async function saveKefuRole(staffId) {
   document.getElementById("kefuStaffError").style.color = "";
   const role = document.getElementById(`kefu-role-${staffId}`).value;
   const body = { role };
-  if (role === "warehouseman") {
+  const requiredFieldNames = requiredFieldNamesFor(role);
+  if (requiredFieldNames.has("warehouse_codes")) {
     const codes = Array.from(document.querySelectorAll(`.kefu-wh-box[data-staff="${staffId}"]:checked`))
       .map(box => box.value);
     if (codes.length === 0) {
-      document.getElementById("kefuStaffError").textContent = "At least one warehouse is required for role=warehouseman.";
+      document.getElementById("kefuStaffError").textContent = `At least one warehouse is required for role=${role}.`;
       return;
     }
     body.warehouse_codes = codes;
   }
-  const roleMeta = (_rolesCache || []).find(r => r.name === role) || {};
-  if (roleMeta.customer_identity) {
+  if (requiredFieldNames.has("billing_customer_id")) {
     const billingId = document.getElementById(`kefu-billing-${staffId}`).value.trim();
     if (!billingId) {
       document.getElementById("kefuStaffError").textContent = "billing_customer_id is required for this role.";

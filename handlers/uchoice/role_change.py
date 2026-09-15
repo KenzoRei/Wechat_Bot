@@ -21,6 +21,7 @@ class RoleChangeHandler(BaseHandler):
         from core.role_registry import ASSIGNABLE_ROLE_NAMES
         from core.uchoice_constants import VALID_WAREHOUSE_CODES
         from core.role_identity import parse_target_identity
+        from core import role_policy
 
         fields = context.get("collected_fields", {})
         target_openid = fields.get("target_openid")
@@ -43,32 +44,25 @@ class RoleChangeHandler(BaseHandler):
         if new_role_name not in ASSIGNABLE_ROLE_NAMES:
             raise RuntimeError(f"未知角色：{new_role_name}")
 
-        if new_role_name == "warehouseman":
-            if (
-                not isinstance(warehouse_codes, list)
-                or not warehouse_codes
-                or any(code not in VALID_WAREHOUSE_CODES for code in warehouse_codes)
-            ):
+        # One shared entry point for both assignment-level fields (ADR-010
+        # step 1) -- pre_confirm_validators.py's _valid_role_change_target_
+        # and_role already rejects a missing/invalid value before
+        # confirmation is ever shown; this is the execution-time backstop.
+        try:
+            normalized = role_policy.normalize_assignment_fields(db, new_role_name, {
+                "warehouse_codes": warehouse_codes,
+                "billing_customer_id": fields.get("billing_customer_id") or getattr(target, "billing_customer_id", None),
+            })
+        except role_policy.RoleAssignmentError as exc:
+            if exc.field == "warehouse_codes":
                 codes_list = "、".join(sorted(VALID_WAREHOUSE_CODES))
-                raise RuntimeError(f"指派为仓库管理员需要提供至少一个有效的仓库代码（{codes_list}）。")
-
-        from core.role_registry import CUSTOMER_IDENTITY_ROLE_NAMES
-
-        billing_customer_id_to_set = None
-        if new_role_name in CUSTOMER_IDENTITY_ROLE_NAMES:
-            # Both GroupMember and KefuStaff support this binding since
-            # V31 -- pre_confirm_validators.py already rejects a missing/
-            # invalid binding before confirmation is ever shown; this is
-            # the execution-time backstop, same 3-layer pattern as
-            # warehouse_codes/warehouseman above.
-            new_billing_id = fields.get("billing_customer_id") or getattr(target, "billing_customer_id", None)
-            if not new_billing_id:
+                raise RuntimeError(f"指派为{new_role_name}需要提供至少一个有效的仓库代码（{codes_list}）。")
+            if exc.reason == "missing":
                 raise RuntimeError("指派为客户角色需要提供关联的客户编号。")
-            from core import customer_directory
-            record = customer_directory.get_customer(db, new_billing_id)
-            if record is None or record.status != "active":
-                raise RuntimeError(f"客户编号 {new_billing_id} 无效或未激活，无法关联，请联系管理员。")
-            billing_customer_id_to_set = new_billing_id
+            billing_id = exc.info.get("customer_id", "")
+            raise RuntimeError(f"客户编号 {billing_id} 无效或未激活，无法关联，请联系管理员。")
+        warehouse_codes_to_set = normalized["warehouse_codes"]
+        billing_customer_id_to_set = normalized["billing_customer_id"]
 
         role = db.query(Role).filter_by(name=new_role_name).first()
         if role is None:
@@ -99,8 +93,10 @@ class RoleChangeHandler(BaseHandler):
             raise RuntimeError("无法将该成员的角色改为非管理员——该群组当前仅剩一名管理员。")
 
         target.role_id = role.role_id
-        # warehouse_codes is meaningful only for warehouseman — cleared on any other role
-        target.warehouse_codes = sorted(set(warehouse_codes)) if new_role_name == "warehouseman" else None
+        # warehouse_codes is meaningful only for a warehouse-scoped role
+        # (core.role_registry.WAREHOUSE_SCOPED_ROLE_NAMES) -- cleared on any
+        # other role, same as billing_customer_id below.
+        target.warehouse_codes = warehouse_codes_to_set
         # billing_customer_id exists on both GroupMember and KefuStaff since
         # V31 -- meaningful only for CUSTOMER_IDENTITY_ROLE_NAMES roles,
         # cleared on any other role, same pattern as warehouse_codes above.

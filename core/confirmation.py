@@ -138,10 +138,11 @@ def charge_type_label(code: str | None) -> str:
 
 
 _ROLE_LABELS = {
-    "admin":        "管理员",
-    "customer":     "客户",
-    "warehouseman": "仓库管理员",
-    "accountant":   "财务",
+    "admin":           "管理员",
+    "customer":        "客户",
+    "warehouseman":    "仓库管理员",
+    "warehouse_admin": "仓库管理员（可申请与确认）",
+    "accountant":      "财务",
 }
 
 

@@ -12,6 +12,7 @@ class UpsertAddressHandler(BaseHandler):
 
     def handle(self, context: dict, config: dict, db) -> dict:
         from models.uchoice import UchoiceAddress
+        from core import role_policy
 
         fields = context.get("collected_fields", {})
         matched_id = fields.get("matched_address_id")
@@ -24,6 +25,8 @@ class UpsertAddressHandler(BaseHandler):
         # one simply stays unassigned, same as the 5 pre-existing
         # null-company rows, not a new failure mode.
         customer_id = context.get("customer_id")
+        role_name = context.get("role")
+        allowed = context.get("warehouse_codes")
 
         if matched_id:
             addr = db.query(UchoiceAddress).filter_by(address_id=matched_id).first()
@@ -35,14 +38,19 @@ class UpsertAddressHandler(BaseHandler):
             # requested one, since upsert_address's candidate list is
             # intentionally unfiltered (the full address book), so a
             # warehouseman could otherwise reach an address outside their
-            # assignment purely via matched_address_id.
-            allowed = context.get("warehouse_codes")
+            # assignment purely via matched_address_id. Uses
+            # core.role_policy.check_warehouse_scope -- fail-closed for a
+            # warehouse-scoped caller with no warehouse_codes assigned
+            # (2026-09-15 audit finding 2: the previous "allowed is not
+            # None" guard skipped this check entirely for exactly that
+            # caller, an update could go through unchecked).
             requested_warehouse = fields.get("warehouse_code", addr.warehouse_code)
-            if allowed is not None:
-                if addr.warehouse_code and addr.warehouse_code not in allowed:
-                    raise RuntimeError("该仓库不在您的权限范围内。")
-                if requested_warehouse and requested_warehouse not in allowed:
-                    raise RuntimeError("该仓库不在您的权限范围内。")
+            message = (
+                role_policy.check_warehouse_scope(role_name, allowed, addr.warehouse_code)
+                or role_policy.check_warehouse_scope(role_name, allowed, requested_warehouse)
+            )
+            if message:
+                raise RuntimeError(message)
             addr.company_name   = fields.get("company_name", addr.company_name)
             addr.charge_type    = fields.get("charge_type", addr.charge_type)
             addr.addr           = fields.get("addr", addr.addr)
@@ -66,6 +74,14 @@ class UpsertAddressHandler(BaseHandler):
         created_by = context.get("wechat_openid") or context.get("submitted_by_staff_id")
         if not created_by:
             raise RuntimeError("无法确定操作人身份，无法新增地址。")
+
+        # Matches core.pre_confirm_validators._valid_upsert_address_
+        # warehouse_scope's final check, which applies to both create and
+        # update -- a new address had no execution-time backstop at all
+        # before this (2026-09-15 audit finding 2).
+        message = role_policy.check_warehouse_scope(role_name, allowed, fields.get("warehouse_code"))
+        if message:
+            raise RuntimeError(message)
 
         addr = UchoiceAddress(
             company_name=fields.get("company_name"),

@@ -7,6 +7,70 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.2.0] - 2026-09-15
+
+### Added
+- `warehouse_admin` role: makes uchoice inbound/outbound requests and
+  confirms their own completion, scoped to assigned warehouse(s) — the
+  same warehouse-assignment requirement as `warehouseman`, a different
+  service grant set (`uchoice_inbound_request`, `uchoice_outbound_request`,
+  `confirm_inbound_completion`, `confirm_outbound_completion`). New
+  migration `V32`.
+- `core/role_policy.py`: one shared, typed declaration of role-level
+  assignment policies (warehouse scope, billing-customer identity),
+  replacing four separately-duplicated `role.name == "warehouseman"` /
+  `in CUSTOMER_IDENTITY_ROLE_NAMES` branches across
+  `api/admin/members.py`, `api/admin/kefu_staff.py`,
+  `handlers/uchoice/role_change.py`, and
+  `core/pre_confirm_validators.py`. See
+  [ADR-010](docs/architecture/decisions/adr-010-role-service-policy-declarations.md).
+  - `GET /admin/roles` now returns a generic `required_fields` descriptor
+    list per role (label, value type, choice source) instead of two ad hoc
+    `customer_identity`/`warehouse_scoped` booleans.
+  - `POST /admin/roles/{role_id}/services/{service_type_id}` now 409s if
+    granting would give an already-existing, incompletely-provisioned
+    warehouse-scoped assignment reachability to a warehouse-scoped
+    service.
+  - New `scripts/check_role_policy_impact.py`: manual, read-only pre-deploy
+    gate for a role-classification change in `core/role_registry.py`
+    itself (declare the role, run the check, then deploy) — a code-level
+    change has no admin-API call site to hook an automatic check onto.
+- `CUSTOMER_IDENTITY_ROLE_NAMES` (`fedex_label_agent` alongside
+  `customer`): generalizes the previously-hardcoded `"customer"` check to
+  any role representing an external customer's own billing identity.
+  `kefu_staff` gains `billing_customer_id` (`V31`), mirroring
+  `group_member`'s existing column. See
+  [ADR-009](docs/architecture/decisions/adr-009-customer-identity-roles.md).
+  `fedex_label_agent` made assignable (FedEx-only labels for one
+  customer's own account).
+- `DELETE /admin/roles/{role_id}`: role deletion, rejecting protected roles
+  (`admin`, `pending`) and any role still assigned to a member/staff row.
+- Admin panel: `billing_customer_id` input on the Kefu Staff tab, shown
+  only for customer-identity roles; Delete button on the Roles tab.
+
+### Fixed
+- **Warehouse-scope enforcement was fail-open, not fail-closed, for a
+  misprovisioned scoped caller.** A `warehouseman`/`warehouse_admin` with
+  no `warehouse_codes` actually assigned was treated as unrestricted at
+  multiple runtime checkpoints (`core/pre_confirm_validators.py`,
+  `handlers/uchoice/storage_txns.py`, `handlers/uchoice/record_request.py`,
+  `handlers/uchoice/lookup_validate.py`, `handlers/uchoice/address.py`)
+  instead of being rejected. All now consult one shared
+  `core.role_policy.check_warehouse_scope`.
+- Rejecting a warehouse-scope violation during `confirm_inbound_completion`/
+  `confirm_outbound_completion` could mark the *original*, unrelated,
+  valid target request failed instead of only cancelling the rejected
+  confirmation attempt — fixed by raising `TargetValidationError` instead
+  of a bare exception in the completion-lookup and completion-storage
+  handlers.
+- YiDiDa `/price` quote requests never sent the shipper's origin address,
+  silently pricing every quote against some default/account-level location
+  instead of the real shipper (confirmed live: a $38.75 → $55.95
+  difference for the same shipment once fixed).
+- `keHuDanHao` (label reference number) could contain raw Chinese
+  characters from a Kefu staff member's real WeCom nickname; now stripped
+  before truncation.
+
 ## [1.1.0] - 2026-09-11
 
 ### Added

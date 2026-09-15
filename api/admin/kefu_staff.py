@@ -6,8 +6,8 @@ import config
 from database import get_db
 from middleware.admin_auth import verify_admin_key
 from core.admin_invariants import lock_group_admin_invariant, would_remove_last_admin
-from core.role_registry import ASSIGNABLE_ROLE_NAMES, CUSTOMER_IDENTITY_ROLE_NAMES
-from core import customer_directory
+from core.role_registry import ASSIGNABLE_ROLE_NAMES
+from core import role_policy
 from models.kefu import KefuStaff
 from models.role import Role
 from api.schemas import KefuStaffUpdate, KefuStaffResponse
@@ -34,31 +34,23 @@ def _resolve_assignable_role(db: Session, role_name: str) -> Role:
     return role
 
 
-def _clean_warehouse_codes(raw: list[str] | None) -> list[str] | None:
-    """Matches api/admin/members.py's cleaning."""
-    if not raw:
-        return None
-    from core.uchoice_constants import VALID_WAREHOUSE_CODES
-    cleaned = sorted({c.strip() for c in raw if c and c.strip()})
-    if not cleaned:
-        return None
-    unknown = [c for c in cleaned if c not in VALID_WAREHOUSE_CODES]
-    if unknown:
-        raise HTTPException(status_code=400, detail=f"Unknown warehouse code(s): {unknown}")
-    return cleaned
-
-
-def _resolve_billing_customer_id(db: Session, raw: str | None) -> str:
-    """Matches api/admin/members.py's identical validation (V31 gave KefuStaff the same column)."""
-    if not raw or not raw.strip():
-        raise HTTPException(status_code=400, detail="billing_customer_id is required for a customer-identity role")
-    customer_id = raw.strip()
-    record = customer_directory.get_customer(db, customer_id)
-    if record is None:
-        raise HTTPException(status_code=400, detail=f"Unknown customer_id: '{customer_id}'. See GET /admin/customers")
-    if record.status != "active":
-        raise HTTPException(status_code=400, detail=f"Customer '{customer_id}' is not active (status={record.status!r})")
-    return customer_id
+def _assignment_fields_for_role(db: Session, role_name: str, warehouse_codes: list[str] | None, billing_customer_id: str | None) -> dict:
+    """Adapter over core.role_policy.normalize_assignment_fields -- matches api/admin/members.py's identical adapter."""
+    try:
+        return role_policy.normalize_assignment_fields(db, role_name, {
+            "warehouse_codes": warehouse_codes,
+            "billing_customer_id": billing_customer_id,
+        })
+    except role_policy.RoleAssignmentError as exc:
+        if exc.field == "warehouse_codes":
+            if exc.reason == "missing":
+                raise HTTPException(status_code=400, detail=f"warehouse_codes is required for role={role_name}")
+            raise HTTPException(status_code=400, detail=f"Unknown warehouse code(s): {exc.info['unknown']}")
+        if exc.reason == "missing":
+            raise HTTPException(status_code=400, detail="billing_customer_id is required for a customer-identity role")
+        if exc.reason == "not_found":
+            raise HTTPException(status_code=400, detail=f"Unknown customer_id: '{exc.info['customer_id']}'. See GET /admin/customers")
+        raise HTTPException(status_code=400, detail=f"Customer '{exc.info['customer_id']}' is not active (status={exc.info['status']!r})")
 
 
 def _to_response(staff: KefuStaff, role_name: str) -> KefuStaffResponse:
@@ -118,35 +110,27 @@ def update_kefu_staff(staff_id: str, body: KefuStaffUpdate, db: Session = Depend
         role = new_role
         staff.role_id = role.role_id
         role_name = role.name
-        if role.name == "warehouseman":
-            new_warehouse_codes = body.warehouse_codes if body.warehouse_codes is not None else staff.warehouse_codes
-            new_warehouse_codes = _clean_warehouse_codes(new_warehouse_codes)
-            if not new_warehouse_codes:
-                raise HTTPException(status_code=400, detail="warehouse_codes is required for role=warehouseman")
-            staff.warehouse_codes = new_warehouse_codes
-        else:
-            # cleared automatically whenever a staff member's role changes away from warehouseman
-            staff.warehouse_codes = None
-        if role.name in CUSTOMER_IDENTITY_ROLE_NAMES:
-            new_billing_id = body.billing_customer_id if body.billing_customer_id is not None else staff.billing_customer_id
-            staff.billing_customer_id = _resolve_billing_customer_id(db, new_billing_id)
-        else:
-            # cleared automatically whenever a staff member's role changes away from a customer-identity role
-            staff.billing_customer_id = None
+        new_warehouse_codes = body.warehouse_codes if body.warehouse_codes is not None else staff.warehouse_codes
+        new_billing_id = body.billing_customer_id if body.billing_customer_id is not None else staff.billing_customer_id
+        # Returns None (clearing the field) for whichever field role.name
+        # doesn't require -- a former holder's stale assignment must never
+        # survive a reassignment away from a scoped/identity role.
+        normalized = _assignment_fields_for_role(db, role.name, new_warehouse_codes, new_billing_id)
+        staff.warehouse_codes = normalized["warehouse_codes"]
+        staff.billing_customer_id = normalized["billing_customer_id"]
     elif body.warehouse_codes is not None:
-        # role unchanged this call — only meaningful if the staff member is already a warehouseman
-        if not current_role or current_role.name != "warehouseman":
-            raise HTTPException(status_code=400, detail="warehouse_codes only applies to role=warehouseman")
-        cleaned = _clean_warehouse_codes(body.warehouse_codes)
-        if not cleaned:
-            raise HTTPException(status_code=400, detail="warehouse_codes cannot be empty")
-        staff.warehouse_codes = cleaned
+        # role unchanged this call — only meaningful if the staff member's current role is warehouse-scoped
+        if not current_role or not role_policy.requires_warehouse_scope(current_role.name):
+            raise HTTPException(status_code=400, detail=f"warehouse_codes only applies to a warehouse-scoped role, not '{current_role.name if current_role else None}'")
+        normalized = _assignment_fields_for_role(db, current_role.name, body.warehouse_codes, staff.billing_customer_id)
+        staff.warehouse_codes = normalized["warehouse_codes"]
 
     if new_role is None and body.billing_customer_id is not None:
         # role unchanged this call — only meaningful if the staff member already holds a customer-identity role
-        if not current_role or current_role.name not in CUSTOMER_IDENTITY_ROLE_NAMES:
+        if not current_role or not role_policy.requires_billing_customer(current_role.name):
             raise HTTPException(status_code=400, detail="billing_customer_id only applies to a customer-identity role")
-        staff.billing_customer_id = _resolve_billing_customer_id(db, body.billing_customer_id)
+        normalized = _assignment_fields_for_role(db, current_role.name, staff.warehouse_codes, body.billing_customer_id)
+        staff.billing_customer_id = normalized["billing_customer_id"]
 
     if body.display_name is not None:
         staff.display_name = body.display_name

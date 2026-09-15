@@ -75,6 +75,20 @@ class RoleCreate(BaseModel):
     description: str | None = None
 
 
+class RequiredFieldDescriptor(BaseModel):
+    """
+    One entry of core.role_policy.field_descriptors_for_role -- describes
+    one assignment-level field a role requires, generically enough that the
+    admin panel doesn't need a new dedicated boolean (customer_identity,
+    warehouse_scoped, ...) added to RoleResponse for every field. See
+    docs/architecture/decisions/adr-010-role-service-policy-declarations.md.
+    """
+    field_name:    str
+    label:         str
+    value_type:    str
+    choice_source: str | None
+
+
 class RoleResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -88,11 +102,13 @@ class RoleResponse(BaseModel):
     # only options accepted by the assignable-role APIs; internal roles such
     # as "pending" must never appear here.
     assignable:  bool
-    # True iff this role is in core.role_registry.CUSTOMER_IDENTITY_ROLE_
-    # NAMES -- lets the admin panel show/require the billing_customer_id
-    # input only for roles that actually need it, without hardcoding role
-    # names client-side (same reasoning as `assignable` above).
-    customer_identity: bool
+    # One descriptor per assignment-level field this role requires
+    # (currently warehouse_codes and/or billing_customer_id, from
+    # core.role_policy.ASSIGNMENT_FIELD_POLICIES) -- lets the admin panel
+    # show/require exactly the inputs a role actually needs without
+    # hardcoding role names client-side, and without a new dedicated
+    # boolean field here every time a new assignment-level field is added.
+    required_fields: list[RequiredFieldDescriptor]
 
 
 # ── Kefu Staff ────────────────────────────────────────────────────────────────
