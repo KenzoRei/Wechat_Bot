@@ -2,7 +2,7 @@
 
 **Status:** Current
 **Owner:** Engineering and operations
-**Last verified against commit:** `c89cf6f` (2026-08-14)
+**Last verified against commit:** `f3492b6` (2026-09-15)
 
 Secrets belong in deployment environment variables and a team password
 manager—never source, docs, examples, logs, or test fixtures.
@@ -24,6 +24,8 @@ manager—never source, docs, examples, logs, or test fixtures.
 - `CLAUDE_API_KEY`
 - `OPENAI_API_KEY`
 - `ADMIN_API_KEY`
+- `CUSTOMER_CREDENTIAL_KEY` — AES-256-GCM key encrypting OMS/YDD credentials
+  in `customer_credential` (see `core/customer_directory.py`)
 - `DATABASE_URL`
 
 Optional general settings include `CLAUDE_MODEL`, `OPENAI_MODEL`,
@@ -42,8 +44,8 @@ do not set it on Render. See
 
 Smart Bot additionally requires:
 
-- `WECHAT_TOKEN`
-- `WECHAT_ENCODING_AES_KEY`
+- `WECHAT_BOT_TOKEN`
+- `WECHAT_BOT_ENCODING_AES_KEY`
 
 Kefu callback mode additionally requires:
 
@@ -56,5 +58,7 @@ Full Kefu processing additionally requires:
 - `WECHAT_KEFU_OPEN_KFID`
 - `KEFU_GROUP_ID`
 
-Legacy variables `WECHAT_SECRET`, `WECHAT_AGENT_ID`, `WECHAT_BOT_ID`, and
-`WECHAT_BOT_SECRET` are not consumed by the current application.
+Legacy variables `WECHAT_SECRET`, `WECHAT_AGENT_ID`, `WECHAT_BOT_ID`,
+`WECHAT_BOT_SECRET`, `WECHAT_TOKEN`, and `WECHAT_ENCODING_AES_KEY` (renamed to
+`WECHAT_BOT_TOKEN`/`WECHAT_BOT_ENCODING_AES_KEY` above) are not consumed by
+the current application.

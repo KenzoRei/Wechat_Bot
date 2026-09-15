@@ -2,7 +2,7 @@
 
 **Status:** Current operational examples
 **Owner:** Operations
-**Last verified against commit:** `dbbc00f` (2026-09-15)
+**Last verified against commit:** `f3492b6` (2026-09-15)
 # Logistics WeChat Bot Platform — v1
 
 **Base URL (Render testing):** `https://wechat-bot-atse.onrender.com`
@@ -55,6 +55,13 @@ Invoke-RestMethod "$base/admin/roles" -Method POST -Headers $h `
 No redeploy needed — new role names become usable immediately in `POST /admin/groups/{id}/members` and the service-permission grant endpoints below.
 
 Seeded by default: `admin`, `customer`.
+
+### Delete a role
+```powershell
+Invoke-RestMethod "$base/admin/roles/{role_id}" -Method DELETE -Headers $h
+```
+409 if the role is protected (`admin`, `pending`) or still assigned to any
+group member/Kefu staff row.
 
 Each role in the response also carries a `required_fields` list —
 descriptors (`field_name`, `label`, `value_type`, `choice_source`) for
@@ -173,6 +180,49 @@ Invoke-RestMethod "$base/admin/groups/{group_id}/members/{wechat_openid}" -Metho
 ```powershell
 Invoke-RestMethod "$base/admin/groups/{group_id}/members/{wechat_openid}" -Method DELETE -Headers $h
 ```
+
+---
+
+## Kefu Staff
+
+The Kefu-channel counterpart to Members above — every person who has ever
+self-registered on the Kefu channel (`注册成员`), whether they end up staff
+(`warehouseman`, `admin`, ...) or a customer-identity role
+(`customer`, `fedex_label_agent`). There's no separate "add" endpoint here —
+registration happens conversationally; admins only promote/update/remove.
+
+### List Kefu staff
+```powershell
+Invoke-RestMethod "$base/admin/kefu-staff" -Headers $h | ConvertTo-Json -Depth 3
+Invoke-RestMethod "$base/admin/kefu-staff?pending_only=true" -Headers $h | ConvertTo-Json -Depth 3
+```
+
+### Update Kefu staff (role, warehouse, billing customer, or suspend)
+```powershell
+Invoke-RestMethod "$base/admin/kefu-staff/{staff_id}" -Method PATCH -Headers $h `
+  -ContentType "application/json" `
+  -Body '{"role": "warehouse_admin", "warehouse_codes": ["JFK", "NJ"]}'
+```
+Same field rules as Members above — `warehouse_codes` required for a
+warehouse-scoped role, `billing_customer_id` required for a customer-identity
+role, both cleared automatically when the role changes away from needing them.
+
+### Remove Kefu staff
+```powershell
+Invoke-RestMethod "$base/admin/kefu-staff/{staff_id}" -Method DELETE -Headers $h
+```
+409 if the staff row has case history (`case_turn`/`kefu_outbound_delivery`
+references it) — deactivate (`is_active: false`) instead of deleting in that
+case.
+
+### Refresh display names from WeCom
+```powershell
+Invoke-RestMethod "$base/admin/kefu-staff/refresh-names" -Method POST -Headers $h
+```
+Backfills `display_name` for every registered Kefu contact from WeCom's real
+nickname (`kf/customer/batchget`) — the only source of truth for it, since
+nothing else in this app ever learns a Kefu contact's actual name. 503 if Kefu
+isn't configured on this deployment.
 
 ---
 

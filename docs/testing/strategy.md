@@ -2,7 +2,7 @@
 
 **Status:** Current
 **Owner:** Engineering
-**Last verified against commit:** `7bf8395` plus the pending test-suite cleanup (2026-08-14)
+**Last verified against commit:** `f3492b6` (2026-09-15)
 
 ## Test layers
 

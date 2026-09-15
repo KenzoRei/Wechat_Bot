@@ -2,10 +2,10 @@
 
 **Status:** Current
 **Owner:** Engineering
-**Last reviewed:** 2026-08-14
+**Last reviewed:** 2026-09-15
 
 A checklist for adding a new bot-facing service (e.g. `role_change`, `view_invoice`)
-to the platform, written from what was actually learned building the 12 U-Choice
+to the platform, written from what was actually learned building the U-Choice
 services. Follow this order — each step depends on the one before it.
 
 There is no code generator for any of this; every step is a manual edit to one
@@ -218,7 +218,7 @@ person's name. Three places, always together:
    candidates). Reuse an existing one if it already covers your data
    (`sku_catalog`, `address_candidates`, `pending_request_candidates`,
    `member_candidates`).
-2. `session_manager._build_uchoice_candidates()` — add the condition that
+2. `core/session_manager.py`'s `_build_uchoice_candidates()` — add the condition that
    injects it, scoped to which service names actually need it (no point
    injecting the member list for a customer who can never reach
    `role_change`).

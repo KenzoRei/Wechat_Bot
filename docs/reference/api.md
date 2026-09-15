@@ -2,7 +2,7 @@
 
 **Status:** Current route inventory
 **Owner:** Engineering
-**Last verified against commit:** `aaf3191` (2026-09-11)
+**Last verified against commit:** `f3492b6` (2026-09-15)
 
 The generated FastAPI OpenAPI schema is the field-level authority. This document
 defines route purpose, composition, and authentication. Admin examples are in
@@ -28,9 +28,9 @@ All routes below require `X-Admin-Key`.
 |---|---|
 | Groups | `POST/GET /admin/groups`, `PATCH /admin/groups/{group_id}` |
 | Smart Bot members | create/list/update/delete under `/admin/groups/{group_id}/members` |
-| Kefu staff | `GET /admin/kefu-staff`, `PATCH /admin/kefu-staff/{staff_id}` |
+| Kefu staff | `GET /admin/kefu-staff`, `PATCH/DELETE /admin/kefu-staff/{staff_id}`, `POST /admin/kefu-staff/refresh-names` |
 | Group services | create/list/delete under `/admin/groups/{group_id}/services` |
-| Roles | `GET/POST /admin/roles` |
+| Roles | `GET/POST /admin/roles`, `DELETE /admin/roles/{role_id}` |
 | Role service permissions (global, deny-by-default) | create/list/delete under `/admin/roles/{role_id}/services` |
 | Catalog | `GET /admin/service-types`, `GET /admin/workflows` |
 | Logs | `GET /admin/request-logs`, `GET /admin/request-logs/{serial_number}` |

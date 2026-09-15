@@ -2,7 +2,7 @@
 
 **Status:** Current
 **Owner:** Engineering and operations
-**Last verified against commit:** `c89cf6f` (2026-08-14)
+**Last verified against commit:** `f3492b6` (2026-09-15)
 
 Channel selection is explicit. Credentials do not implicitly enable a channel.
 Boolean flags accept only `true` or `false` (case-insensitive); invalid values

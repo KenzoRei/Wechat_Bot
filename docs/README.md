@@ -2,7 +2,7 @@
 
 **Status:** Current
 **Owner:** Engineering
-**Last reviewed:** 2026-08-14
+**Last reviewed:** 2026-09-15
 
 This directory separates current operating guidance from historical design and
 AI-review records. Start with the section matching your task.
@@ -24,6 +24,8 @@ AI-review records. Start with the section matching your task.
 | Running tests safely | [Test strategy](testing/strategy.md) |
 | Provisioning the integration-test database | [Local PostgreSQL test database](testing/local-postgresql.md) |
 | Why an architectural choice exists | [ADRs](architecture/decisions/) |
+| Source directory responsibilities at a glance | [Code map](architecture/code-map.md) |
+| Running/closing out a multi-review audit | [Review workspace](reviews/README.md) |
 
 ## Authority and status
 

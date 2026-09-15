@@ -1,7 +1,10 @@
 # ADR-007: Group-level permission model
 
 **Date:** 2026-04-26
-**Status:** Decided
+**Status:** Superseded by the global `role_service_permission` model (`V30`,
+2026-09-11) and [ADR-010](adr-010-role-service-policy-declarations.md).
+Group-level permission grants (`GroupServiceRole`) no longer exist; retained
+as historical rationale for the original group-level design.
 
 ## Decision
 Use a group-level permission model. Permissions are assigned to groups, not to individual users. All members of a group inherit the group's permissions automatically.

@@ -2,7 +2,7 @@
 
 **Status:** Current
 **Owner:** Operations
-**Last reviewed:** 2026-08-14
+**Last reviewed:** 2026-09-15
 
 Production runs on Render. Hosting rationale is recorded in
 [ADR-008](../architecture/decisions/adr-008-render-hosting.md).

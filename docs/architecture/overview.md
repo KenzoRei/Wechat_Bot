@@ -2,7 +2,7 @@
 
 **Status:** Current
 **Owner:** Engineering
-**Last verified against commit:** `c89cf6f` (2026-08-14)
+**Last verified against commit:** `f3492b6` (2026-09-15)
 
 The service is one FastAPI application with two independently gated WeCom
 entry pipelines. Both pipelines use the same PostgreSQL domain data and shared
@@ -51,13 +51,20 @@ Important boundaries:
   transaction.
 - Administrative role invariants count active administrators across both
   `group_member` and `kefu_staff`.
+- `core/customer_directory.py` (customer master data, encrypted OMS/YDD
+  credentials) and `core/warehouse_directory.py` (company shipping-origin
+  directory) are shared subsystems both channels read from the same way.
+  Role/service-assignment policy (warehouse scope, customer identity) is
+  declared once in `core/role_policy.py`/`core/role_registry.py` — see
+  [ADR-010](decisions/adr-010-role-service-policy-declarations.md).
 
 ## Persistence and background work
 
 - SQLAlchemy is the runtime ORM.
 - PostgreSQL is the supported persistent database.
-- Schema changes are sequential SQL files in `db/migrations/`; no migration
-  runner or applied-version ledger currently exists.
+- Schema changes are sequential SQL files in `db/migrations/`, applied by
+  `scripts/apply_migrations.py`, which records applied versions in
+  `public.schema_migrations` (see [Migrations](../operations/migrations.md)).
 - APScheduler runs in-process. The supported deployment topology has exactly
   one scheduler-bearing process; there is no distributed leader election.
 
