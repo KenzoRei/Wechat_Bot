@@ -62,7 +62,7 @@ def test_quote_section_appended_on_success(db, monkeypatch):
         quote_items = [s for s in sections if s.get("type") == "raw" and "预计费用" in s["items"][0]]
         assert len(quote_items) == 1
         assert "$42.50" in quote_items[0]["items"][0]
-        assert "实际费用以标签生成后为准" in quote_items[0]["items"][0]
+        assert "实际费用以最终收到的账单为准" in quote_items[0]["items"][0]
     finally:
         _cleanup(db, customer_id)
 

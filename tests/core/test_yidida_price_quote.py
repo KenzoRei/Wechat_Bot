@@ -14,6 +14,8 @@ def _fields(**overrides):
         "ydd_cust_id": "F900123", "ydd_channel_id": "UPS Ground NJ",
         "weight_lbs": 5, "recipient_country": "US", "recipient_zip": "90001",
         "recipient_city": "Los Angeles", "recipient_state": "CA",
+        "shipper_country": "US", "shipper_zip": "33126",
+        "shipper_city": "Doral", "shipper_state": "FL",
     }
     base.update(overrides)
     return base
@@ -47,6 +49,16 @@ def test_build_price_query_body_converts_lbs_to_kg_and_maps_fields():
     assert body["priceZoneType"] == 1
     assert body["searchType"] == 2
     assert body["wayTypeList"] == [0]
+
+
+def test_build_price_query_body_includes_real_shipper_origin():
+    """Regression: fromCustomer was missing entirely -- YiDiDa silently
+    defaulted to some account-level origin instead of erroring, returning
+    a normal-looking quote priced for the wrong zone/distance (observed
+    live: a real Doral, FL shipment quoted as if departing from New York).
+    """
+    body = ydd_client._build_price_query_body(_fields(), "UPS Ground NJ")
+    assert body["fromCustomer"] == {"countryCode": "US", "postcode": "33126", "city": "Doral", "stateCode": "FL"}
 
 
 def test_missing_credentials_raises():

@@ -263,6 +263,18 @@ def _build_price_query_body(fields: dict, shou_huo_qu_dao: str) -> dict:
     unaffected (matches create_label's own dimension handling). Real
     dim-weight-vs-actual-weight comparison happens server-side once
     dimensions are present, reflected in the response's chargeableWeight.
+
+    fromCustomer (shipper/origin) is REQUIRED, not optional -- its absence
+    was a real, confirmed bug: YiDiDa does not error on a missing origin,
+    it silently defaults to some account/channel-level location (observed
+    live: "departure": "美国纽约"/USA New York, for a real shipment that
+    actually originates in Doral, FL) and returns a normal-looking quote
+    priced for the WRONG zone/distance. Every sales_amount recorded before
+    this fix was quoted this way. Mirrors /yundans's _build_shipment_body
+    shipper fields, using the same minimal {countryCode, postcode, city,
+    stateCode} shape toCustomer below already uses (confirmed accepted by
+    the real API via this same fromCustomer key in the response's own
+    paramsModel echo).
     """
     weight_lbs = float(fields.get("weight_lbs", 0))
     weight_kg = weight_lbs * _LBS_TO_KG
@@ -274,6 +286,12 @@ def _build_price_query_body(fields: dict, shou_huo_qu_dao: str) -> dict:
         "weight":        weight_kg,
         "packageType":   1,
         "pieceCount":    1,
+        "fromCustomer": {
+            "countryCode": fields.get("shipper_country", "US"),
+            "postcode":    fields.get("shipper_zip", ""),
+            "city":        fields.get("shipper_city", ""),
+            "stateCode":   fields.get("shipper_state", ""),
+        },
         "toCustomer": {
             "countryCode": fields.get("recipient_country", "US"),
             "postcode":    fields.get("recipient_zip", ""),

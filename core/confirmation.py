@@ -220,7 +220,7 @@ def _label_quote_section(carrier: str, collected_fields: dict, db: DBSession) ->
         )
         return None
 
-    return {"label": None, "type": "raw", "items": [f"预计费用：${sales_amount:.2f}（实际费用以标签生成后为准）"]}
+    return {"label": None, "type": "raw", "items": [f"预计费用：${sales_amount:.2f}（实际费用以最终收到的账单为准）"]}
 
 
 _DIM_FIELDS = ("length_in", "width_in", "height_in")
@@ -241,7 +241,7 @@ def _label_dim_warning(collected_fields: dict) -> dict | None:
         return None
     return {
         "label": None, "type": "raw",
-        "items": ["⚠️ 未提供包裹尺寸（长/宽/高），实际计费重量可能因体积重（dim weight）高于预计，最终费用以标签生成后为准。"],
+        "items": ["⚠️ 未提供包裹尺寸（长/宽/高），实际计费重量可能因体积重（dim weight）高于预计，最终费用以收到的账单为准。"],
     }
 
 
