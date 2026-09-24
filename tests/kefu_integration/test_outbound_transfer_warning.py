@@ -158,6 +158,7 @@ def test_completion_confirmation_shows_no_warning_for_external_address(external_
         sections = _outbound_completion_sections_builder({"reference_serial": log.serial_number}, db)
         text_out = "\n".join(item for s in sections for item in s["items"])
         assert "内部调仓" not in text_out
+        assert "目的地：Test External Customer（test external customer address）" in text_out
     finally:
         if log_id:
             db.execute(text("delete from request_log where log_id = :lid"), {"lid": log_id})

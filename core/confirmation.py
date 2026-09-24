@@ -13,25 +13,32 @@ from core.message_sections import render_sections
 logger = logging.getLogger(__name__)
 
 
+_DEFAULT_CONFIRMATION_FOOTER = '回复 **确认** 提交申请，或 **取消** 放弃。'
+
+
 def build_confirmation_message(
-    serial_number: str,
+    serial_number: str | None,
     service_display_name: str,
     sections: list[dict],
-    note: str | None = None
+    note: str | None = None,
+    footer: str | None = None,
 ) -> str:
     """
     Pure renderer — no service-specific logic. sections is a list of
     {"label": str, "type": "kv"|"list", "items": dict|list}.
+
+    serial_number=None omits the 申请编号 line (a batch confirmation lists
+    each request's own serial per section instead); footer overrides the
+    default confirm/cancel instruction.
     """
-    lines = [
-        "**请确认以下信息**",
-        f"申请编号：{serial_number}",
-        f"服务类型：{service_display_name}",
-    ]
+    lines = ["**请确认以下信息**"]
+    if serial_number is not None:
+        lines.append(f"申请编号：{serial_number}")
+    lines.append(f"服务类型：{service_display_name}")
 
     lines += render_sections(sections)
 
-    lines += ["", '回复 **确认** 提交申请，或 **取消** 放弃。']
+    lines += ["", footer or _DEFAULT_CONFIRMATION_FOOTER]
 
     if note:
         lines += ["", f"> 注意：{note}"]
@@ -48,6 +55,8 @@ _DISPLAY_NAMES = {
     "uchoice_outbound_request":   "U-Choice 出库申请",
     "confirm_inbound_completion": "入库完成确认",
     "confirm_outbound_completion":"出库完成确认",
+    "confirm_inbound_completion_batch":  "批量入库完成确认",
+    "confirm_outbound_completion_batch": "批量出库完成确认",
     "cancel_inbound_request":     "取消入库申请",
     "cancel_outbound_request":    "取消出库申请",
     "adjust_storage":             "库存调整",
@@ -71,8 +80,16 @@ def _fedex_display_name(service_type_name: str, collected_fields: dict) -> str:
     return name
 
 
+def _batch_display_name(service_type_name: str, collected_fields: dict) -> str:
+    name = _DISPLAY_NAMES.get(service_type_name, service_type_name)
+    count = len(collected_fields.get("reference_serials") or [])
+    return f"{name}（共 {count} 笔）" if count else name
+
+
 _DISPLAY_NAME_BUILDERS: dict[str, Callable[[str, dict], str]] = {
     "fedex_label": _fedex_display_name,
+    "confirm_inbound_completion_batch": _batch_display_name,
+    "confirm_outbound_completion_batch": _batch_display_name,
 }
 
 
@@ -489,16 +506,100 @@ def _outbound_completion_sections_builder(collected_fields: dict, db: DBSession)
     if not restated:
         sections.append({"label": None, "type": "list", "items": ["（按原申请数量发货，如实发数量有出入请重新说明）"]})
 
-    destination_address_id = original_fields.get("destination_address_id")
-    if destination_address_id:
-        from models.uchoice import UchoiceAddress
-        addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
-        if addr and addr.destination_warehouse_code:
-            sections.append({
-                "label": None, "type": "list",
-                "items": [f"⚠️ 此为内部调仓：确认后将同时增加 {addr.destination_warehouse_code} 仓对应库存"],
-            })
+    for item in _completion_destination_items(db, original_fields):
+        sections.append({"label": None, "type": "list", "items": [item]})
 
+    return sections
+
+
+def _completion_destination_items(db: DBSession, original_fields: dict) -> list[str]:
+    """
+    Outbound completion only: the resolved destination and, for an internal
+    transfer, the present-tense inventory warning (confirming a completion
+    IS the inventory-moving step). Shared by the single and batch completion
+    builders so both word it identically.
+    """
+    destination_address_id = original_fields.get("destination_address_id")
+    if not destination_address_id:
+        return []
+    from models.uchoice import UchoiceAddress
+    from core.uchoice_context import format_address_label
+    addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
+    items = [f"目的地：{format_address_label(addr)}"]
+    if addr and addr.destination_warehouse_code:
+        items.append(f"⚠️ 此为内部调仓：确认后将同时增加 {addr.destination_warehouse_code} 仓对应库存")
+    return items
+
+
+BATCH_CONFIRMATION_FOOTER = "回复 **确认** 提交全部，**取消** 放弃，或 部分确认（请回复编号，如：①③）。"
+
+
+def _format_picks(picks: list[dict]) -> str:
+    return "，".join(f'{p["box_count"]}箱@{p["source_boxes_per_pallet"]}/托' for p in picks)
+
+
+def _completion_batch_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
+    """
+    confirm_inbound_completion_batch / confirm_outbound_completion_batch --
+    one numbered section per request (①..⑨, the numbers a partial-confirm
+    reply refers to), each at its ORIGINAL quantities. Outbound picks come
+    from the simulated preview (_preview_picks, core/completion_batch.py):
+    a whole-pallet line whose simulated pick is exactly its stated pallets
+    renders as plain "N 托 @ B/托"; anything else (a loose line, or a
+    whole-pallet line that will actually be drawn from other buckets)
+    shows its picks explicitly, so the warehouseman sees every pallet that
+    will be split before confirming.
+    """
+    from core import completion_batch
+
+    sku_labels = _sku_label_map(db)
+    serials = collected_fields.get("reference_serials") or []
+    preview = collected_fields.get("_preview_picks") or {}
+    sections: list[dict] = []
+
+    notes = collected_fields.get("_batch_notes") or []
+    if notes:
+        sections.append({"label": "以下申请未纳入本次批量确认", "type": "list", "items": list(notes)})
+
+    for index, serial in enumerate(serials, start=1):
+        target = completion_batch.load_target(db, serial)
+        if target is None:
+            sections.append({"label": f"{completion_batch.circled(index)} {serial}", "type": "list", "items": ["⚠️ 未找到该申请"]})
+            continue
+        lines = sorted(
+            target.sku_lines(),
+            key=lambda l: (l.get("sku_code", ""), l.get("boxes_per_pallet", l.get("box_count", 0))),
+        )
+        picks_by_sku = preview.get(serial) or {}
+        lines_by_sku: dict[str, list[dict]] = {}
+        for line in lines:
+            lines_by_sku.setdefault(line.get("sku_code", "?"), []).append(line)
+
+        items = []
+        for sku, sku_lines in lines_by_sku.items():
+            label = _sku_label(sku_labels, sku)
+            for line in sku_lines:
+                if "box_count" in line:
+                    items.append(f'{label}：散箱 x{line["box_count"]}')
+                else:
+                    items.append(f'{label}：{line.get("pallet_count", "?")} 托 @ {line.get("boxes_per_pallet", "?")}/托')
+            picks = picks_by_sku.get(sku)
+            if picks is None:
+                continue
+            plain = (
+                len(sku_lines) == 1 and "box_count" not in sku_lines[0]
+                and len(picks) == 1
+                and picks[0]["source_boxes_per_pallet"] == sku_lines[0].get("boxes_per_pallet")
+            )
+            if not plain:
+                items.append(f"　取货（系统预计）：{_format_picks(picks)}")
+        items += _completion_destination_items(db, target.original_fields)
+
+        header = f"{completion_batch.circled(index)} {serial}（{target.warehouse_code or '?'} 仓）"
+        sections.append({"label": header, "type": "list", "items": items})
+
+    verb = "收货" if collected_fields.get("_batch_direction") == "inbound" else "发货"
+    sections.append({"label": None, "type": "list", "items": [f"（按原申请数量{verb}，如实际数量有出入请单独确认该申请）"]})
     return sections
 
 
@@ -660,6 +761,8 @@ CONFIRMATION_BUILDERS: dict[str, Callable[[dict, DBSession], list[dict]]] = {
     "uchoice_outbound_request":   _outbound_sections_builder,
     "confirm_inbound_completion": _inbound_completion_sections_builder,
     "confirm_outbound_completion": _outbound_completion_sections_builder,
+    "confirm_inbound_completion_batch":  _completion_batch_sections_builder,
+    "confirm_outbound_completion_batch": _completion_batch_sections_builder,
     "adjust_storage":           _adjust_sections_builder,
     "recount_storage":          _recount_sections_builder,
     "move_storage":             _move_sections_builder,

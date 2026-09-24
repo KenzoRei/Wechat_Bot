@@ -18,9 +18,12 @@ from core.confirmation import build_display_name
 _LABEL_BASE_URL = getattr(config, "SERVER_BASE_URL", "https://wechat-bot-atse.onrender.com")
 
 
-def build_result_message(title: str, serial_number: str, sections: list[dict]) -> str:
-    """Pure renderer — no service-specific logic."""
-    lines = [f"✅ {title}", f"申请编号：{serial_number}"]
+def build_result_message(title: str, serial_number: str | None, sections: list[dict]) -> str:
+    """Pure renderer — no service-specific logic. serial_number=None omits
+    the 申请编号 line (a batch lists each completed request's own serial)."""
+    lines = [f"✅ {title}"]
+    if serial_number is not None:
+        lines.append(f"申请编号：{serial_number}")
     lines += render_sections(sections)
     lines.append("如有问题请联系管理员。")
     return "\n".join(lines)
@@ -51,6 +54,13 @@ def _inbound_completion_result_title(service_type_name: str, context: dict) -> s
 
 def _outbound_completion_result_title(service_type_name: str, context: dict) -> str:
     return "出库已确认，仓库最新库存如下"
+
+
+def _completion_batch_result_title(service_type_name: str, context: dict) -> str:
+    result = context.get("result", {})
+    label = "入库" if result.get("batch_direction") == "inbound" else "出库"
+    count = len(result.get("batch_completed") or [])
+    return f"已完成 {count} 笔{label}确认，仓库最新库存如下"
 
 
 def _address_result_title(service_type_name: str, context: dict) -> str:
@@ -91,6 +101,8 @@ _RESULT_TITLE_BUILDERS: dict[str, Callable[[str, dict], str]] = {
     "uchoice_outbound_request":    _awaits_completion_result_title,
     "confirm_inbound_completion":  _inbound_completion_result_title,
     "confirm_outbound_completion": _outbound_completion_result_title,
+    "confirm_inbound_completion_batch":  _completion_batch_result_title,
+    "confirm_outbound_completion_batch": _completion_batch_result_title,
     "upsert_address":              _address_result_title,
     "explain_service":             _explain_service_result_title,
     "cancel_inbound_request":      _cancel_inbound_result_title,
@@ -421,6 +433,45 @@ def _completion_result_sections_builder(context: dict, db: DBSession) -> list[di
     return sections
 
 
+def _completion_batch_result_sections_builder(context: dict, db: DBSession) -> list[dict]:
+    """
+    confirm_*_completion_batch -- one ✅ line per completed request (in the
+    order they were confirmed), anything the user left out of a partial
+    confirmation, then each affected warehouse's full updated storage once
+    (origins and transfer destinations), same block the single completion
+    reply shows.
+    """
+    from core.uchoice_context import get_original_fields, sku_label_map, _summarize_sku_lines
+    from models.request_log import RequestLog
+
+    result = context.get("result", {})
+    completed = result.get("batch_completed") or []
+    labels = sku_label_map(db)
+    items = []
+    warehouses: list[str] = []
+    for entry in completed:
+        log = db.query(RequestLog).filter_by(serial_number=entry["serial_number"]).first()
+        summary = _summarize_sku_lines((get_original_fields(db, log) or {}).get("sku_lines", []), labels) if log else ""
+        line = f'{entry["serial_number"]}：{summary}'
+        if entry.get("destination_label"):
+            line += f' → {entry["destination_label"]}'
+        items.append(line)
+        for code in (entry.get("warehouse_code"), entry.get("destination_warehouse_code")):
+            if code and code not in warehouses:
+                warehouses.append(code)
+    sections = [{"label": None, "type": "list", "items": items}]
+
+    serials = (context.get("collected_fields") or {}).get("reference_serials") or []
+    done = {e["serial_number"] for e in completed}
+    left = [s for s in serials if s not in done]
+    if left:
+        sections.append({"label": "未处理（仍在处理中）", "type": "list", "items": left})
+
+    for code in warehouses:
+        sections += _warehouse_storage_summary_sections(db, code, "仓当前库存")
+    return sections
+
+
 def _adjust_result_sections_builder(context: dict, db: DBSession) -> list[dict]:
     """adjust_storage — same "show updated storage" treatment as the completion services."""
     warehouse_code = context.get("collected_fields", {}).get("warehouse_code")
@@ -525,6 +576,8 @@ RESULT_BUILDERS: dict[str, Callable[[dict, DBSession], list[dict]]] = {
     "uchoice_outbound_request":    _outbound_request_result_sections_builder,
     "confirm_inbound_completion":  _completion_result_sections_builder,
     "confirm_outbound_completion": _completion_result_sections_builder,
+    "confirm_inbound_completion_batch":  _completion_batch_result_sections_builder,
+    "confirm_outbound_completion_batch": _completion_batch_result_sections_builder,
     "adjust_storage":              _adjust_result_sections_builder,
     "recount_storage":             _recount_result_sections_builder,
     "move_storage":                _move_result_sections_builder,

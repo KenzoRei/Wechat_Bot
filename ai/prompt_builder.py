@@ -58,6 +58,35 @@ def _address_matching_instructions(is_kefu: bool) -> str:
     )
 
 
+def _batch_selection_instructions(service_names: set) -> str:
+    """
+    Batch completion (Kefu only) -- the AI only ever proposes a `selection`;
+    code resolves it against the numbered list the user saw and decides
+    membership (core/completion_batch.py). Shown only to callers granted a
+    batch service.
+    """
+    if not service_names & {"confirm_inbound_completion_batch", "confirm_outbound_completion_batch"}:
+        return ""
+    return (
+        "  · 【批量确认】用户一次选择两笔及以上待处理申请（如\"全部确认出库\"\"1和3都确认\"\"确认 086 和 091\"\"除了第二个都确认\"）时："
+        "新会话用 service_type_name=confirm_outbound_completion_batch（入库用 confirm_inbound_completion_batch），"
+        "只选一笔时仍用 confirm_outbound_completion / confirm_inbound_completion。"
+        "不论哪种，都只在 extracted_fields.selection 中给出用户的选择，不要填 reference_serial、reference_serials，也不要给出任何数量：\n"
+        "    - 全部/所有：{\"select_all\": true}\n"
+        "    - 按刚才列出的编号：{\"indices\": [1, 3]}（编号即列表中的序号，不要换算成申请编号）\n"
+        "    - 按申请编号：{\"serials\": [\"REQ-20260922-000086\"]}（可只写尾号如 \"086\"，但不能编造列表外的编号）\n"
+        "    - 除了某几条：{\"select_all\": true, \"exclude_indices\": [2]}\n"
+        "    若用户在一个出库/入库完成确认会话中回复选择多条，同样返回 intent=continuation 并给出 selection，系统会自动转为批量确认。\n"
+        "    表达不明确（如\"确认前面几个\"）时不要猜测，selection 留空并在 reply 中请用户回复编号。\n"
+        "    批量确认只按原申请数量处理：若用户在批量确认中说某一笔实际数量有出入，照常提取 fulfillment_lines/received_lines，"
+        "系统会提示用户单独确认该笔，你不需要自行判断。\n"
+        "    示例：无活跃会话，用户说\"全部确认出库\" → intent=new_request，service_type_name=\"confirm_outbound_completion_batch\"，"
+        "extracted_fields={\"selection\": {\"select_all\": true}}。错误输出（禁止）：把候选编号逐个填进 reference_serial，或设置 intent=confirm。\n"
+        "    示例：批量确认摘要待确认中，用户说\"除了第二个都确认\" → intent=continuation，"
+        "extracted_fields={\"selection\": {\"select_all\": true, \"exclude_indices\": [2]}}。\n"
+    )
+
+
 def build_system_prompt(context: dict) -> str:
     # keep name + description + input_schema for AI — strip credentials and
     # internal IDs. description matters more than it looks: service names
@@ -175,6 +204,7 @@ def build_system_prompt(context: dict) -> str:
         "  · 【重要，入库方向】confirm_inbound_completion 的散箱入库没有自动默认值——原始入库申请只说了箱数，仓库人员必须明确说明这批散箱"
         "打包成了多少箱/托、共多少托，在 reply 中主动询问，收集到后填入 received_lines: "
         "[{{\"sku_code\": \"<商品编码>\", \"boxes_per_pallet\": <打包后箱数/托>, \"pallet_count\": <托数>}}]，收集到之前不能设置 all_fields_collected=true。\n"
+        + _batch_selection_instructions(service_names) +
         "- cancelable_inbound_requests / cancelable_outbound_requests：当前用户可取消的入库/出库申请候选列表（已确认但仓库尚未完成处理的申请）。"
         "0/1/多条时提取 reference_serial 到 extracted_fields、如何询问用户等规则与上面 pending_inbound_requests / pending_outbound_requests 完全相同，"
         "不再重复——唯一区别是这里的候选范围是\"我自己可以取消的申请\"（或管理员可取消本群组内任意一条），而不是仓库待处理列表，"

@@ -289,6 +289,10 @@ WAREHOUSE_SCOPED_SERVICE_NAMES = frozenset({
     "upsert_address",
     "confirm_inbound_completion",
     "confirm_outbound_completion",
+    # Batch completion re-runs the single completion's warehouse-scope
+    # checks per target (handlers/uchoice/complete_batch.py).
+    "confirm_inbound_completion_batch",
+    "confirm_outbound_completion_batch",
 })
 
 

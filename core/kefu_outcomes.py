@@ -171,6 +171,9 @@ class CandidateAmbiguousOutcome:
     code = OutcomeCode.CANDIDATE_AMBIGUOUS
     prompt: str
     options: tuple[CandidateOption, ...]
+    # Optional trailing lines -- e.g. how many candidates weren't listed,
+    # and that several can be confirmed together (batch completion).
+    footer: tuple[str, ...] = ()
 
     def __post_init__(self):
         _require(self.prompt, "prompt must be non-empty")

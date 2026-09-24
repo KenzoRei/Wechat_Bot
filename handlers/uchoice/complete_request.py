@@ -9,6 +9,13 @@ class CompleteExistingRequestHandler(BaseHandler):
     session.request_log_id was reassigned to point at the target log) — this
     handler's only job is the cross-group push into the ORIGINAL customer's
     group, which the confirming warehouseman isn't necessarily a member of.
+
+    Only for requests created through Smart Robot (a group-chat customer).
+    A Kefu-originated request's submitter is notified by Kefu's own
+    pull-on-next-message notice (core/kefu_completion_notice.py); a group
+    push would be a second, channel-crossing "您的申请已完成" in a chat
+    where nobody asked for it. Same rule as the batch completion
+    (handlers/uchoice/complete_batch.py).
     """
 
     def handle(self, context: dict, config: dict, db) -> dict:
@@ -16,6 +23,8 @@ class CompleteExistingRequestHandler(BaseHandler):
         from clients.wechat_client import send_group_webhook_message
 
         target = context.get("_uchoice_target", {})
+        if target.get("source_channel") == "kefu":
+            return {}
         group_id = target.get("group_id")
         webhook_url = None
         if group_id:

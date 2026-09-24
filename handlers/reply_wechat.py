@@ -23,8 +23,14 @@ class ReplyWeChatHandler(BaseHandler):
     """
 
     def handle(self, context: dict, config: dict, db) -> dict:
+        from core.completion_batch import is_batch_service
+
         serial_number = context.get("serial_number", "")
         service_type_name = self._resolve_service_type_name(context, db)
+        if is_batch_service(service_type_name):
+            # The batch's own log is only a placeholder for the batch; each
+            # completed request's serial is listed in the sections instead.
+            serial_number = None
 
         sections = build_result_sections(service_type_name, context, db)
         title = build_result_title(service_type_name, context)

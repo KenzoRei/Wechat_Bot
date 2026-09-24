@@ -445,14 +445,15 @@ def _build_uchoice_candidates(
     # access.group_id inside pending_request_candidates/
     # cancelable_request_candidates, plus warehouse scope (completion) or
     # ownership/admin scope (cancellation) within those same functions.
-    if "confirm_inbound_completion" in names:
+    # The batch completion services resolve against the same pending list.
+    if names & {"confirm_inbound_completion", "confirm_inbound_completion_batch"}:
         inbound_id = _service_type_id_by_name(db, "uchoice_inbound_request")
         if inbound_id:
             candidates["pending_inbound_requests"] = uchoice_context.pending_request_candidates(
                 db, access.group_id, pending_allowed_warehouses, [inbound_id]
             )
 
-    if "confirm_outbound_completion" in names:
+    if names & {"confirm_outbound_completion", "confirm_outbound_completion_batch"}:
         outbound_id = _service_type_id_by_name(db, "uchoice_outbound_request")
         if outbound_id:
             candidates["pending_outbound_requests"] = uchoice_context.pending_request_candidates(

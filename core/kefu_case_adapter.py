@@ -101,6 +101,9 @@ _KEFU_ENABLED_SERVICES = frozenset({
     "view_pending_digest", "explain_service",
     "uchoice_inbound_request", "uchoice_outbound_request", "upsert_address",
     "confirm_inbound_completion", "confirm_outbound_completion",
+    # Batch completion -- Kefu only (decision D1 in docs/reviews/active/
+    # 2026-09-batch-completion-confirmation/plan.md).
+    "confirm_inbound_completion_batch", "confirm_outbound_completion_batch",
     "cancel_inbound_request", "cancel_outbound_request",
     "adjust_storage", "recount_storage", "move_storage",
     # Label creation via YiDiDa -- previously Smart-Bot-only despite being
@@ -287,6 +290,8 @@ def _detect_session_conflict(context: dict, ai_response, session) -> str | None:
     current_service = by_id.get(str(session.service_type_id))
     if current_service is None or current_service["name"] == new_name:
         return None
+    if _same_completion_family(current_service["name"], new_name):
+        return None
 
     from core.kefu_turn_apply import _service_label
     last_question = ""
@@ -299,6 +304,52 @@ def _detect_session_conflict(context: dict, ai_response, session) -> str | None:
         case_number=session.case_number or "",
         last_question=last_question,
     ))
+
+
+def _same_completion_family(a: str | None, b: str | None) -> bool:
+    """confirm_X_completion and confirm_X_completion_batch are one flow: a
+    single case pivots into a batch (and back) within the same case, so
+    moving between them is never a session conflict."""
+    from core import completion_batch
+    family = {
+        name: completion_batch.DIRECTION_BY_SERVICE[name]
+        for name in completion_batch.DIRECTION_BY_SERVICE
+    }
+    return a in family and b in family and family[a] == family[b]
+
+
+def _batch_confirm_with_selection_as_continuation(context: dict, session, ai_response):
+    """
+    An AI "confirm" NEVER executes a batch. The only replies that do are
+    matched in code before the AI is called (kefu_turn_apply.
+    deterministic_selection_response): an exact affirmative
+    (completion_batch.AFFIRMATIVE_REPLIES) or a pure number reply. Anything
+    that reaches the AI and comes back as "confirm" is, by construction,
+    something else -- "确认，但第三笔少发两箱", "①③，③少发了2箱", "行吧就这样":
+    - with a selection ("除了第二个都确认"): narrow and show the summary again;
+    - with restated quantities: continuation, where the batch refuses them;
+    - otherwise: ask again. Nothing is touched in any case.
+    """
+    from dataclasses import replace
+    from core import completion_batch
+
+    if ai_response.intent != "confirm" or session is None or session.service_type_id is None:
+        return ai_response
+    current = next(
+        (s for s in context.get("allowed_services") or [] if s.get("service_type_id") == str(session.service_type_id)),
+        None,
+    )
+    if current is None or not completion_batch.is_batch_service(current["name"]):
+        return ai_response
+    if session.status != "pending_confirmation":
+        # No summary has been shown yet (the batch is still asking which
+        # requests) -- there is nothing to confirm; treat it as an answer.
+        return replace(ai_response, intent="continuation")
+    extracted = ai_response.extracted_fields or {}
+    if extracted.get("selection") or any(extracted.get(k) for k in completion_batch.QUANTITY_FIELDS):
+        return replace(ai_response, intent="continuation")
+    context["_batch_reply_ambiguous"] = True
+    return replace(ai_response, intent="continuation", extracted_fields={})
 
 
 def _resolve_turn_service(context: dict, ai_response, session) -> dict | None:
@@ -522,7 +573,13 @@ def _process_turn(
         reply_text = "您的请求已收到并正在处理，如需查询进度请稍后重试或联系管理员。"
     else:
         context = session_manager.build_context(db, access, session, message)
-        ai_response = _ai_chain.process(context)
+        # A pure number reply to a numbered list this case is showing (batch
+        # summary or completion candidate list) is parsed in code, never by
+        # the model -- see kefu_turn_apply.deterministic_selection_response.
+        ai_response = kefu_turn_apply.deterministic_selection_response(context, session, message_content)
+        if ai_response is None:
+            ai_response = _ai_chain.process(context)
+            ai_response = _batch_confirm_with_selection_as_continuation(context, session, ai_response)
 
         denial_reason = _kefu_rollout_denial_reason(context, ai_response, session)
         if denial_reason is not None:

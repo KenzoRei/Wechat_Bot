@@ -162,6 +162,7 @@ class _FakeRequestLog:
         self.origin_session_id = origin_session_id
         self.wechat_openid = "caller"
         self.group_id = None
+        self.source_channel = "smart_robot"
 
 
 class _FakeServiceType:

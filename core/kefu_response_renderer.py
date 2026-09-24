@@ -161,7 +161,8 @@ def _render_field_correction_accepted(o: FieldCorrectionAcceptedOutcome) -> str:
 
 def _render_candidate_ambiguous(o: CandidateAmbiguousOutcome) -> str:
     lines = "\n".join(f"{i}. {opt.label}" for i, opt in enumerate(o.options, start=1))
-    return f"{o.prompt}\n{lines}"
+    footer = "\n".join(o.footer)
+    return f"{o.prompt}\n{lines}\n\n{footer}" if footer else f"{o.prompt}\n{lines}"
 
 
 def _render_candidate_none_eligible(o: CandidateNoneEligibleOutcome) -> str:

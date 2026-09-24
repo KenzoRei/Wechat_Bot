@@ -5,6 +5,12 @@ from models.group import GroupConfig, GroupMember, GroupService
 from models.service import ServiceType
 from models.role import Role, RoleServicePermission
 
+# Services whose turn machinery exists only in the Kefu pipeline.
+KEFU_ONLY_SERVICE_NAMES = frozenset({
+    "confirm_inbound_completion_batch",
+    "confirm_outbound_completion_batch",
+})
+
 
 @dataclass
 class AccessResult:
@@ -116,6 +122,10 @@ def check_access(
             "awaits_completion":        st.awaits_completion,
         }
         for gs, st in rows
+        # Kefu-only services (batch completion -- its selection/execution
+        # machinery lives only in core/kefu_turn_apply.py). Grants are
+        # global, so they'd otherwise reach Smart Robot's AI too.
+        if st.name not in KEFU_ONLY_SERVICE_NAMES
     ]
 
     return AccessResult(

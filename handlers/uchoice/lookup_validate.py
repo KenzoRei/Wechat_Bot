@@ -116,5 +116,6 @@ class LookupAndValidateCompletionHandler(BaseHandler):
             "warehouse_code":  warehouse_code,
             "original_fields": original_fields,
             "direction":       direction,
+            "source_channel":  target.source_channel,
         }
         return {"warehouse_code": warehouse_code}

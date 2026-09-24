@@ -14,6 +14,7 @@ from handlers.uchoice.storage_txns import (
 )
 from handlers.uchoice.pdf_stub import GeneratePdfStubHandler
 from handlers.uchoice.complete_request import CompleteExistingRequestHandler
+from handlers.uchoice.complete_batch import RunCompletionBatchHandler
 from handlers.uchoice.cancel_request import (
     LookupAndValidateCancellationHandler,
     CancelExistingRequestHandler,
@@ -48,6 +49,7 @@ HANDLER_REGISTRY: dict[str, type] = {
     "move_storage_txn":               MoveStorageHandler,
     "generate_pdf_stub":              GeneratePdfStubHandler,
     "complete_existing_request":      CompleteExistingRequestHandler,
+    "run_completion_batch":           RunCompletionBatchHandler,
     "lookup_and_validate_cancellation": LookupAndValidateCancellationHandler,
     "cancel_existing_request":        CancelExistingRequestHandler,
     "notify_cancelled_request":       NotifyCancelledRequestHandler,
