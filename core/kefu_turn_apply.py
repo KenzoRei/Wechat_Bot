@@ -109,7 +109,7 @@ def _candidate_label(candidate: dict) -> str:
     return f'{serial}（{"，".join(detail)}）' if detail else serial
 
 
-def _resolve_reference_serial(context: dict, session, service: dict) -> str | None:
+def _resolve_reference_serial(context: dict, session, service: dict) -> tuple[str | None, bool]:
     """
     reference_serial ambiguity/absence for a targets_existing_request
     service is resolved deterministically against the injected pending-
@@ -127,18 +127,23 @@ def _resolve_reference_serial(context: dict, session, service: dict) -> str | No
     candidate auto-fill instruction (candidates_block's "恰好 1 条" rule) --
     a purely mechanical decision that doesn't need AI judgment at all.
 
-    Returns the deterministic reply to send if resolution isn't complete
-    (ambiguous or none pending), or None if reference_serial is already
-    resolved -- either it already was, or exactly one candidate existed
-    and got filled in here -- and the caller should proceed normally.
+    Returns ``(reply, keep_open)``. ``reply`` is the deterministic message
+    to send if resolution isn't complete (ambiguous or none pending), or
+    None if reference_serial is already resolved -- either it already was,
+    or exactly one candidate existed and got filled in here -- and the
+    caller should proceed normally. ``keep_open`` is True only for the
+    ambiguous case: the case must stay active so the staff's next message
+    ("第二条", a pasted serial) continues it. Discarding it there made that
+    answer arrive with no open case and fall through to "unrecognized"
+    (observed live on REQ-20260924-000088).
     """
     fields = session.collected_fields or {}
     if fields.get("reference_serial"):
-        return None
+        return None, False
 
     key_info = _PENDING_CANDIDATE_KEYS.get(service.get("name"))
     if key_info is None:
-        return None
+        return None, False
     candidate_key, label = key_info
     candidates = (context.get("uchoice_candidates") or {}).get(candidate_key) or []
 
@@ -148,24 +153,24 @@ def _resolve_reference_serial(context: dict, session, service: dict) -> str | No
     if not candidates:
         return render_kefu_outcome(CandidateNoneEligibleOutcome(
             explanation=f"当前没有待处理的{label}，无需操作。"
-        ))
+        )), False
     if len(candidates) == 1:
         serial = candidates[0].get("serial_number")
         if serial:
             session.collected_fields = {**fields, "reference_serial": serial}
             context["collected_fields"] = session.collected_fields
-        return None
+        return None, False
 
     options = tuple(
         CandidateOption(candidate_key=c["serial_number"], label=_candidate_label(c))
         for c in candidates if c.get("serial_number")
     )
     if len(options) < 2:
-        return None
+        return None, False
     return render_kefu_outcome(CandidateAmbiguousOutcome(
         prompt=f"当前有多个待处理的{label}，请问是哪一条？",
         options=options,
-    ))
+    )), True
 
 
 def _address_decision(db: DBSession, context: dict, ai_response):
@@ -932,10 +937,18 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
     # assumptions"). core/uchoice_customer.py's resolve_and_lock_customer
     # and core/uchoice_context.customer_candidates() remain as dormant,
     # reusable infrastructure for whenever a real second tenant exists.
+    # A targets_existing_request case kept open across an ambiguous-candidate
+    # question still points at its own placeholder log on the next turn, so
+    # "created this turn" alone would leak it on a later rejection. A real
+    # target never qualifies: its origin_session_id is its own original case.
+    owns_placeholder = log_created_this_turn or (
+        service.get("targets_existing_request", False)
+        and log is not None and log.origin_session_id == session.session_id
+    )
     if service.get("targets_existing_request", False):
-        serial_reply = _resolve_reference_serial(context, session, service)
+        serial_reply, keep_open = _resolve_reference_serial(context, session, service)
         if serial_reply is not None:
-            if log_created_this_turn:
+            if owns_placeholder and not keep_open:
                 _discard_placeholder_log(db, session, log)
             context["_reply"] = serial_reply
             _append(session, "assistant", serial_reply)
@@ -964,7 +977,7 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
     if service.get("targets_existing_request", False):
         target, target_error = _resolve_existing_target(db, session, log)
         if target_error:
-            if log_created_this_turn:
+            if owns_placeholder:
                 _discard_placeholder_log(db, session, log)
             else:
                 session.status = "cancelled"

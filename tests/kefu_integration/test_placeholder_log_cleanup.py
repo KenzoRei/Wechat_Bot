@@ -255,3 +255,133 @@ def test_wrong_status_serial_discards_placeholder_and_leaves_real_target_untouch
             cleanup_db.commit()
         finally:
             cleanup_db.close()
+
+
+# ---------------------------------------------------------------------------
+# Ambiguous candidates must keep the case open for the staff's answer.
+#
+# Live regression (2026-09-24): "确认发货" with two pending outbound requests
+# got the deterministic "当前有多个待处理的出库申请，请问是哪一条？" listing,
+# but the same turn also discarded the placeholder and cancelled the case --
+# so the staff's answer ("REQ-20260924-000088" / "第二条") arrived with no
+# open case and was answered "抱歉，没能理解您需要哪项服务".
+# ---------------------------------------------------------------------------
+
+def _seed_cancelable_outbound(db, staff, count):
+    """Processing uchoice_outbound_request rows submitted by this staff --
+    exactly what cancelable_request_candidates() lists for a non-admin."""
+    from models.request_log import RequestLog
+    from models.service import ServiceType
+    outbound_type = db.query(ServiceType).filter_by(name="uchoice_outbound_request").one()
+    rows = []
+    for i in range(count):
+        row = RequestLog(
+            group_id=staff.group_id,
+            service_type_id=outbound_type.service_type_id,
+            status="processing",
+            raw_message=f"ambiguity fixture {i}",
+            source_channel="kefu",
+            submitted_by_staff_id=staff.staff_id,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        rows.append(row)
+    return rows
+
+
+def _run_scripted_turn(monkeypatch, staff, msgid, content, ai_response):
+    monkeypatch.setattr(adapter._ai_chain, "process", lambda context: ai_response)
+    processor = adapter.make_case_turn_processor(client=None, db_factory=SessionLocal)
+    identity = KefuIdentity(open_kfid=staff.open_kfid, external_userid=staff.external_userid)
+    return processor(identity=identity, message_content=content, message_meta={"msgid": msgid}, case_number_hint=None)
+
+
+def _latest_session(db, staff_id):
+    from models.session import ConversationSession
+    return (
+        db.query(ConversationSession)
+        .filter(ConversationSession.opened_by_staff_id == staff_id)
+        .order_by(ConversationSession.created_at.desc())
+        .first()
+    )
+
+
+def _ask_which_one(monkeypatch, staff):
+    """Turn 1: no reference given, two eligible candidates."""
+    msgid = f"leak-ambig1-{uuid.uuid4().hex[:12]}"
+    result = _run_scripted_turn(monkeypatch, staff, msgid, "取消出库", _canned_cancel_response())
+    assert "请问是哪一条" in result.reply_text
+    return msgid
+
+
+def test_ambiguous_candidates_keep_case_open_and_answer_continues_it(monkeypatch, staff):
+    db = SessionLocal()
+    try:
+        first, second = _seed_cancelable_outbound(db, staff, 2)
+        second_serial, second_id = second.serial_number, second.log_id
+    finally:
+        db.close()
+
+    msgid1 = _ask_which_one(monkeypatch, staff)
+
+    db = SessionLocal()
+    try:
+        from models.request_log import RequestLog
+        session = _latest_session(db, staff.staff_id)
+        assert session.status == "active", \
+            "an ambiguous-candidate question must leave the case open for the answer"
+        placeholder = db.query(RequestLog).filter_by(wechat_msg_id=msgid1).one()
+        assert session.request_log_id == placeholder.log_id
+        session_id = session.session_id
+    finally:
+        db.close()
+
+    # Turn 2: the staff picks one. A continuation of the open case -- the AI
+    # maps "第二条" to the serial from the listing in conversation_history.
+    msgid2 = f"leak-ambig2-{uuid.uuid4().hex[:12]}"
+    result = _run_scripted_turn(monkeypatch, staff, msgid2, "第二条", AIResponse(
+        intent="continuation",
+        reply="",
+        extracted_fields={"reference_serial": second_serial},
+        all_fields_collected=True,
+        service_type_name=None,
+    ))
+    assert "没能理解" not in result.reply_text
+
+    db = SessionLocal()
+    try:
+        from models.request_log import RequestLog
+        session = _latest_session(db, staff.staff_id)
+        assert session.session_id == session_id, "the answer must continue the same case, not open a new one"
+        assert session.status == "pending_confirmation"
+        assert session.request_log_id == second_id, "the case must now point at the chosen real target"
+        assert db.query(RequestLog).filter_by(wechat_msg_id=msgid1).count() == 0, \
+            "the placeholder must be dropped once the real target is adopted"
+        assert db.get(RequestLog, second_id).status == "processing", \
+            "the target itself is untouched until the cancellation is confirmed"
+    finally:
+        db.close()
+
+
+def test_placeholder_kept_open_is_discarded_if_the_answer_is_rejected(monkeypatch, staff):
+    """The placeholder carried over from the ambiguous turn wasn't 'created
+    this turn' on turn 2 -- it must still be cleaned up, not leaked, when
+    the answer names a serial that can't be targeted."""
+    db = SessionLocal()
+    try:
+        _seed_cancelable_outbound(db, staff, 2)
+    finally:
+        db.close()
+
+    msgid1 = _ask_which_one(monkeypatch, staff)
+
+    msgid2 = f"leak-ambig2-{uuid.uuid4().hex[:12]}"
+    _run_scripted_turn(monkeypatch, staff, msgid2, "REQ-99999999-999999", AIResponse(
+        intent="continuation",
+        reply="",
+        extracted_fields={"reference_serial": "REQ-99999999-999999"},
+        all_fields_collected=True,
+        service_type_name=None,
+    ))
+    _assert_no_placeholder_and_session_terminal(msgid1, staff.staff_id)
