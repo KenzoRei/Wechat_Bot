@@ -7,6 +7,19 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.2.2] - 2026-09-24
+
+### Fixed
+- Kefu: picking one of several pending requests no longer fails. When
+  "确认发货" (or any confirm/cancel of an existing inbound/outbound request)
+  matched more than one candidate, the bot listed them and asked
+  "请问是哪一条？" — but the same turn also cancelled the case, so the
+  staff's answer ("第二条", or the pasted serial) arrived with no open case
+  and got "抱歉，没能理解您需要哪项服务". The case now stays open until the
+  staff picks one. Its placeholder request log is still cleaned up if the
+  answer is then rejected (unknown or non-processing serial), instead of
+  being left behind as a stray `pending` row.
+
 ## [1.2.1] - 2026-09-15
 
 ### Fixed
