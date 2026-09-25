@@ -14,8 +14,9 @@ here.
   ADR-011 and superseded the earlier Claude-primary decision.
 - Documented Kefu's service allowlist, migration-runner dry-run side effect,
   and test-environment assumptions.
-- Corrected the voice-alert setting guidance: `0` currently restores the
-  default threshold and does not disable the alert.
+- Clarified the voice-alert settings: an unset or empty variable uses the
+  default threshold, and an explicit `0` disables it. (An earlier edit in
+  this release had wrongly stated that `0` restores the default.)
 
 ## [1.3.0] - 2026-09-25
 
@@ -39,8 +40,7 @@ here.
   - The transcript is saved once, so retries reuse it (no double charge, no
     different wording). The audio itself is not stored.
   - A daily usage alert (log-only, never blocks) fires at 500 clips or
-    60 audio-minutes per UTC day. The original `0`-disables guidance was
-    incorrect; current parsing restores the default when set to `0`.
+    60 audio-minutes per UTC day; configurable, and `0` disables.
   - New optional settings: `OPENAI_TRANSCRIBE_MODEL`,
     `OPENAI_TRANSCRIBE_API_KEY`, `VOICE_ALERT_DAILY_CLIPS`,
     `VOICE_ALERT_DAILY_MINUTES` (see `docs/reference/configuration.md`).

@@ -40,15 +40,16 @@ Voice messages from Kefu staff are transcribed with OpenAI (`core/kefu_voice.py`
 |---|---|---|
 | `OPENAI_TRANSCRIBE_MODEL` | `gpt-transcribe` | Transcription model. `gpt-4o-transcribe`, `gpt-4o-mini-transcribe` and `whisper-1` are scheduled for removal on 2027-02-26 |
 | `OPENAI_TRANSCRIBE_API_KEY` | `OPENAI_API_KEY` | A transcription-only key (least privilege). If unset, the main key must allow the transcription model and the audio endpoint |
-| `VOICE_ALERT_DAILY_CLIPS` | `500` | Log one WARNING per UTC day when successful transcriptions reach this count |
-| `VOICE_ALERT_DAILY_MINUTES` | `60` | Same, for total transcribed audio minutes |
+| `VOICE_ALERT_DAILY_CLIPS` | `500` | Log one WARNING per UTC day when successful transcriptions reach this count; `0` disables |
+| `VOICE_ALERT_DAILY_MINUTES` | `60` | Same, for total transcribed audio minutes; `0` disables |
 
 The alerts are log-only and never block. If the OpenAI project restricts
 models, the transcription model must be on its allowed list.
 
-The current `config.py` treats `0` as an unset value and restores the default
-threshold, so `0` does **not** disable an alert. A code change is needed before
-that disable setting can be relied on.
+`config.py` parses these as `int(os.getenv(name) or default)`: the fallback
+applies to the raw string, so an unset or **empty** variable gives the
+default, while an explicit `0` is kept and disables that threshold. This is
+pinned by `tests/kefu_integration/test_kefu_voice.py::test_usage_alert_is_on_by_default_and_zero_disables`.
 
 ## Test-only configuration
 
