@@ -1,7 +1,7 @@
 # ADR-004: Use Claude API for conversation management and field extraction
 
 **Date:** 2026-04-26
-**Status:** Decided
+**Status:** Superseded by [ADR-011](adr-011-ai-provider-order.md)
 
 ## Decision
 Use Claude API (claude-sonnet-4-20250514) as the AI provider for conversation management, service classification, field extraction, and input normalization. Accessed through an adapter pattern to allow future provider substitution.

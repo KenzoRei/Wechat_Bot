@@ -9,10 +9,10 @@ to the platform, written from what was actually learned building the U-Choice
 services. Follow this order — each step depends on the one before it.
 
 There is no code generator for any of this; every step is a manual edit to one
-of a small number of well-known files. That's deliberate — the registry
-pattern (`HANDLER_REGISTRY` / `CONFIRMATION_BUILDERS` / `RESULT_BUILDERS`) keeps
-each new service's code isolated to its own small function, so "add a service"
-never means touching a big switch statement.
+of a small number of well-known files. The registry pattern
+(`HANDLER_REGISTRY` / `CONFIRMATION_BUILDERS` / `RESULT_BUILDERS`) keeps
+business handling localized. Kefu also has a separate rollout allowlist;
+registering a handler alone does not make a service available there.
 
 ---
 
@@ -56,7 +56,7 @@ these columns — nothing new to add unless you need a genuinely new flag):
 matching a vague message to your new service — the `name` field is an opaque
 snake_case string the model can't reason about on its own. A terse or missing
 description is the single most common reason a new service silently gets
-ignored in favor of `check_services` — see §8.
+ignored in favor of `check_services` — see §9.
 
 **`confirmation_note` must be Chinese.** Every note in the seed data was
 originally written in English and had to be translated in a follow-up
@@ -168,7 +168,7 @@ follow them:**
   `wechat_openid`, role names, and `charge_type` to their human labels via
   the shared helpers in §3, every time, in both the confirmation and the
   response (§5). This is the same class of bug as leaking `service_type.name`
-  in AI replies (§8) — a code meant for the backend, shown to a person.
+  in AI replies (§9) — a code meant for the backend, shown to a person.
 - **Surface every AI assumption explicitly**, don't silently apply it — the
   largest-bucket default for a missing `boxes_per_pallet`, the
   create-vs-update mode for `upsert_address`, the computed diff for
@@ -230,7 +230,7 @@ person's name. Three places, always together:
    follow-ups like "后面那个", the empty-`required`-array
    `all_fields_collected` rule) only started working reliably once a literal
    before/after example was added. Don't skip straight to shipping the
-   abstract rule — test it (§8), and if it's inconsistent, add the example.
+   abstract rule — test it (§9), and if it's inconsistent, add the example.
 
 ---
 
@@ -265,7 +265,22 @@ creating one (the `confirm_*_completion` pattern):
 
 ---
 
-## 8. Test before you push — every time, no exceptions
+## 8. Enable the intended channels
+
+For Smart Bot, verify that the service is available through its normal
+group/role grants and that it is not incorrectly listed in
+`core/access_control.py`'s `KEFU_ONLY_SERVICE_NAMES`.
+
+For Kefu, add the service to `core/kefu_case_adapter.py`'s
+`_KEFU_ENABLED_SERVICES` only after its Kefu turn, confirmation, replay and
+delivery paths work. Kefu filters the AI's selected service through this set;
+a service can have a role grant and a registered handler yet still be denied.
+Check the separate visibility set used by `check_services` as well, so the
+list shown to staff matches what they can invoke. Kefu-only commands or
+services may also need entries in `KEFU_ONLY_SERVICE_NAMES` to stay out of
+Smart Bot's available-service list.
+
+## 9. Test before you push — every time, no exceptions
 
 Everything in this codebase that touches AI behavior was wrong on the first
 attempt at least once, and every fix was found by actually running it, never

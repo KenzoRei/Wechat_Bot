@@ -1,6 +1,11 @@
 # Test suites
 
-The default suite is offline and must not contact operational services:
+The default suite is offline and must not contact operational services. The
+test harness supplies inert defaults only for environment variables that
+are unset. Clear any inherited `DATABASE_URL` and provider credentials before
+running locally; an existing value overrides the inert default. The harness
+blocks `requests` traffic and the known production database host, but those
+checks are not a substitute for a disposable test environment.
 
 ```powershell
 python -m pip install -r requirements-dev.txt

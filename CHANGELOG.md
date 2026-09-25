@@ -7,6 +7,16 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.3.1] - 2026-09-25
+
+### Documentation
+- Recorded the implemented OpenAI-first, Claude-fallback provider order in
+  ADR-011 and superseded the earlier Claude-primary decision.
+- Documented Kefu's service allowlist, migration-runner dry-run side effect,
+  and test-environment assumptions.
+- Corrected the voice-alert setting guidance: `0` currently restores the
+  default threshold and does not disable the alert.
+
 ## [1.3.0] - 2026-09-25
 
 ### Added
@@ -29,7 +39,8 @@ here.
   - The transcript is saved once, so retries reuse it (no double charge, no
     different wording). The audio itself is not stored.
   - A daily usage alert (log-only, never blocks) fires at 500 clips or
-    60 audio-minutes per UTC day; configurable, and `0` disables.
+    60 audio-minutes per UTC day. The original `0`-disables guidance was
+    incorrect; current parsing restores the default when set to `0`.
   - New optional settings: `OPENAI_TRANSCRIBE_MODEL`,
     `OPENAI_TRANSCRIBE_API_KEY`, `VOICE_ALERT_DAILY_CLIPS`,
     `VOICE_ALERT_DAILY_MINUTES` (see `docs/reference/configuration.md`).

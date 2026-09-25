@@ -9,6 +9,12 @@ The project does not use Alembic or Flyway. `scripts/apply_migrations.py`
 applies migrations numerically and records completed versions in
 `public.schema_migrations`.
 
+If an existing database has schema objects from migrations that predate the
+ledger, do not run the migration runner against an empty ledger: it will try
+to replay V1 against existing objects. Verify the actual schema and applied
+migration history for that environment before recording any baseline versions.
+Recording a version does not execute or validate its SQL.
+
 ## Rules
 
 1. Never edit a migration already applied to a persistent environment.
@@ -27,6 +33,10 @@ Inspect pending migrations without applying them:
 ```powershell
 python scripts/apply_migrations.py --database-url "postgresql://..." --dry-run
 ```
+
+The current runner creates and commits `public.schema_migrations` if it is
+missing **before** checking `--dry-run`. The command does not apply migration
+SQL, but it is not strictly read-only on a database without that table.
 
 For disposable database provisioning and the V1 `search_path` caveat, see
 [Local PostgreSQL test database](../testing/local-postgresql.md).

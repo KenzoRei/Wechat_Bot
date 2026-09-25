@@ -4,7 +4,9 @@ ADRs are immutable decision records. When a decision changes, mark the old ADR
 superseded and add a new ADR; do not rewrite the original rationale as though it
 never existed.
 
-Current records include ADR-008, which supersedes ADR-005's Railway production
+Current records include ADR-011, which supersedes ADR-004's Claude-primary
+provider choice with the implemented OpenAI-first, Claude-fallback chain;
+ADR-008, which supersedes ADR-005's Railway production
 hosting choice with Render; ADR-010, which supersedes ADR-007's group-level
 permission model with the global `role_service_permission` model and
 consolidates role/service policy attributes (customer identity, warehouse
