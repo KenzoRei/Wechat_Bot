@@ -7,6 +7,75 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.3.0] - 2026-09-25
+
+### Added
+- **Kefu voice input.** A voice message from an authorized staff member is
+  downloaded from WeCom, checked as AMR (60-second cap, measured before any
+  paid call), converted to WAV, transcribed with OpenAI `gpt-transcribe`
+  (the current SKU codes are sent as vocabulary hints), and then handled
+  exactly like typed text.
+  - Every voice reply starts with what was heard: "🎤 识别内容：…".
+  - **Voice can start, narrow or cancel a request, but can't confirm one.**
+    A voice "确认" gets "语音不能直接确认。请核对上方摘要后，输入文字「确认」。",
+    and voice numbers on a batch summary only narrow it. Admin/system
+    commands (registration, purge) are typed-only.
+  - Temporary transcription failures retry after 20 s / 60 s / 3 min, with
+    a one-time "正在重试" notice. That staff member's later messages wait,
+    so everything is processed in order. Permanent failures (expired
+    audio, over 60 s, nothing recognized) get a fixed reply; the AI never
+    runs on an empty voice message.
+  - Senders who aren't registered, active staff are never transcribed.
+  - The transcript is saved once, so retries reuse it (no double charge, no
+    different wording). The audio itself is not stored.
+  - A daily usage alert (log-only, never blocks) fires at 500 clips or
+    60 audio-minutes per UTC day; configurable, and `0` disables.
+  - New optional settings: `OPENAI_TRANSCRIBE_MODEL`,
+    `OPENAI_TRANSCRIBE_API_KEY`, `VOICE_ALERT_DAILY_CLIPS`,
+    `VOICE_ALERT_DAILY_MINUTES` (see `docs/reference/configuration.md`).
+    New dependency: `imageio-ffmpeg`. Migration `V35`.
+- **Kefu batch completion confirmation.** Warehouse staff can confirm several
+  processing inbound/outbound requests in one turn ("全部确认出库",
+  "确认 086 和 091", or a number reply like "13" to the list).
+  - Code resolves the selection against the numbered list the user saw,
+    capped at 9 per batch.
+  - It runs all-or-nothing, at original quantities. It locks every request,
+    then the full stock scope, and re-checks the pallet picks against what
+    the summary showed before changing stock.
+  - A request cancelled in the meantime, or changed picks, re-shows the
+    summary instead of executing.
+  - Only an exact "确认" or a pure number reply executes; the AI alone never
+    does.
+  - New services `confirm_inbound_completion_batch` /
+    `confirm_outbound_completion_batch`, Kefu only, granted to the same roles
+    as single completion. Migration `V33`.
+- Kefu: image, file, video, location and other non-text messages now get
+  "暂不支持该消息类型，请发送文字或语音。" instead of silently running an AI turn
+  on an empty message. Replies to messages that never became a case use a
+  new delivery target (migration `V34`).
+
+### Changed
+- The outbound completion confirmation now shows the destination company and
+  address.
+- The "申请已完成" group-chat push is no longer sent for requests created
+  through Kefu. Their submitters already get Kefu's own completion notice.
+  Requests created in the group chat still get the push.
+- Kefu inbound messages are now processed strictly in order per staff member
+  (only the oldest outstanding message is claimable, and only when due).
+
+### Fixed
+- Deploy failure: SQLAlchemy is pinned to `>=2.0,<2.1`. The unpinned
+  requirement pulled in 2.1.0, which switched `postgresql://` URLs to the
+  psycopg 3 driver the app doesn't install ("No module named 'psycopg'").
+
+### Upgrade notes
+- **Apply `V35` before deploying this release.** The new Kefu claim query
+  reads its columns, so new code on the old schema would stop all Kefu
+  message processing. `V33`–`V35` only add things the old code ignores, so
+  applying them first is safe. See `docs/operations/migrations.md`.
+- The OpenAI key or project must allow `gpt-transcribe` for voice input, or
+  set `OPENAI_TRANSCRIBE_API_KEY`.
+
 ## [1.2.2] - 2026-09-24
 
 ### Fixed
