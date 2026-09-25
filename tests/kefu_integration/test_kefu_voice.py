@@ -705,6 +705,23 @@ def test_recovered_voice_turn_still_echoes(world, monkeypatch):
     assert reply.startswith("🎤 识别内容：13\n\n您的请求已收到并正在处理")
 
 
+def test_voice_naming_an_unknown_case_still_echoes(fx, monkeypatch):
+    """D2 on the case-resolution denial path (Codex Phase 1 audit, round 3)."""
+    db = SessionLocal()
+    try:
+        identity, _ = fx.staff(db)
+        db.commit()
+    finally:
+        db.close()
+    client = FakeKefuClient()
+    processor = _script_ai(monkeypatch, [], client=client)
+    transcript = "查一下 CASE-20990101-999999"
+    processor(identity=identity, message_content=transcript,
+              message_meta={"msgid": f"voice-{uuid.uuid4().hex}", "input_modality": "voice"},
+              case_number_hint="CASE-20990101-999999")
+    assert client.sent == [f"🎤 识别内容：{transcript}\n\n未找到该案件，请核对案件编号。"]
+
+
 def test_voice_never_triggers_the_admin_purge(fx, monkeypatch):
     from core import kefu_admin_purge
     monkeypatch.setattr(kefu_admin_purge, "_run_purge", lambda db: (_ for _ in ()).throw(AssertionError("purge ran")))

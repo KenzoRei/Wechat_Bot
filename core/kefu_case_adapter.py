@@ -567,8 +567,10 @@ def _process_turn(
     session = _resolve_kefu_session(db, access, case_number_hint)
     if isinstance(session, CaseTurnDenied):
         db.rollback()
-        _direct_send(client, identity, f"kefu-case-denied:{msgid}", _CASE_DENIAL_MESSAGES.get(
-            session.reason, "无法处理该案件，请联系管理员。"
+        # A transcript can carry a case number too; D2 echo applies here.
+        _direct_send(client, identity, f"kefu-case-denied:{msgid}", _with_voice_echo(
+            voice, message_content,
+            _CASE_DENIAL_MESSAGES.get(session.reason, "无法处理该案件，请联系管理员。"),
         ))
         return session
 
