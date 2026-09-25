@@ -298,6 +298,10 @@ keys).
 | `upsert_address` | `...-00000000000a` | customer, warehouseman |
 | `role_change` | `...-00000000000b` | admin |
 | `view_invoice` | `...-00000000000c` | customer, accountant |
+| `cancel_inbound_request` | `...-000000000010` | customer, admin |
+| `cancel_outbound_request` | `...-000000000011` | customer, admin |
+| `confirm_inbound_completion_batch` | `...-000000000012` | same roles as `confirm_inbound_completion` (V33); Kefu only |
+| `confirm_outbound_completion_batch` | `...-000000000013` | same roles as `confirm_outbound_completion` (V33); Kefu only |
 
 Full UUID prefix is `c1000000-0000-0000-0000-` for `service_type_id`,
 `c2000000-0000-0000-0000-` for `workflow_id` — or just `GET

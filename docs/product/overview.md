@@ -2,7 +2,7 @@
 
 **Status:** Current
 **Owner:** Product and operations
-**Last verified against commit:** `f3492b6` (2026-09-15)
+**Last verified against commit:** `3def0eb` (2026-09-25)
 
 The platform turns informal WeCom logistics conversations into validated,
 auditable service requests. It supports carrier-label workflows and U-Choice
@@ -35,6 +35,14 @@ identical transport behavior or response rendering.
   per-group), currently spanning `admin`, `customer`, `warehouseman`,
   `warehouse_admin`, `accountant`, `label_agent`, and `fedex_label_agent`.
 - Kefu staff self-registration into a non-privileged pending state.
+- Kefu batch completion: warehouse staff confirm several processing
+  inbound/outbound requests in one turn ("全部确认出库", "13"),
+  all-or-nothing, at original quantities.
+- Kefu voice input: staff voice messages are transcribed (OpenAI
+  `gpt-transcribe`) and handled like typed text. Every reply echoes what was
+  heard ("🎤 识别内容：…"). Voice can start, narrow or cancel a request, but a
+  confirmation must be typed, and system commands are typed-only. Other
+  non-text messages (image, file, …) get a fixed "暂不支持该消息类型" reply.
 - Admin API and browser panel for configuration and role/staff assignment.
 
 ## Current constraints

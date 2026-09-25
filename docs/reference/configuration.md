@@ -2,7 +2,7 @@
 
 **Status:** Current
 **Owner:** Engineering and operations
-**Last verified against commit:** `f3492b6` (2026-09-15)
+**Last verified against commit:** `3def0eb` (2026-09-25)
 
 Secrets belong in deployment environment variables and a team password
 manager—never source, docs, examples, logs, or test fixtures.
@@ -30,6 +30,21 @@ manager—never source, docs, examples, logs, or test fixtures.
 
 Optional general settings include `CLAUDE_MODEL`, `OPENAI_MODEL`,
 `SESSION_EXPIRY_MINUTES`, and `SERVER_BASE_URL`.
+
+## Kefu voice input (optional)
+
+Voice messages from Kefu staff are transcribed with OpenAI (`core/kefu_voice.py`,
+`core/voice_transcription.py`). All of these are optional:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OPENAI_TRANSCRIBE_MODEL` | `gpt-transcribe` | Transcription model. `gpt-4o-transcribe`, `gpt-4o-mini-transcribe` and `whisper-1` are scheduled for removal on 2027-02-26 |
+| `OPENAI_TRANSCRIBE_API_KEY` | `OPENAI_API_KEY` | A transcription-only key (least privilege). If unset, the main key must allow the transcription model and the audio endpoint |
+| `VOICE_ALERT_DAILY_CLIPS` | `500` | Log one WARNING per UTC day when successful transcriptions reach this count; `0` disables |
+| `VOICE_ALERT_DAILY_MINUTES` | `60` | Same, for total transcribed audio minutes; `0` disables |
+
+The alerts are log-only and never block. If the OpenAI project restricts
+models, the transcription model must be on its allowed list.
 
 ## Test-only configuration
 

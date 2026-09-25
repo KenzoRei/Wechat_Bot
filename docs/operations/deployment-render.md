@@ -2,7 +2,7 @@
 
 **Status:** Current
 **Owner:** Operations
-**Last reviewed:** 2026-09-15
+**Last reviewed:** 2026-09-25
 
 Production runs on Render. Hosting rationale is recorded in
 [ADR-008](../architecture/decisions/adr-008-render-hosting.md).
@@ -11,6 +11,10 @@ Production runs on Render. Hosting rationale is recorded in
 
 1. Back up PostgreSQL before migration or service cutover.
 2. Apply pending SQL migrations in order and record the result operationally.
+   When the new code depends on the new schema, apply them **before** the
+   deploy, from a local checkout against the External Database URL (the
+   Render shell only has the currently deployed code). See
+   [Migrations](migrations.md#migrate-before-or-after-deploying).
 3. Configure channel flags explicitly; do not rely on defaults in production.
 4. Confirm every enabled mode has only its required credentials.
 5. Set `SERVER_BASE_URL` to the deployed HTTPS origin.
@@ -18,7 +22,10 @@ Production runs on Render. Hosting rationale is recorded in
 7. Set a stable `WORKER_INSTANCE_ID` for the scheduler/worker owner.
 8. Deploy and verify `/health/live` followed by `/health/ready`.
 9. Verify disabled routes return 404.
-10. Send a real signed message through each enabled WeCom channel.
+10. Send a real signed message through each enabled WeCom channel. For Kefu,
+    also send one voice message: the reply should start with
+    "🎤 识别内容：". This needs the OpenAI key/project to allow the
+    transcription model; see [Configuration](../reference/configuration.md#kefu-voice-input-optional).
 11. Inspect sessions, request logs, Kefu queues, and scheduled-job logs.
 
 ## Secret rotation

@@ -45,7 +45,7 @@ $env:TEST_DATABASE_URL = "postgresql://wechat_bot_test:<password>@127.0.0.1:5432
 python scripts/apply_migrations.py
 ```
 
-The migration runner applies `db/migrations/V1...V16` numerically and records
+The migration runner applies every `db/migrations/V*.sql` file numerically and records
 completed versions in `public.schema_migrations`. It resets `search_path`
 before each migration because the V1 pg_dump-style baseline clears it for the
 connection. Re-running the command applies only migrations absent from the

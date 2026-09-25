@@ -2,7 +2,7 @@
 
 **Status:** Current
 **Owner:** Engineering
-**Last verified against commit:** `f3492b6` (2026-09-15)
+**Last verified against commit:** `3def0eb` (2026-09-25)
 
 The service is one FastAPI application with two independently gated WeCom
 entry pipelines. Both pipelines use the same PostgreSQL domain data and shared
@@ -51,6 +51,13 @@ Important boundaries:
   transaction.
 - Administrative role invariants count active administrators across both
   `group_member` and `kefu_staff`.
+- Kefu-only features: batch completion confirmation, and voice input.
+  A voice message is transcribed and persisted *before* the case processor
+  (in `core/kefu_sync.run_worker_once` → `core/kefu_voice.py`), then flows
+  through the same text path. The Kefu turn adapter marks it
+  `input_modality: voice`: voice replies echo the transcript, and voice can
+  never execute a confirmation or a system command. Smart Bot doesn't see the
+  batch services (`core/access_control.KEFU_ONLY_SERVICE_NAMES`).
 - `core/customer_directory.py` (customer master data, encrypted OMS/YDD
   credentials) and `core/warehouse_directory.py` (company shipping-origin
   directory) are shared subsystems both channels read from the same way.
@@ -71,7 +78,7 @@ Important boundaries:
 ## External systems
 
 - WeCom Smart Bot and WeCom Kefu
-- Anthropic Claude and OpenAI provider chain
+- Anthropic Claude and OpenAI provider chain; OpenAI transcription for Kefu voice
 - YiDiDa and OMS logistics APIs
 - Render web service and PostgreSQL
 

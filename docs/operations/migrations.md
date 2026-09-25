@@ -2,9 +2,9 @@
 
 **Status:** Current
 **Owner:** Engineering and operations
-**Last verified against commit:** `dbbc00f` (2026-09-15)
+**Last verified against commit:** `3def0eb` (2026-09-25)
 
-Migrations are sequential SQL files under `db/migrations/`, currently V1-V32.
+Migrations are sequential SQL files under `db/migrations/`, currently V1-V35.
 The project does not use Alembic or Flyway. `scripts/apply_migrations.py`
 applies migrations numerically and records completed versions in
 `public.schema_migrations`.
@@ -30,3 +30,37 @@ python scripts/apply_migrations.py --database-url "postgresql://..." --dry-run
 
 For disposable database provisioning and the V1 `search_path` caveat, see
 [Local PostgreSQL test database](../testing/local-postgresql.md).
+
+## Migrate before or after deploying?
+
+Decide per release, by asking whether the **new code** depends on the **new
+schema**:
+
+- **New code reads or writes new columns/tables → migrate first, then
+  deploy.** Otherwise the new code fails against the old schema the moment it
+  starts. Example: V35 had to be applied first, because the new Kefu claim
+  query reads `next_attempt_at`; deploying first would have broken every Kefu
+  message, not only voice.
+- **The migration only adds things the old code ignores** (nullable columns,
+  new tables, new catalog rows) → it's safe to apply while the old code runs,
+  which makes "migrate first" the default choice.
+- **Only the reverse is unsafe:** a migration that removes or renames
+  something the running code still uses has to wait until code that no longer
+  uses it is deployed.
+
+**Running a migration before its code is deployed:** the Render shell only
+contains the *currently deployed* code, so it doesn't have the new migration
+file yet. Run it from a local checkout of the commit you're about to deploy,
+against the database's **External Database URL** (Render dashboard →
+database → Connections; the short internal host only resolves inside
+Render):
+
+```powershell
+python scripts/apply_migrations.py --database-url "<External Database URL>" --dry-run
+python scripts/apply_migrations.py --database-url "<External Database URL>"
+```
+
+Check that the dry run lists exactly the expected pending versions. Note that
+the script's production-host guard (`_PRODUCTION_HOST_FRAGMENT`) still names
+an earlier database host, so it does not currently recognize the production
+database. Double-check the URL yourself.

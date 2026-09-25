@@ -2,7 +2,7 @@
 
 **Status:** Current
 **Owner:** Engineering
-**Last verified against commit:** `f3492b6` (2026-09-15)
+**Last verified against commit:** `3def0eb` (2026-09-25)
 
 | Path | Responsibility |
 |---|---|
@@ -12,7 +12,9 @@
 | `middleware/` | Cross-cutting request middleware — `admin_auth.py` enforces `X-Admin-Key` on every `/admin` route |
 | `ai/` | Provider adapters, prompt construction, provider chain |
 | `core/workflow_engine.py` | Smart Bot orchestration |
-| `core/kefu_*` | Kefu sync, durable turn application, rendering and delivery |
+| `core/kefu_*` | Kefu sync, durable turn application, rendering and delivery; `kefu_unsupported.py` (fixed reply for non-text messages) and `kefu_voice.py` (voice → persisted transcript, retry/backoff, before the AI) |
+| `core/voice_transcription.py` | AMR validation/duration, AMR→WAV (pip `imageio-ffmpeg`), OpenAI transcription, retryable/terminal error classes |
+| `core/completion_batch.py` | Batch completion confirmation: number-reply parsing, selection resolution, and pick-allocation simulation (executed by `handlers/uchoice/complete_batch.py`) |
 | `core/uchoice_*` | Shared U-Choice domain behavior |
 | `core/customer_directory.py` | Customer master data + encrypted OMS/YDD credentials, `billing_customer_id` resolution |
 | `core/warehouse_directory.py` | Company shipping-origin directory (distinct from U-Choice's own warehouse codes) |

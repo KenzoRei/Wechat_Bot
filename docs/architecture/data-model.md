@@ -2,7 +2,7 @@
 
 **Status:** Current overview
 **Owner:** Engineering
-**Last verified against commit:** `dbbc00f` (2026-09-15)
+**Last verified against commit:** `3def0eb` (2026-09-25)
 
 PostgreSQL schema is defined by the ordered SQL files in `db/migrations/` and
 represented at runtime by models in `models/`. If this overview conflicts with
@@ -16,7 +16,7 @@ a constraint or column in those sources, the migration/model is authoritative.
 | Service catalog | `service_type`, `workflow`, `workflow_step` |
 | Conversation lifecycle | `conversation_session`, `request_log`, `interaction_log` |
 | U-Choice | `uchoice_customer`, `uchoice_sku`, `uchoice_storage`, `uchoice_storage_txn`, `uchoice_address`, fee/digest tables |
-| Kefu identities and durability | `kefu_staff`, `case_turn`, `case_execution`, staff-case context, inbound/sync/delivery tables |
+| Kefu identities and durability | `kefu_staff`, `case_turn`, `case_execution`, staff-case context, inbound/sync/delivery tables, `kefu_voice_usage_alert` |
 | Customer master data and labels | `customer`, `customer_credential`, `label_shipment` |
 | Company warehouse directory | `company_warehouse` |
 
@@ -36,6 +36,15 @@ a constraint or column in those sources, the migration/model is authoritative.
   from Smart Bot processing.
 - U-Choice inventory mutation is recorded in transaction history and protected
   by PostgreSQL locking/constraints.
+- `kefu_inbound_message` is processed strictly in order per staff identity:
+  only the oldest outstanding (pending/claimed) row is claimable, and only
+  when due (`next_attempt_at`). A voice row also carries its transcript,
+  persisted once before the AI runs (`transcript`, `transcript_status`,
+  `transcript_duration_ms`, `transcribe_attempts`; V35).
+- `kefu_outbound_delivery` targets exactly one of `session_id`,
+  `request_log_id` or `inbound_message_msgid` (V34). The last is used for a
+  reply to a message that never became a case turn (unsupported type, voice
+  failure/retry notices).
 
 ## Authorization model
 
@@ -81,9 +90,10 @@ caught before it shipped.
 
 ## Migration authority
 
-Migrations are sequential SQL files, currently V1 through V32. They are
-forward-only operational SQL; the project does not currently use Alembic,
-Flyway, or a schema-version ledger. See [Migrations](../operations/migrations.md).
+Migrations are sequential SQL files, currently V1 through V35. They are
+forward-only operational SQL applied by `scripts/apply_migrations.py`, which
+records applied versions in `public.schema_migrations` (no Alembic or
+Flyway). See [Migrations](../operations/migrations.md).
 
 The previous detailed V1/V3–V8 data dictionary is preserved as
 [historical design](../archive/designs/data-model-v2.1.md).
