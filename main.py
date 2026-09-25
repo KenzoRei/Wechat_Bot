@@ -144,7 +144,10 @@ if config.KEFU_ENABLED:
             print(f"[main] Kefu sync failed: {e}", flush=True)
 
     def _run_kefu_worker_job():
-        kefu_sync.run_worker_once(SessionLocal, _kefu_processor, worker_id=_WORKER_INSTANCE_ID)
+        kefu_sync.run_worker_once(
+            SessionLocal, _kefu_processor, worker_id=_WORKER_INSTANCE_ID,
+            media_client=_kefu_client,  # enables voice input (core/kefu_voice.py)
+        )
 
     def _run_kefu_delivery_job():
         kefu_delivery_worker.run_delivery_sweep(SessionLocal, _kefu_client, kefu_artifact_loader.load_artifact)

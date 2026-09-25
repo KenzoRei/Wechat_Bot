@@ -12,3 +12,4 @@ apscheduler
 pydantic
 openpyxl
 reportlab
+imageio-ffmpeg

@@ -86,12 +86,21 @@ def test_case_number_hint_is_only_an_explicit_full_identifier(content, expected)
     assert extract_case_number_hint(content) == expected
 
 
-def test_claim_sql_retains_lock_companion_guard_and_deterministic_order():
-    sql = str(CLAIM_SQL).lower()
-    assert "not exists" in sql
-    assert "lease_expires_at >= now()" in sql
-    assert "order by candidate.received_at, candidate.msgid" in sql
-    assert "for update skip locked" in sql
+def test_claim_sql_claims_only_the_oldest_outstanding_row_when_due():
+    """Audio-input plan D7: an identity's messages are strictly ordered.
+    Only its oldest outstanding (pending/claimed) row is eligible -- which
+    also means nothing is claimable while that row holds a live lease (the
+    old NOT EXISTS guard's job) -- and only when due. Behavior is covered
+    against PostgreSQL in tests/kefu_integration/test_kefu_voice.py."""
+    sql = " ".join(str(CLAIM_SQL).lower().split())
+    assert "oldest.status in ('pending', 'claimed')" in sql
+    assert "order by oldest.received_at, oldest.msgid" in sql
+    assert "q.next_attempt_at is null or q.next_attempt_at <= now()" in sql
+    assert "q.status = 'claimed' and q.lease_expires_at < now()" in sql
+    # SKIP LOCKED would let a newer message jump past a momentarily locked
+    # oldest row; claimers are serialized per identity by claim_next's
+    # advisory lock instead.
+    assert "skip locked" not in sql
 
 
 class FakeCursor:

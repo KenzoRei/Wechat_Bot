@@ -826,8 +826,14 @@ def deterministic_selection_response(context: dict, session, content: str):
     def continuation(extracted: dict) -> AIResponse:
         return AIResponse(intent="continuation", reply="", extracted_fields=extracted, all_fields_collected=False, service_type_name=None)
 
+    # Voice (audio-input plan, D5): a transcript never executes. An exact
+    # affirmative isn't special-cased here (the adapter answers any voice
+    # "confirm" with the typed-确认 reply), and a number reply only narrows
+    # the batch -- it re-renders the summary instead of confirming a subset.
+    voice = context.get("_input_modality") == "voice"
+
     if completion_batch.is_batch_service(service["name"]) and session.status == "pending_confirmation":
-        if completion_batch.is_affirmative(content):
+        if not voice and completion_batch.is_affirmative(content):
             return AIResponse(intent="confirm", reply="", extracted_fields={}, all_fields_collected=False, service_type_name=None)
         serials = fields.get("reference_serials") or []
         parsed = completion_batch.parse_partial_reply(content, len(serials))
@@ -836,6 +842,8 @@ def deterministic_selection_response(context: dict, session, content: str):
         if parsed == completion_batch.AMBIGUOUS:
             context["_batch_reply_ambiguous"] = True
             return continuation({})
+        if voice:
+            return continuation({"selection": {"indices": parsed}})
         context["_batch_confirm_indices"] = parsed
         return AIResponse(intent="confirm", reply="", extracted_fields={}, all_fields_collected=False, service_type_name=None)
 

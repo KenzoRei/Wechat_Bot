@@ -171,6 +171,15 @@ class KefuInboundMessage(Base):
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     attempt_count:    Mapped[int]            = mapped_column(Integer, nullable=False, default=0)
     last_error:       Mapped[str | None]     = mapped_column(Text)
+    # V35 -- voice input (core/kefu_voice.py): the transcript is persisted
+    # once, before the AI runs, so a retry/takeover reuses it.
+    transcript:             Mapped[str | None]      = mapped_column(Text)
+    transcript_status:      Mapped[str | None]      = mapped_column(String(20))
+    transcript_provider:    Mapped[str | None]      = mapped_column(String(64))
+    transcribed_at:         Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    transcript_duration_ms: Mapped[int | None]      = mapped_column(Integer)
+    transcribe_attempts:    Mapped[int]             = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at:        Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class KefuOutboundDelivery(Base):

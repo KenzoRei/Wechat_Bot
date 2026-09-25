@@ -124,6 +124,18 @@ CLAUDE_MODEL   = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 OPENAI_API_KEY = _require("OPENAI_API_KEY")
 OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o")
 
+# Kefu voice input (core/kefu_voice.py). OPENAI_TRANSCRIBE_API_KEY is an
+# optional transcription-only key (least privilege); unset falls back to
+# OPENAI_API_KEY, which then must allow the model and the audio endpoint.
+OPENAI_TRANSCRIBE_MODEL   = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-transcribe")
+OPENAI_TRANSCRIBE_API_KEY = os.getenv("OPENAI_TRANSCRIBE_API_KEY") or OPENAI_API_KEY
+# Daily usage alert thresholds (UTC day) -- log-only, never a block. On by
+# default at the approved starting values (user decision D6, 2026-09-25:
+# 500 clips / 60 audio-minutes per day); set a variable to 0 to disable that
+# threshold.
+VOICE_ALERT_DAILY_CLIPS   = int(os.getenv("VOICE_ALERT_DAILY_CLIPS") or 500)
+VOICE_ALERT_DAILY_MINUTES = int(os.getenv("VOICE_ALERT_DAILY_MINUTES") or 60)
+
 # Admin
 ADMIN_API_KEY = _require("ADMIN_API_KEY")
 

@@ -42,16 +42,19 @@ UNSUPPORTED_REPLY = "暂不支持该消息类型，请发送文字或语音。"
 VOICE_NOT_YET_REPLY = "暂不支持语音，请发送文字。"
 
 
-def reply_for(msgtype: str) -> str | None:
-    """None for text (handled normally); the fixed reply otherwise."""
+def reply_for(msgtype: str, *, voice_supported: bool = False) -> str | None:
+    """None for text, and for voice once transcription is available
+    (core/kefu_voice.py handles it); the fixed reply otherwise."""
     if msgtype == "text":
         return None
     if msgtype == "voice":
-        return VOICE_NOT_YET_REPLY
+        return None if voice_supported else VOICE_NOT_YET_REPLY
     return UNSUPPORTED_REPLY
 
 
-def handle_if_unsupported(db_factory: Callable[[], Session], turn: KefuInboundTurn) -> bool:
+def handle_if_unsupported(
+    db_factory: Callable[[], Session], turn: KefuInboundTurn, *, voice_supported: bool = False,
+) -> bool:
     """
     Returns True when this turn was dealt with here -- either fully handled
     (reply queued, inbox row processed) or, on a failure, released back to
@@ -59,7 +62,7 @@ def handle_if_unsupported(db_factory: Callable[[], Session], turn: KefuInboundTu
     when the caller should run the normal processor (a text message, or a
     sender who isn't authorized).
     """
-    reply = reply_for(turn.msgtype)
+    reply = reply_for(turn.msgtype, voice_supported=voice_supported)
     if reply is None:
         return False
     try:

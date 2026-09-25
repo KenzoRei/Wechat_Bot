@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Callable
 
-from sqlalchemy import select, text
+from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -17,34 +17,37 @@ from core.kefu_contracts import CaseTurnProcessor, KefuIdentity, KefuInboundTurn
 from models.kefu import KefuInboundMessage, KefuSyncCursor
 
 
+# An identity's messages are processed strictly in order: only its OLDEST
+# outstanding row (pending or claimed) is ever eligible, and only when it's
+# due -- pending with no future next_attempt_at, or claimed with an expired
+# lease. A voice message waiting to retry transcription therefore holds that
+# staff member's later messages behind it (audio-input plan, user decision
+# D7). Plain FOR UPDATE, not SKIP LOCKED: skipping a momentarily locked
+# oldest row would let a newer message jump ahead of it. Claimers of the
+# same identity are already serialized by claim_next's advisory lock.
+_CLAIMABLE = (
+    "((q.status = 'pending' AND (q.next_attempt_at IS NULL OR q.next_attempt_at <= now())) "
+    "OR (q.status = 'claimed' AND q.lease_expires_at < now()))"
+)
+
 CLAIM_SQL = text(
-    """
-    UPDATE kefu_inbound_message
+    f"""
+    UPDATE kefu_inbound_message AS q
     SET status = 'claimed', claimed_by = :worker, claimed_at = now(),
         lease_expires_at = now() + make_interval(secs => :lease_seconds),
-        attempt_count = attempt_count + 1, last_error = NULL
-    WHERE msgid = (
-      SELECT candidate.msgid
-      FROM kefu_inbound_message AS candidate
-      WHERE candidate.open_kfid = :open_kfid
-        AND candidate.external_userid = :external_userid
-        AND (
-          candidate.status = 'pending'
-          OR (candidate.status = 'claimed' AND candidate.lease_expires_at < now())
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM kefu_inbound_message AS outstanding
-          WHERE outstanding.open_kfid = :open_kfid
-            AND outstanding.external_userid = :external_userid
-            AND outstanding.status = 'claimed'
-            AND outstanding.lease_expires_at >= now()
-            AND outstanding.msgid <> candidate.msgid
-        )
-      ORDER BY candidate.received_at, candidate.msgid
+        attempt_count = q.attempt_count + 1, last_error = NULL
+    WHERE q.msgid = (
+      SELECT oldest.msgid
+      FROM kefu_inbound_message AS oldest
+      WHERE oldest.open_kfid = :open_kfid
+        AND oldest.external_userid = :external_userid
+        AND oldest.status IN ('pending', 'claimed')
+      ORDER BY oldest.received_at, oldest.msgid
       LIMIT 1
-      FOR UPDATE SKIP LOCKED
+      FOR UPDATE
     )
-    RETURNING msgid, open_kfid, external_userid, payload, received_at
+      AND {_CLAIMABLE}
+    RETURNING q.msgid, q.open_kfid, q.external_userid, q.payload, q.received_at
     """
 )
 
@@ -177,17 +180,24 @@ def sync_available_messages(
 
 
 def ready_identities(db: Session, limit: int = 100) -> list[KefuIdentity]:
+    """Identities whose OLDEST outstanding message is claimable now -- the
+    same rule CLAIM_SQL applies, so an identity held behind a voice message
+    in backoff isn't polled for nothing."""
     rows = db.execute(
-        select(KefuInboundMessage.open_kfid, KefuInboundMessage.external_userid)
-        .where(
-            (KefuInboundMessage.status == "pending")
-            | (
-                (KefuInboundMessage.status == "claimed")
-                & (KefuInboundMessage.lease_expires_at < datetime.now(timezone.utc))
-            )
-        )
-        .distinct()
-        .limit(limit)
+        text(
+            f"""
+            SELECT q.open_kfid, q.external_userid FROM (
+              SELECT DISTINCT ON (open_kfid, external_userid)
+                     open_kfid, external_userid, status, next_attempt_at, lease_expires_at
+              FROM kefu_inbound_message
+              WHERE status IN ('pending', 'claimed')
+              ORDER BY open_kfid, external_userid, received_at, msgid
+            ) AS q
+            WHERE {_CLAIMABLE}
+            LIMIT :limit
+            """
+        ),
+        {"limit": limit},
     ).all()
     return [KefuIdentity(open_kfid=row[0], external_userid=row[1]) for row in rows]
 
@@ -310,7 +320,10 @@ def run_worker_once(
     *,
     worker_id: str,
     lease_seconds: int = 300,
+    media_client=None,
 ) -> int:
+    """media_client (a KefuClient) enables voice input (core/kefu_voice.py);
+    without one, voice falls back to Phase 0's "暂不支持语音" reply."""
     list_db = db_factory()
     try:
         identities = ready_identities(list_db)
@@ -334,8 +347,9 @@ def run_worker_once(
             # Non-text messages get a fixed reply, never an AI turn on an
             # empty string (core/kefu_unsupported.py). Marks the row
             # processed itself, atomically with the queued reply.
-            from core import kefu_unsupported
-            if kefu_unsupported.handle_if_unsupported(db_factory, turn):
+            from core import kefu_unsupported, kefu_voice
+            voice_enabled = media_client is not None
+            if kefu_unsupported.handle_if_unsupported(db_factory, turn, voice_supported=voice_enabled):
                 processed += 1
                 continue
             with lease_heartbeat(
@@ -344,11 +358,28 @@ def run_worker_once(
                 worker_id=worker_id,
                 lease_seconds=lease_seconds,
             ):
+                content = turn.content or ""
+                meta = {"msgid": turn.msgid, "received_at": turn.received_at}
+                case_number_hint = turn.case_number_hint
+                if turn.msgtype == "voice" and voice_enabled:
+                    # Transcribe once and persist, before the AI (audio-
+                    # input plan rev 6). 'handled' means a retry is
+                    # scheduled or a fixed reply is queued -- the row's
+                    # status was already set, so skip mark_processed.
+                    outcome = kefu_voice.prepare_voice_turn(
+                        db_factory, turn, media_client=media_client, worker_id=worker_id,
+                    )
+                    if outcome.kind == "handled":
+                        continue
+                    if outcome.kind == "transcript":
+                        content = outcome.text
+                        meta["input_modality"] = "voice"
+                        case_number_hint = extract_case_number_hint(content)
                 processor(
                     identity=turn.identity,
-                    message_content=turn.content or "",
-                    message_meta={"msgid": turn.msgid, "received_at": turn.received_at},
-                    case_number_hint=turn.case_number_hint,
+                    message_content=content,
+                    message_meta=meta,
+                    case_number_hint=case_number_hint,
                 )
         except Exception as exc:
             print(

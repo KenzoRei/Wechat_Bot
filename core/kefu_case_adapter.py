@@ -306,6 +306,21 @@ def _detect_session_conflict(context: dict, ai_response, session) -> str | None:
     ))
 
 
+# Voice input (audio-input plan rev 6). A voice turn's AI "confirm" is
+# rerouted to this internal intent and answered with a fixed reply (D5).
+_VOICE_CONFIRM_GATED = "_voice_confirm_gated"
+VOICE_CONFIRM_GATED_REPLY = "语音不能直接确认。请核对上方摘要后，输入文字「确认」。"
+VOICE_ECHO_PREFIX = "🎤 识别内容："
+
+
+def _with_voice_echo(voice: bool, transcript: str, reply_text: str) -> str:
+    """D2: prefix the transcript to a voice turn's reply (a no-op for text)."""
+    if not voice:
+        return reply_text
+    echo = f"{VOICE_ECHO_PREFIX}{transcript}"
+    return f"{echo}\n\n{reply_text}" if reply_text else echo
+
+
 def _same_completion_family(a: str | None, b: str | None) -> bool:
     """confirm_X_completion and confirm_X_completion_batch are one flow: a
     single case pivots into a batch (and back) within the same case, so
@@ -467,12 +482,17 @@ def _process_turn(
     case_number_hint: str | None,
 ) -> CaseTurnResult:
     msgid = str(message_meta.get("msgid") or "")
+    # A transcribed voice message (core/kefu_voice.py). Speech recognition
+    # can mishear, so voice never triggers a system command and never
+    # executes a confirmation (audio-input plan rev 6, user decision D5).
+    voice = message_meta.get("input_modality") == "voice"
 
     # Registration is a deterministic pre-access system command -- recognized
     # before check_kefu_access, exactly like core/self_registration.py runs
     # before check_access for Smart Robot. Never touches conversation_session
     # (core/kefu_registration.py's own contract), so nothing to audit-log.
-    registration_reply = kefu_registration.try_handle_kefu_registration_command(db, identity, message_content)
+    # Typed text only.
+    registration_reply = None if voice else kefu_registration.try_handle_kefu_registration_command(db, identity, message_content)
     if registration_reply is not None:
         _direct_send(client, identity, f"kefu-registration:{msgid}", registration_reply)
         return CaseTurnSuccess(reply_text=registration_reply, customer_copy_text=None, case_number="", new_revision=0)
@@ -492,7 +512,9 @@ def _process_turn(
     # registration above: recognized by exact string match only, never
     # touches conversation_session/case machinery, never goes through the
     # AI/execution-ledger pipeline at all. See core/kefu_admin_purge.py.
-    purge_reply = kefu_admin_purge.try_handle_purge_command(db, access.role, message_content)
+    # Typed text only: a transcript that happens to equal the phrase must
+    # never close every open case.
+    purge_reply = None if voice else kefu_admin_purge.try_handle_purge_command(db, access.role, message_content)
     if purge_reply is not None:
         _direct_send(client, identity, f"kefu-purge:{msgid}", purge_reply)
         return CaseTurnSuccess(reply_text=purge_reply, customer_copy_text=None, case_number="", new_revision=0)
@@ -570,16 +592,36 @@ def _process_turn(
             db.rollback()
             raise RuntimeError(f"execution {execution_key} is db_committed but its session is missing")
         context = session_manager.build_context(db, access, recovered_session, message)
-        reply_text = "您的请求已收到并正在处理，如需查询进度请稍后重试或联系管理员。"
+        # D2 holds on this path too: a recovered voice turn still echoes.
+        reply_text = _with_voice_echo(voice, message_content, "您的请求已收到并正在处理，如需查询进度请稍后重试或联系管理员。")
     else:
         context = session_manager.build_context(db, access, session, message)
+        if voice:
+            context["_input_modality"] = "voice"
         # A pure number reply to a numbered list this case is showing (batch
         # summary or completion candidate list) is parsed in code, never by
         # the model -- see kefu_turn_apply.deterministic_selection_response.
         ai_response = kefu_turn_apply.deterministic_selection_response(context, session, message_content)
         if ai_response is None:
             ai_response = _ai_chain.process(context)
-            ai_response = _batch_confirm_with_selection_as_continuation(context, session, ai_response)
+            if (
+                voice and ai_response.intent == "confirm"
+                and not (ai_response.extracted_fields or {}).get("selection")
+            ):
+                # D5: voice never executes a confirmation, single or batch.
+                # Checked before the batch guard so the staff member gets the
+                # voice-specific "type 确认" reply. Nothing changes; they
+                # re-read the text summary and type 确认. (A voice confirm
+                # that names a selection still narrows the batch, below.)
+                from dataclasses import replace
+                ai_response = replace(ai_response, intent=_VOICE_CONFIRM_GATED)
+            else:
+                ai_response = _batch_confirm_with_selection_as_continuation(context, session, ai_response)
+        if voice and ai_response.intent == "confirm":
+            # Defense in depth: nothing on a voice turn may reach the
+            # executing confirm branch.
+            from dataclasses import replace
+            ai_response = replace(ai_response, intent=_VOICE_CONFIRM_GATED)
 
         denial_reason = _kefu_rollout_denial_reason(context, ai_response, session)
         if denial_reason is not None:
@@ -587,12 +629,14 @@ def _process_turn(
                 execution_row.status = "failed"
                 execution_row.last_error = "rollout_denied"
             db.commit()
-            _direct_send(client, identity, f"kefu-rollout-denied:{msgid}", (
-                "该服务暂未在企业微信客服开放，请通过其他渠道办理，或联系管理员。"
+            _direct_send(client, identity, f"kefu-rollout-denied:{msgid}", _with_voice_echo(
+                voice, message_content, "该服务暂未在企业微信客服开放，请通过其他渠道办理，或联系管理员。",
             ))
             return CaseTurnDenied(reason=denial_reason)
 
-        if ai_response.intent == "cancel":
+        if ai_response.intent == _VOICE_CONFIRM_GATED:
+            reply_text = VOICE_CONFIRM_GATED_REPLY
+        elif ai_response.intent == "cancel":
             service = _resolve_turn_service(context, ai_response, session) if session is not None else None
             reply_text = kefu_turn_apply.cancel_kefu_turn(db, context, service, session)
         elif ai_response.intent == "confirm":
@@ -636,6 +680,7 @@ def _process_turn(
                     if execution_row.db_committed_at is None:
                         execution_row.db_committed_at = execution_row.completed_at
                 db.commit()
+                conflict_reply = _with_voice_echo(voice, message_content, conflict_reply)
                 _direct_send(client, identity, f"kefu-reply:{msgid}", conflict_reply)
                 return CaseTurnSuccess(reply_text=conflict_reply, customer_copy_text=None, case_number="", new_revision=0)
             else:
@@ -645,7 +690,7 @@ def _process_turn(
                         execution_row.status = "failed"
                         execution_row.last_error = "no_service_resolved"
                     db.commit()
-                    reply_text = render_kefu_outcome(UnrecognizedRequestOutcome())
+                    reply_text = _with_voice_echo(voice, message_content, render_kefu_outcome(UnrecognizedRequestOutcome()))
                     _direct_send(client, identity, f"kefu-reply:{msgid}", reply_text)
                     return CaseTurnSuccess(reply_text=reply_text, customer_copy_text=None, case_number="", new_revision=0)
                 if execution_key:
@@ -669,6 +714,11 @@ def _process_turn(
                 reply_text = render_kefu_outcome(ServiceListOutcome(entries=entries)) if entries else render_kefu_outcome(UnrecognizedRequestOutcome())
             else:
                 reply_text = render_kefu_outcome(UnrecognizedRequestOutcome())
+
+        # D2: every reply to a transcribed voice message starts with what was
+        # heard, so a mishearing is visible before anything is confirmed. It's
+        # part of the stored case_turn reply, so a replay is identical.
+        reply_text = _with_voice_echo(voice, message_content, reply_text)
 
     new_session_id = context.get("session_id")
     if new_session_id and staff is not None:

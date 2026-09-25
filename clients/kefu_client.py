@@ -120,6 +120,53 @@ class KefuClient:
             self._access_token_expires_at = time.monotonic() + expires_in - 60
             return self._access_token
 
+    def download_media(self, media_id: str, *, max_bytes: int) -> tuple[bytes, str]:
+        """
+        Temporary media (e.g. a Kefu voice message's AMR audio) via
+        /cgi-bin/media/get. Returns (content, content_type). Streams with a
+        hard byte cap. WeCom answers an error as a JSON body instead of the
+        media -- that goes through _checked_json, so an expired/invalid id
+        raises KefuAPIError (errcode 40007, media is kept 3 days) and a
+        transport failure raises KefuTransportError.
+        """
+        for attempt in range(2):
+            try:
+                response = self.http.get(
+                    f"{self.api_base}/cgi-bin/media/get",
+                    params={"access_token": self.access_token(), "media_id": media_id},
+                    timeout=self.timeout,
+                    stream=True,
+                )
+            except requests.RequestException as exc:
+                raise KefuTransportError(f"Kefu media download failed: {exc}") from exc
+            content_type = response.headers.get("Content-Type", "")
+            if "json" in content_type or "text/plain" in content_type:
+                try:
+                    self._checked_json(response)
+                except KefuAPIError as exc:
+                    if exc.errcode in TOKEN_ERROR_CODES and attempt == 0:
+                        self.invalidate_token()
+                        continue
+                    raise
+                raise KefuTransportError("Kefu media download returned JSON without an error code")
+            try:
+                response.raise_for_status()
+            except requests.RequestException as exc:
+                raise KefuTransportError(f"Kefu media download failed: {exc}") from exc
+            chunks, size = [], 0
+            try:
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise ValueError(f"media exceeds {max_bytes} bytes")
+                    chunks.append(chunk)
+            except requests.RequestException as exc:
+                raise KefuTransportError(f"Kefu media download interrupted: {exc}") from exc
+            finally:
+                response.close()
+            return b"".join(chunks), content_type
+        raise AssertionError("unreachable")
+
     def _request(self, method: str, path: str, **kwargs) -> dict[str, Any]:
         base_params = dict(kwargs.pop("params", {}) or {})
         for attempt in range(2):
