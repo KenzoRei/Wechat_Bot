@@ -120,14 +120,18 @@ def enqueue_text(
     text_content: str,
     session_id: uuid.UUID | None = None,
     request_log_id: uuid.UUID | None = None,
+    inbound_message_msgid: str | None = None,
 ) -> KefuOutboundDelivery:
-    if (session_id is None) == (request_log_id is None):
+    """inbound_message_msgid targets a reply to an inbound message that never
+    became a case turn (e.g. an unsupported message type) -- V34."""
+    if sum(t is not None for t in (session_id, request_log_id, inbound_message_msgid)) != 1:
         raise ValueError("exactly one delivery target is required")
     statement = (
         insert(KefuOutboundDelivery)
         .values(
             session_id=session_id,
             request_log_id=request_log_id,
+            inbound_message_msgid=inbound_message_msgid,
             recipient_staff_id=recipient_staff_id,
             idempotency_key=idempotency_key,
             payload_type="text",
@@ -147,6 +151,7 @@ def enqueue_text(
         and delivery.recipient_staff_id == recipient_staff_id
         and delivery.session_id == session_id
         and delivery.request_log_id == request_log_id
+        and delivery.inbound_message_msgid == inbound_message_msgid
         and delivery.payload_hash == expected_hash
     ):
         raise ValueError("idempotency_key_collision")

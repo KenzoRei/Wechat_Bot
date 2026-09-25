@@ -186,7 +186,12 @@ class KefuOutboundDelivery(Base):
     """
     __tablename__ = "kefu_outbound_delivery"
     __table_args__ = (
-        CheckConstraint("num_nonnulls(session_id, request_log_id) = 1", name="ck_kefu_outbound_delivery_target_xor"),
+        # V34: a reply to an inbound message that never became a case turn
+        # (e.g. "暂不支持该消息类型") targets the inbox row itself.
+        CheckConstraint(
+            "num_nonnulls(session_id, request_log_id, inbound_message_msgid) = 1",
+            name="ck_kefu_outbound_delivery_target_xor",
+        ),
         CheckConstraint(
             "(payload_type = 'text' AND text_content IS NOT NULL AND artifact_request_log_id IS NULL) "
             "OR (payload_type = 'file' AND text_content IS NULL "
@@ -200,7 +205,8 @@ class KefuOutboundDelivery(Base):
     delivery_id:              Mapped[uuid.UUID]      = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
     session_id:                Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("conversation_session.session_id"))
     request_log_id:             Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("request_log.log_id"))
-    recipient_staff_id:          Mapped[uuid.UUID]     = mapped_column(UUID(as_uuid=True), ForeignKey("kefu_staff.staff_id"), nullable=False)
+    inbound_message_msgid:      Mapped[str | None]     = mapped_column(String(128), ForeignKey("kefu_inbound_message.msgid"))
+    recipient_staff_id:         Mapped[uuid.UUID]     = mapped_column(UUID(as_uuid=True), ForeignKey("kefu_staff.staff_id"), nullable=False)
     idempotency_key:              Mapped[str]          = mapped_column(String(128), nullable=False, unique=True)
     payload_type:                  Mapped[str]         = mapped_column(String(10), nullable=False)
     text_content:                   Mapped[str | None] = mapped_column(Text)

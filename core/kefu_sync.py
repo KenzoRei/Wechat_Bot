@@ -331,6 +331,13 @@ def run_worker_once(
         if turn is None:
             continue
         try:
+            # Non-text messages get a fixed reply, never an AI turn on an
+            # empty string (core/kefu_unsupported.py). Marks the row
+            # processed itself, atomically with the queued reply.
+            from core import kefu_unsupported
+            if kefu_unsupported.handle_if_unsupported(db_factory, turn):
+                processed += 1
+                continue
             with lease_heartbeat(
                 db_factory,
                 msgid=turn.msgid,
