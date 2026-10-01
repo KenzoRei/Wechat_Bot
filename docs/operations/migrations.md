@@ -4,7 +4,7 @@
 **Owner:** Engineering and operations
 **Last verified against commit:** `3def0eb` (2026-09-25)
 
-Migrations are sequential SQL files under `db/migrations/`, currently V1-V35.
+Migrations are sequential SQL files under `db/migrations/`, currently V1-V38.
 The project does not use Alembic or Flyway. `scripts/apply_migrations.py`
 applies migrations numerically and records completed versions in
 `public.schema_migrations`.
@@ -57,6 +57,10 @@ schema**:
 - **Only the reverse is unsafe:** a migration that removes or renames
   something the running code still uses has to wait until code that no longer
   uses it is deployed.
+- **A migration that changes behaviour the old code relies on also waits.**
+  Example: V38 makes 费用报告's warehouse optional. The old code would then run
+  the report with no warehouse and return an empty invoice, while the new code
+  works with either schema, so V38 is applied **after** the deploy.
 
 **Running a migration before its code is deployed:** the Render shell only
 contains the *currently deployed* code, so it doesn't have the new migration

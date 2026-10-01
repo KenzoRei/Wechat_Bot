@@ -104,7 +104,7 @@ caught before it shipped.
 
 ## Migration authority
 
-Migrations are sequential SQL files, currently V1 through V35. They are
+Migrations are sequential SQL files, currently V1 through V38. They are
 forward-only operational SQL applied by `scripts/apply_migrations.py`, which
 records applied versions in `public.schema_migrations` (no Alembic or
 Flyway). See [Migrations](../operations/migrations.md).

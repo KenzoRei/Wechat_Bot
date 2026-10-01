@@ -7,6 +7,71 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.4.0] - 2026-10-01
+
+### Added
+- **Inventory sheet in the 费用报告 workbook.** One row per SKU with opening
+  and closing pallets for the period, plus Inbound / Outbound / Other Net
+  Change (pallets), and a Closing Detail column listing the closing balance
+  per pallet size, one per line, in the same `N 托 @ B/托` format as 库存查询.
+  - Balances come from the stock-change history, so past months work with
+    no backfill (production check: history matches current stock exactly).
+  - A loose-box pick doesn't change the pallet count; it shows in Closing
+    Detail as a smaller pallet. Other Net Change covers transfers between
+    warehouses, internal moves/repackaging, adjustments and recounts.
+  - The Summary sheet and the chat reply add opening → closing pallet totals
+    (库存（托）：期初 X → 期末 Y).
+- **Combined 费用报告 for several warehouses, and the warehouse is now
+  optional.** The bot only asks for the month range.
+  - With no warehouse named, or "全部仓库", the report covers every warehouse
+    the requester may see: all three for admin and accountant, the assigned
+    ones for a warehouseman. A warehouseman with no warehouses assigned is
+    refused.
+  - Naming one or more warehouses gives one combined invoice. The reply
+    always lists the warehouses covered and, for several, a 各仓合计 line each.
+  - The Summary sheet is a table of charges by warehouse with a Total column
+    and Total row (formulas). Filename: `invoice_DE-JFK-NJ_<start>_<end>.xlsx`.
+  - Admin export (`/admin/invoices/export`, `/export-link`) accepts
+    `warehouse_code=JFK`, `JFK,DE` or `all`. Migration `V38`.
+- New stock-change type `opening` (shown as 期初), counted as starting stock in
+  the Inventory sheet. Each warehouse's go-live 库存盘点 was relabelled to it,
+  so September opens with that stock (DE 42 / JFK 51 / NJ 23 pallets).
+  Migration `V36`; one-time script `scripts/relabel_golive_opening.py`.
+- `scripts/check_storage_history.py`: read-only release check. Q1 compares
+  the stock-change history with current stock (must be 0 rows); Q4 is a
+  deploy gate; Q5 a post-deploy check.
+
+### Changed
+- Invoice detail sheets: every row starts with a **Warehouse** column; the
+  sheets are named `Outbound` / `Inbound` (were `outbound` / `inbound`); each
+  has a frozen header row and filters.
+- The chat reply and the attached workbook are built from one calculation:
+  fee rows and stock balances are each read once, so they can't disagree.
+
+### Fixed
+- An unknown warehouse code in 费用报告 (e.g. "all", "JFK,DE" in the old
+  single field) silently produced an all-zero invoice for admin/accountant;
+  it is now rejected naming the valid codes. An unreadable or mixed selection
+  ("全部" plus a code, a blank value) is rejected too, not treated as "all".
+- Kefu could fail to deliver a current-month 费用报告 or 库存历史 file: it rebuilt
+  the file from live data on every send attempt, and any change in between
+  failed the hash check. The exact bytes are now stored when the file is
+  queued and reused on every attempt, kept 30 days unless still pending.
+  A duplicate message for a purged file is skipped, never rebuilt. Migration
+  `V37`.
+- The invoice Summary sheet's blank spacer rows were never written.
+
+### Deployment notes
+- `V36` and `V37` were applied to production before this release, and the
+  go-live relabel has been run.
+- Right before deploying, `check_storage_history.py` must show Q1 = 0 and
+  Q4 = 0 (no Kefu invoice files queued by the old code still pending).
+- Apply **`V38` after the deploy**, not before: the previous code with `V38`
+  would run 费用报告 without a warehouse and return an empty invoice. The new
+  code works with either schema.
+- After deploying, Q5 lists any invoice file that failed because the old
+  code queued it during the switchover; that person just requests it again.
+
 ## [1.3.1] - 2026-09-25
 
 ### Documentation
