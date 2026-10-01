@@ -666,10 +666,14 @@ def _valid_invoice_warehouses(context: dict, collected_fields: dict, db: DBSessi
     del db
     from core import role_policy
     from core.uchoice_constants import VALID_WAREHOUSE_CODES
-    from core.uchoice_invoice_scope import requested_invoice_warehouses
+    from core.uchoice_invoice_scope import InvalidWarehouseSelection, requested_invoice_warehouses
 
     codes_list = "、".join(sorted(VALID_WAREHOUSE_CODES))
-    for code in requested_invoice_warehouses(collected_fields):
+    try:
+        codes = requested_invoice_warehouses(collected_fields)
+    except InvalidWarehouseSelection as exc:
+        return str(exc)
+    for code in codes:
         if code not in VALID_WAREHOUSE_CODES:
             return f"未知仓库：{code}。请提供有效的仓库代码（{codes_list}）。"
         denial = role_policy.check_warehouse_scope(context.get("role"), context.get("warehouse_codes"), code)

@@ -161,22 +161,27 @@ class ComputeInvoiceHandler(BaseHandler):
         start_month = fields.get("start_month")
         end_month = fields.get("end_month")
 
-        invoice = compute_combined_invoice(db, warehouse_codes, start_month, end_month)
+        # The reply uses the numbers the workbook was built from, so it can't
+        # disagree with the linked file. Only if the (best-effort) workbook
+        # fails is the invoice computed on its own, with no link.
+        download_url, invoice = self._try_build_workbook_and_link(context, db, warehouse_codes, start_month, end_month)
+        if invoice is None:
+            invoice = compute_combined_invoice(db, warehouse_codes, start_month, end_month)
         result = serialize_invoice(invoice)
-
-        download_url = self._try_build_workbook_and_link(context, db, warehouse_codes, start_month, end_month)
         if download_url:
             result["download_url"] = download_url
         return result
 
     @staticmethod
-    def _try_build_workbook_and_link(context: dict, db, warehouse_codes: list[str], start_month: str, end_month: str) -> str | None:
+    def _try_build_workbook_and_link(
+        context: dict, db, warehouse_codes: list[str], start_month: str, end_month: str,
+    ) -> tuple[str | None, dict | None]:
         try:
             import config
-            from core.uchoice_invoice_export import build_invoice_workbook, invoice_filename
+            from core.uchoice_invoice_export import build_invoice_report, invoice_filename
             from core.download_tokens import create_token
 
-            data = build_invoice_workbook(db, warehouse_codes, start_month, end_month)
+            data, invoice = build_invoice_report(db, warehouse_codes, start_month, end_month)
             filename = invoice_filename(warehouse_codes, start_month, end_month)
             token = create_token(
                 data, filename,
@@ -186,7 +191,7 @@ class ComputeInvoiceHandler(BaseHandler):
 
             ComputeInvoiceHandler._try_push_workbook(context, db, data, filename)
 
-            return f"{base_url}/files/download/{token}"
+            return f"{base_url}/files/download/{token}", invoice
         except Exception as e:
             # A DB-level failure here (e.g. a bad query) leaves the session
             # in an aborted-transaction state — without rolling back, every
@@ -195,7 +200,7 @@ class ComputeInvoiceHandler(BaseHandler):
             # a "best-effort extra" into a hard failure of the whole request.
             db.rollback()
             print(f"[uchoice] invoice workbook build failed (non-fatal): {e}", flush=True)
-            return None
+            return None, None
 
     @staticmethod
     def _try_push_workbook(context: dict, db, data: bytes, filename: str) -> None:

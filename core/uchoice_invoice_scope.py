@@ -25,20 +25,49 @@ from core.uchoice_constants import VALID_WAREHOUSE_CODES
 _ALL_TOKENS = frozenset({"ALL", "全部", "所有", "所有仓库", "全部仓库"})
 
 
+class InvalidWarehouseSelection(ValueError):
+    """The warehouse field has a shape or mix that can't be read safely."""
+
+
+_MALFORMED = "无法识别所选仓库，请用仓库代码说明（如 JFK、DE），或说明「全部仓库」。"
+_MIXED_ALL = "不能同时选择「全部仓库」和具体仓库，请只选其一。"
+
+
+def _split(value: str) -> list[str]:
+    return value.replace("，", ",").replace("、", ",").split(",")
+
+
 def requested_invoice_warehouses(fields: dict) -> list[str]:
     """
     The codes the request names, de-duplicated and sorted; [] means "not
-    stated" (or stated as all). Not validated here -- unknown codes are the
-    pre-confirm validator's job, so the user gets a clear error naming them.
+    stated" or stated as all. Unknown codes are left for the pre-confirm
+    validator, so the user gets an error naming them.
+
+    Raises InvalidWarehouseSelection for anything that must not quietly
+    become "all" (Codex code audit #3 and round 2 #2): a non-list/non-string
+    value, a non-string entry, "all" mixed with specific codes, or a supplied
+    value that names nothing ("," / [""] / "  ").
     """
     raw = fields.get("warehouse_codes")
-    if isinstance(raw, str):
-        raw = [part for part in raw.replace("，", ",").replace("、", ",").split(",")]
-    if not isinstance(raw, list) or not raw:
+    if raw is None or raw == "" or raw == []:
         legacy = fields.get("warehouse_code")
-        raw = [legacy] if legacy else []
-    codes = [str(c).strip() for c in raw if c is not None and str(c).strip()]
-    if any(c.upper() in _ALL_TOKENS or c in _ALL_TOKENS for c in codes):
+        if legacy is None or legacy == "":
+            return []
+        if not isinstance(legacy, str):
+            raise InvalidWarehouseSelection(_MALFORMED)
+        raw = [legacy]          # the legacy field is one code, never a list
+    elif isinstance(raw, str):
+        raw = _split(raw)
+    elif not isinstance(raw, list) or not all(isinstance(c, str) for c in raw):
+        raise InvalidWarehouseSelection(_MALFORMED)
+
+    codes = [c.strip() for c in raw if c.strip()]
+    if not codes:
+        raise InvalidWarehouseSelection(_MALFORMED)   # supplied, but names no warehouse
+    all_tokens = [c for c in codes if c.upper() in _ALL_TOKENS or c in _ALL_TOKENS]
+    if all_tokens:
+        if len(all_tokens) != len(codes):
+            raise InvalidWarehouseSelection(_MIXED_ALL)
         return []
     return sorted(dict.fromkeys(codes))
 
@@ -57,10 +86,14 @@ def accessible_invoice_warehouses(context: dict) -> tuple[list[str], str | None]
 def resolve_invoice_warehouses(context: dict, fields: dict) -> tuple[dict, str | None]:
     """
     Returns (updated fields, None) with warehouse_codes set to the effective
-    list, or (fields unchanged, denial message). Idempotent: an already
-    resolved list is kept as is.
+    list, or (fields unchanged, message) for a denial or an unreadable
+    selection -- the session stays open, so the user can correct it.
+    Idempotent: an already resolved list is kept as is.
     """
-    codes = requested_invoice_warehouses(fields)
+    try:
+        codes = requested_invoice_warehouses(fields)
+    except InvalidWarehouseSelection as exc:
+        return fields, str(exc)
     if not codes:
         codes, denial = accessible_invoice_warehouses(context)
         if denial:

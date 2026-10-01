@@ -126,7 +126,7 @@ def test_smart_robot_handler_defaults_to_all_accessible(db, ledger):
     assert result.get("download_url")
 
 
-def test_kefu_turn_builds_one_combined_file(db, ledger):
+def test_kefu_turn_builds_one_combined_file(db, ledger, monkeypatch):
     from core import kefu_turn_apply
     from models.group import GroupConfig
     from models.request_log import RequestLog
@@ -151,6 +151,7 @@ def test_kefu_turn_builds_one_combined_file(db, ledger):
     db.flush()
     session.request_log_id = log.log_id
     db.commit()
+    _forbid_second_calculation(monkeypatch)
     try:
         context = {"result": {}, "request_log_id": str(log.log_id), "role": "admin", "warehouse_codes": None}
         kefu_turn_apply._workflow_steps(db, context, service, session)
@@ -176,3 +177,87 @@ def test_chat_reply_lists_warehouses_and_per_warehouse_totals():
     assert lines[0] == "仓库：DE、JFK　范围：2026-09"
     assert "**各仓合计**" in lines
     assert "- DE：$10.00" in lines and "- JFK：$20.00" in lines
+
+
+def _forbid_second_calculation(monkeypatch):
+    """Codex code audit #4: the reply must reuse the workbook's own numbers.
+    A separate compute_combined_invoice call is what let them diverge."""
+    import core.uchoice_invoice as uchoice_invoice
+
+    def _second_calculation(*args, **kwargs):
+        raise AssertionError("invoice computed a second time for the reply")
+    monkeypatch.setattr(uchoice_invoice, "compute_combined_invoice", _second_calculation)
+
+
+def test_report_totals_match_its_own_sheets(db, ledger):
+    from core.uchoice_invoice_export import build_invoice_report
+
+    data, invoice = build_invoice_report(db, [WH_A, WH_B], MONTH, generated_at=FIXED)
+    wb = load_workbook(io.BytesIO(data))
+    summary = {r[0]: r[1:] for r in wb["Summary"].iter_rows(values_only=True) if r and r[0]}
+    assert summary["Storage fee"][:2] == (4.0, 5.0)
+    assert invoice["storage_fee"] == Decimal("9.00")
+    inventory = list(wb["Inventory"].iter_rows(min_row=2, values_only=True))
+    opening = sum(r[3] for r in inventory if r[0] in (WH_A, WH_B))
+    assert invoice["opening_pallets"] == opening
+    assert summary["Opening pallets"][:2] == (invoice["per_warehouse"][WH_A]["opening_pallets"],
+                                              invoice["per_warehouse"][WH_B]["opening_pallets"])
+
+
+def test_smart_robot_reply_comes_from_the_workbook_calculation(db, ledger, monkeypatch):
+    from handlers.uchoice.queries import ComputeInvoiceHandler
+
+    _forbid_second_calculation(monkeypatch)
+    result = ComputeInvoiceHandler().handle({
+        "role": "admin", "warehouse_codes": None, "group_id": None,
+        "collected_fields": {"warehouse_codes": [WH_A, WH_B], "start_month": MONTH, "end_month": MONTH},
+    }, {}, db)
+    assert result["storage_fee"] == "9.00" and result.get("download_url")
+
+
+def test_smart_robot_reply_still_works_if_the_workbook_fails(db, ledger, monkeypatch):
+    import core.uchoice_invoice_export as export
+    from handlers.uchoice.queries import ComputeInvoiceHandler
+
+    def _broken(*args, **kwargs):
+        raise RuntimeError("workbook failed")
+    monkeypatch.setattr(export, "build_invoice_report", _broken)
+    result = ComputeInvoiceHandler().handle({
+        "role": "admin", "warehouse_codes": None, "group_id": None,
+        "collected_fields": {"warehouse_codes": [WH_A], "start_month": MONTH, "end_month": MONTH},
+    }, {}, db)
+    assert result["storage_fee"] == "4.00" and "download_url" not in result
+
+
+def test_totals_equal_detail_rows_when_a_row_lands_mid_build(db, ledger, monkeypatch):
+    """Codex code audit round 2 #1: the fee rows are selected once, so a ledger
+    row committed between the totals and the detail sheets is in neither."""
+    import core.uchoice_invoice_export as export
+    from models.uchoice import UchoiceStorageFeeLedger
+
+    late = []
+    real_balances = export.inventory_balances
+
+    def _balances_then_concurrent_write(*args, **kwargs):
+        # Runs after the fee rows are selected, before the sheets are written.
+        other = SessionLocal()
+        row = UchoiceStorageFeeLedger(warehouse_code=WH_A, fee_date=datetime.date(2031, 5, 3),
+                                      pallet_count=4, storage_fee=Decimal("2.00"))
+        other.add(row)
+        other.commit()
+        late.append(row.ledger_id)
+        other.close()
+        return real_balances(*args, **kwargs)
+
+    monkeypatch.setattr(export, "inventory_balances", _balances_then_concurrent_write)
+    try:
+        data, invoice = export.build_invoice_report(db, [WH_A], MONTH, generated_at=FIXED)
+        storage_rows = list(load_workbook(io.BytesIO(data))["Storage"].iter_rows(min_row=2, values_only=True))
+        assert invoice["storage_fee"] == Decimal("4.00")
+        assert sum(Decimal(str(r[3])) for r in storage_rows) == invoice["storage_fee"]
+        assert len(storage_rows) == 2
+    finally:
+        db.rollback()
+        for ledger_id in late:
+            db.execute(text("delete from uchoice_storage_fee_ledger where ledger_id = :id"), {"id": ledger_id})
+        db.commit()

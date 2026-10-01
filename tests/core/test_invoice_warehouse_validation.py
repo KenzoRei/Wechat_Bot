@@ -110,12 +110,13 @@ def test_scope_checked_for_every_code():
     assert error == f"DE：{OUT_OF_WAREHOUSE_SCOPE_MESSAGE}"
 
 
-# ── Kefu case re-check: frozen list, every code ─────────────────────────────
+# ── Kefu case re-check (Codex code audit #2) ───────────────────────────────
 
 def _access(codes):
     return SimpleNamespace(group_id="g1", warehouse_codes=codes, allowed_services=[
         {"service_type_id": "svc-invoice", "name": "view_invoice"},
         {"service_type_id": "svc-role", "name": "role_change"},
+        {"service_type_id": "svc-inbound", "name": "uchoice_inbound_request"},
     ])
 
 
@@ -123,30 +124,55 @@ def _case(service_type_id, fields):
     return SimpleNamespace(group_id="g1", service_type_id=service_type_id, collected_fields=fields)
 
 
-def test_case_denied_when_any_frozen_warehouse_was_revoked():
+@pytest.mark.parametrize("fields", [
+    {"warehouse_codes": ["DE"]},          # a draft naming a warehouse the staff can't see
+    {"warehouse_code": "DE"},
+    {"warehouse_codes": ["DE", "JFK"]},
+])
+def test_invoice_draft_is_not_locked_by_a_warehouse_typed_in_it(fields):
+    """The draft must reach the invoice validator (which rejects DE when the
+    fields are complete) instead of being denied on every later turn, which
+    would stop the staff member correcting DE to JFK. An executed 费用报告
+    is closed, so a later turn never reaches _authorize_case at all."""
     from core.kefu_case_adapter import _authorize_case
-    case = _case("svc-invoice", {"warehouse_codes": ["DE", "JFK"]})
-    assert _authorize_case(_access(["DE", "JFK"]), case) is None
-    assert _authorize_case(_access(["DE"]), case) == "case_wrong_warehouse"
+    assert _authorize_case(_access(["JFK"]), _case("svc-invoice", fields)) is None
 
 
-def test_newly_granted_warehouse_never_joins_a_frozen_case():
+def test_other_services_still_denied_on_an_out_of_scope_warehouse():
     from core.kefu_case_adapter import _authorize_case
-    fields = {"warehouse_codes": ["JFK"]}
-    assert _authorize_case(_access(["DE", "JFK"]), _case("svc-invoice", fields)) is None
-    assert fields == {"warehouse_codes": ["JFK"]}
-
-
-def test_unresolved_all_case_names_nothing_to_check():
-    from core.kefu_case_adapter import _authorize_case
-    assert _authorize_case(_access(["DE"]), _case("svc-invoice", {"warehouse_codes": ["全部"]})) is None
-    assert _authorize_case(_access(["DE"]), _case("svc-invoice", {"start_month": "2026-09"})) is None
+    assert _authorize_case(_access(["JFK"]), _case("svc-inbound", {"warehouse_code": "DE"})) == "case_wrong_warehouse"
+    assert _authorize_case(_access(["JFK"]), _case("svc-inbound", {"warehouse_code": "JFK"})) is None
 
 
 def test_role_change_assignment_list_is_not_a_case_warehouse():
     from core.kefu_case_adapter import _authorize_case
     case = _case("svc-role", {"warehouse_codes": ["NJ"], "new_role": "warehouseman"})
     assert _authorize_case(_access(["DE"]), case) is None
+
+
+# ── Malformed or mixed selections are rejected, not defaulted (audit #3) ────
+
+@pytest.mark.parametrize("fields", [
+    {"warehouse_codes": ["all", "LAX"]},
+    {"warehouse_codes": ["全部", "JFK"]},
+    {"warehouse_codes": "JFK,all"},
+    {"warehouse_codes": {"warehouse": "DE"}},
+    {"warehouse_codes": ["JFK", 7]},
+    {"warehouse_codes": 7},
+    {"warehouse_code": ["DE"]},
+    {"warehouse_codes": ","},                 # supplied but names nothing
+    {"warehouse_codes": [""]},
+    {"warehouse_codes": ["  ", ""]},
+    {"warehouse_codes": "  "},
+    {"warehouse_code": "  "},
+])
+def test_malformed_or_mixed_selection_is_rejected(fields):
+    from core.uchoice_invoice_scope import InvalidWarehouseSelection
+    with pytest.raises(InvalidWarehouseSelection):
+        requested_invoice_warehouses(fields)
+    resolved, message = resolve_invoice_warehouses(ADMIN, fields)
+    assert message and resolved == fields                      # not defaulted to all
+    assert pre_confirm_validators.run("view_invoice", ADMIN, fields, None) == message
 
 
 # ── Admin export ─────────────────────────────────────────────────────────────

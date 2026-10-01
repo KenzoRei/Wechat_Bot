@@ -9,6 +9,17 @@ Q2  When does the history start, per warehouse? (informational)
 Q3  Daily totals rebuilt from history vs the storage-fee ledger for one
     month (informational; small differences on busy days are expected
     because the daily job counts when it runs, not at end of day).
+Q4  Deploy gate: Kefu invoice / storage-history files still waiting to
+    send that were queued without stored bytes (by code before V37).
+    The new code would rebuild them in the new layout, which can never
+    match the hash recorded at queue time, so each would fail. Must be 0
+    right before deploying the invoice-inventory release; if not, wait
+    for them to send and re-run. Skipped before V37 is applied.
+Q5  After deploying (informational): invoice / storage-history file
+    deliveries that failed on artifact_hash_mismatch in the last 24 hours
+    -- a file the old code queued in the moment between the Q4 check and
+    the switchover. The report itself is read-only: the requester just
+    asks for it again.
 
 Self-contained: needs only psycopg2 (already an app dependency) and a
 database URL. Runs inside a single READ ONLY transaction.
@@ -24,7 +35,8 @@ Local checkout against the External Database URL:
     python scripts/check_storage_history.py --database-url "<External Database URL>"
 
 Options: --month YYYY-MM for Q3 (default 2026-09).
-Exit code: 0 = Q1 clean, 1 = Q1 found differences, 2 = usage/connection error.
+Exit code: 0 = Q1 clean and Q4 is 0, 1 = Q1 or Q4 found rows,
+2 = usage/connection error.
 """
 import argparse
 import calendar
@@ -65,6 +77,27 @@ SELECT l.warehouse_code, l.fee_date, l.pallet_count,
 FROM uchoice_storage_fee_ledger l
 WHERE l.fee_date BETWEEN %s AND %s
 ORDER BY 1, 2
+"""
+
+
+Q4 = """
+SELECT d.artifact_doc_type, d.idempotency_key, d.attempt_count, d.next_retry_at, d.last_error, d.created_at
+FROM kefu_outbound_delivery d
+WHERE d.status = 'pending' AND d.payload_type = 'file'
+  AND d.artifact_doc_type IN ('invoice_workbook', 'storage_history_workbook')
+  AND NOT EXISTS (SELECT 1 FROM kefu_artifact_blob b WHERE b.artifact_key = d.artifact_key)
+ORDER BY d.created_at
+"""
+
+
+Q5 = """
+SELECT d.artifact_doc_type, d.idempotency_key, d.recipient_staff_id, d.updated_at
+FROM kefu_outbound_delivery d
+WHERE d.status = 'failed' AND d.payload_type = 'file'
+  AND d.artifact_doc_type IN ('invoice_workbook', 'storage_history_workbook')
+  AND d.last_error LIKE '%artifact_hash_mismatch%'
+  AND d.updated_at > now() - interval '24 hours'
+ORDER BY d.updated_at
 """
 
 
@@ -137,11 +170,36 @@ def main() -> int:
                         print(f"  -> {w}: the same non-zero difference every day ({diffs.pop()}); possible missing starting stock.")
             else:
                 print("  (no ledger rows for this month)")
+            print()
+
+            q4 = []
+            print("Q4  Kefu files queued without stored bytes, still pending (deploy gate: expect 0 rows)")
+            cur.execute("SELECT to_regclass('public.kefu_artifact_blob') IS NOT NULL")
+            if not cur.fetchone()[0]:
+                print("  (skipped: V37 not applied yet)")
+            else:
+                cur.execute(Q4)
+                q4 = cur.fetchall()
+                if q4:
+                    _print_table(["doc type", "idempotency key", "attempts", "next retry", "last error", "queued"], q4)
+                    print(f"  -> {len(q4)} pending. Do NOT deploy yet: wait for them to send, then re-run.")
+                else:
+                    print("  -> 0 rows. Safe to deploy.")
+
+            print()
+            print("Q5  File deliveries failed on hash mismatch, last 24h (after deploy, informational)")
+            cur.execute(Q5)
+            q5 = cur.fetchall()
+            if q5:
+                _print_table(["doc type", "idempotency key", "staff", "failed at"], q5)
+                print(f"  -> {len(q5)} failed. Ask those staff to request the report again.")
+            else:
+                print("  -> 0 rows.")
     finally:
         conn.rollback()
         conn.close()
 
-    return 1 if q1 else 0
+    return 1 if (q1 or q4) else 0
 
 
 if __name__ == "__main__":

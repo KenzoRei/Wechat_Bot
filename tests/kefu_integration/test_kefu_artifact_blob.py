@@ -132,3 +132,38 @@ def test_replay_skips_a_purged_file_instead_of_failing(env, monkeypatch):
     with pytest.raises(ArtifactUnavailable):
         load_artifact(log_id, DOC, key, allow_rebuild=False)
     assert _load_replay_artifacts(SimpleNamespace(request_log_id=log_id), [key]) == ()
+
+
+def test_check_script_blocks_deploy_while_a_pre_v37_invoice_is_pending(env):
+    """Codex code audit #1: a file queued by the old code has no stored bytes
+    and the old layout's hash; the new code can't rebuild it to match, so
+    the check script's Q4 must fail until it has been sent."""
+    import importlib.util
+    import os
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "check_storage_history", Path(__file__).resolve().parents[2] / "scripts" / "check_storage_history.py")
+    check = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(check)
+
+    db, staff_id, log_id = env
+    db.execute(text("""
+        insert into kefu_outbound_delivery (request_log_id, recipient_staff_id, idempotency_key, payload_type,
+            artifact_request_log_id, artifact_doc_type, artifact_key, payload_hash, status)
+        values (:log, :staff, :key, 'file', :log, 'invoice_workbook', :akey, :hash, 'pending')"""),
+        {"log": log_id, "staff": staff_id, "key": f"blobtest:{log_id}:legacy",
+         "akey": f"{log_id}:{DOC}", "hash": "0" * 64})
+    db.commit()
+
+    argv = ["check", "--database-url", os.environ["DATABASE_URL"]]
+    import sys
+    old_argv, sys.argv = sys.argv, argv
+    try:
+        assert check.main() == 1
+        db.execute(text("update kefu_outbound_delivery set status = 'sent' where idempotency_key = :k"),
+                   {"k": f"blobtest:{log_id}:legacy"})
+        db.commit()
+        assert check.main() == 0
+    finally:
+        sys.argv = old_argv

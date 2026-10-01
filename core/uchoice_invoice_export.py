@@ -13,7 +13,7 @@ from openpyxl.styles import Font, Alignment
 from openpyxl.utils import get_column_letter
 
 from core.uchoice_invoice import (
-    compute_combined_invoice, invoice_warehouse_list, _resolve_range, _completed_logs, _ledger_rows,
+    compute_combined_invoice, invoice_warehouse_list, select_invoice_rows, _resolve_range,
 )
 from core.uchoice_inventory import inventory_balances, format_closing_mix
 from core.uchoice_context import sku_label_map, get_original_fields
@@ -56,9 +56,10 @@ _INVENTORY_NOTES = (
 )
 
 
-def _write_inventory_sheet(wb, db: DBSession, warehouse_codes: list[str], start, end_exclusive, sku_labels: dict) -> None:
+def _write_inventory_sheet(wb, balances: list[dict], sku_labels: dict) -> None:
     """
-    Per-SKU opening/closing pallets for the period (core/uchoice_inventory.py).
+    Per-SKU opening/closing pallets for the period (core/uchoice_inventory.py),
+    from the same balances the Summary and chat totals use.
     Closing is a formula so staff can see it add up; Closing Detail lists the
     closing balance per pallet size, one per line, like the 库存查询 reply.
     """
@@ -70,7 +71,7 @@ def _write_inventory_sheet(wb, db: DBSession, warehouse_codes: list[str], start,
     top = Alignment(vertical="top")
     wrap_top = Alignment(vertical="top", wrap_text=True)
     row = 2
-    for b in inventory_balances(db, warehouse_codes, start, end_exclusive):
+    for b in balances:
         ws.append([
             b["warehouse_code"], b["sku_code"], sku_labels.get(b["sku_code"], ""),
             b["opening"], f"=D{row}+F{row}+G{row}+H{row}",
@@ -161,7 +162,22 @@ def build_invoice_workbook(
     db: DBSession, warehouse_codes, start_month: str, end_month: str | None = None,
     generated_at: datetime | None = None,
 ) -> bytes:
+    """The workbook bytes only; see build_invoice_report."""
+    return build_invoice_report(db, warehouse_codes, start_month, end_month, generated_at)[0]
+
+
+def build_invoice_report(
+    db: DBSession, warehouse_codes, start_month: str, end_month: str | None = None,
+    generated_at: datetime | None = None,
+) -> tuple[bytes, dict]:
     """
+    Returns (workbook bytes, the combined invoice it was built from).
+    Callers use that same dict for the chat reply, so the reply and the
+    attached file can never describe different reads of the data (Codex
+    code audit #4): the fees are computed once, and the per-SKU balances are
+    read once and feed the Inventory sheet, the Summary pallet lines and
+    the reply's opening/closing totals alike.
+
     warehouse_codes: one code or a list (invoice-inventory plan, Phase 3);
     the workbook covers them all, every detail row naming its warehouse.
 
@@ -180,8 +196,17 @@ def build_invoice_workbook(
     """
     codes = invoice_warehouse_list(warehouse_codes)
     end_month = end_month or start_month
-    start, end, end_exclusive = _resolve_range(start_month, end_month)
-    combined = compute_combined_invoice(db, codes, start_month, end_month)
+    start, _end, end_exclusive = _resolve_range(start_month, end_month)
+    # Fee rows and stock balances are each read once; totals, sheets and the
+    # returned dict (the chat reply) are all derived from those reads.
+    rows_by_warehouse = {code: select_invoice_rows(db, code, start_month, end_month) for code in codes}
+    combined = compute_combined_invoice(db, codes, start_month, end_month, include_inventory=False,
+                                        rows_by_warehouse=rows_by_warehouse)
+    balances = inventory_balances(db, codes, start, end_exclusive)
+    for key, field in (("opening_pallets", "opening"), ("closing_pallets", "closing")):
+        for code in codes:
+            combined["per_warehouse"][code][key] = sum(b[field] for b in balances if b["warehouse_code"] == code)
+        combined[key] = sum(b[field] for b in balances)
     sku_labels = sku_label_map(db)
     generated_at = generated_at or datetime.now(timezone.utc)
 
@@ -190,7 +215,7 @@ def build_invoice_workbook(
     wb.properties.modified = generated_at
 
     _write_summary_sheet(wb.active, combined, start_month, end_month, generated_at)
-    _write_inventory_sheet(wb, db, codes, start, end_exclusive, sku_labels)
+    _write_inventory_sheet(wb, balances, sku_labels)
 
     # ── Transportation & Palletization (outbound completions) ──────────────
     from models.uchoice import UchoiceAddress
@@ -205,7 +230,7 @@ def build_invoice_workbook(
         "Transportation Fee", "Palletization Fee",
     ])
     for warehouse_code in codes:
-        for log in _completed_logs(db, "uchoice_outbound_request", warehouse_code, start, end_exclusive):
+        for log in rows_by_warehouse[warehouse_code].outbound:
             result = log.result or {}
             lines = result.get("fulfillment_lines") or []
             sku_summary = "; ".join(
@@ -242,7 +267,7 @@ def build_invoice_workbook(
     ws3 = wb.create_sheet("Inbound")
     _write_header(ws3, 1, ["Warehouse", "Serial Number", "Completed At (UTC)", "SKU Lines", "Unpacking Fee"])
     for warehouse_code in codes:
-        for log in _completed_logs(db, "uchoice_inbound_request", warehouse_code, start, end_exclusive):
+        for log in rows_by_warehouse[warehouse_code].inbound:
             result = log.result or {}
             lines = result.get("received_lines") or []
             sku_summary = "; ".join(
@@ -262,19 +287,29 @@ def build_invoice_workbook(
     ws4 = wb.create_sheet("Storage")
     _write_header(ws4, 1, ["Warehouse", "Date", "Pallet Count", "Storage Fee"])
     for warehouse_code in codes:
-        for row in _ledger_rows(db, warehouse_code, start, end):
+        for row in rows_by_warehouse[warehouse_code].ledger:
             ws4.append([warehouse_code, row.fee_date.isoformat(), row.pallet_count, float(row.storage_fee)])
     _finish_detail_sheet(ws4)
 
     buf = io.BytesIO()
     wb.save(buf)
-    return freeze_xlsx_timestamps(buf.getvalue(), generated_at)
+    return freeze_xlsx_timestamps(buf.getvalue(), generated_at), combined
 
 
 def build_invoice_artifact(
     db: DBSession, warehouse_codes, start_month: str, end_month: str | None, request_log_id
 ) -> dict:
+    """The artifact mapping only; see build_invoice_artifact_with_summary."""
+    return build_invoice_artifact_with_summary(db, warehouse_codes, start_month, end_month, request_log_id)[0]
+
+
+def build_invoice_artifact_with_summary(
+    db: DBSession, warehouse_codes, start_month: str, end_month: str | None, request_log_id
+) -> tuple[dict, dict]:
     """
+    Returns (artifact mapping, the combined invoice the file was built from;
+    use it for the chat reply -- see build_invoice_report).
+
     Channel-neutral artifact wrapper around build_invoice_workbook, matching
     the {bytes, filename, content_type, artifact_key} shape handlers/uchoice/
     pdf_stub.py's PDF artifacts use -- so Kefu delivery (core/kefu_delivery.py's
@@ -294,10 +329,10 @@ def build_invoice_artifact(
     end_month = end_month or start_month
     log = db.query(RequestLog).filter_by(log_id=request_log_id).first() if request_log_id else None
     generated_at = log.created_at if log is not None else None
-    data = build_invoice_workbook(db, warehouse_codes, start_month, end_month, generated_at=generated_at)
+    data, combined = build_invoice_report(db, warehouse_codes, start_month, end_month, generated_at=generated_at)
     return {
         "bytes": data,
         "filename": invoice_filename(warehouse_codes, start_month, end_month),
         "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "artifact_key": f"{request_log_id}:invoice_workbook",
-    }
+    }, combined

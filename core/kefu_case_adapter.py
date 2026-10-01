@@ -806,18 +806,17 @@ def _authorize_case(access, session) -> str | None:
         fields = session.collected_fields or {}
         service_name = next((s.get("name") for s in access.allowed_services
                              if s["service_type_id"] == str(session.service_type_id)), None)
-        if service_name == "view_invoice":
-            # A 费用报告 covers a list of warehouses, frozen when it ran:
-            # every one is re-checked here, never re-expanded. An omitted /
-            # "all" selection not yet resolved names nothing to check
-            # (core/uchoice_invoice_scope.py). role_change's warehouse_codes
-            # is a different thing (the assignment), so only this service.
-            from core.uchoice_invoice_scope import requested_invoice_warehouses
-            case_warehouses = requested_invoice_warehouses(fields)
-        else:
-            case_warehouses = [fields["warehouse_code"]] if fields.get("warehouse_code") is not None else []
-        if any(code not in access.warehouse_codes for code in case_warehouses):
-            return "case_wrong_warehouse"
+        # A 费用报告 case is exempt: it runs as soon as its fields are
+        # complete, against the caller's access at that moment
+        # (core/uchoice_invoice_scope.py + its pre-confirm validator), and is
+        # closed once it has run -- so a later turn never reaches this check
+        # (case_closed comes first). While it is still a draft, denying here
+        # on a warehouse the staff member typed would only stop them
+        # correcting it (Codex code audit #2).
+        if service_name != "view_invoice":
+            session_warehouse = fields.get("warehouse_code")
+            if session_warehouse is not None and session_warehouse not in access.warehouse_codes:
+                return "case_wrong_warehouse"
     return None
 
 
