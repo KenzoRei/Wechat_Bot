@@ -105,6 +105,29 @@ def _write_inventory_sheet(wb, balances: list[dict], sku_labels: dict) -> None:
     ws.column_dimensions["A"].width = 12
 
 
+def _line_quantity(line: dict) -> str | None:
+    """A completion line's quantity with its unit -- pallets and loose boxes
+    otherwise both read as a bare "x1". None when the line carries neither
+    count (a picks-only line)."""
+    if line.get("pallet_count") is not None:
+        return f"x{line['pallet_count']}托"
+    if line.get("box_count") is not None:
+        return f"散箱x{line['box_count']}"
+    return None
+
+
+def _sku_summary(lines: list[dict], sku_labels: dict) -> str:
+    parts = []
+    for line in lines:
+        label = sku_labels.get(line.get("sku_code"), line.get("sku_code", "?"))
+        quantity = _line_quantity(line)
+        if quantity is None:
+            picked = sum(p.get("box_count") or 0 for p in line.get("picks") or [])
+            quantity = f"{picked}箱" if picked else "x?"
+        parts.append(f"{label} {quantity}")
+    return "; ".join(parts)
+
+
 def invoice_filename(warehouse_codes, start_month: str, end_month: str | None) -> str:
     """invoice_DE-JFK-NJ_2026-09_2026-09.xlsx -- the warehouses it covers, sorted."""
     codes = invoice_warehouse_list(warehouse_codes)
@@ -232,18 +255,20 @@ def build_invoice_report(
     for warehouse_code in codes:
         for log in rows_by_warehouse[warehouse_code].outbound:
             result = log.result or {}
+            original_fields = get_original_fields(db, log)
             lines = result.get("fulfillment_lines") or []
-            sku_summary = "; ".join(
-                f"{sku_labels.get(l.get('sku_code'), l.get('sku_code', '?'))} x{l.get('pallet_count', l.get('box_count', '?'))}"
-                for l in lines
-            )
+            if any(_line_quantity(l) is None for l in lines):
+                # Batch completions recorded before this fix stored picks-only
+                # lines; a batch ships at the original quantities, so those
+                # are the lines to show.
+                lines = original_fields.get("sku_lines") or lines
+            sku_summary = _sku_summary(lines, sku_labels)
 
             # destination isn't in result — it's on the original request, not the
             # completion's own fields, so it's resolved the same way the
             # confirmation/response builders do (core/uchoice_context.py).
             destination_company = ""
             destination_addr = ""
-            original_fields = get_original_fields(db, log)
             destination_address_id = original_fields.get("destination_address_id")
             if destination_address_id:
                 addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
@@ -269,11 +294,7 @@ def build_invoice_report(
     for warehouse_code in codes:
         for log in rows_by_warehouse[warehouse_code].inbound:
             result = log.result or {}
-            lines = result.get("received_lines") or []
-            sku_summary = "; ".join(
-                f"{sku_labels.get(l.get('sku_code'), l.get('sku_code', '?'))} x{l.get('pallet_count', l.get('box_count', '?'))}"
-                for l in lines
-            )
+            sku_summary = _sku_summary(result.get("received_lines") or [], sku_labels)
             ws3.append([
                 warehouse_code,
                 log.serial_number,

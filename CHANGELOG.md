@@ -7,6 +7,21 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.5.1] - 2026-10-01
+
+### Fixed
+- **Invoice Outbound sheet showed `x?` for batch-confirmed requests.** A
+  batch completion ("确认出库" with several requests) stored only the source
+  picks as its shipped lines, without the pallet or box count the invoice
+  reads. It now stores the request's original lines, with their counts, the
+  same as a single confirmation; picks are still kept in `source_picks`.
+  Batch rows already completed this way take their quantities from the
+  original request, which a batch always ships at.
+
+### Changed
+- Invoice SKU Lines (Outbound and Inbound sheets) show the unit: `x1托` for
+  pallets, `散箱x1` for loose boxes. Previously both read as a bare `x1`.
+
 ## [1.5.0] - 2026-10-01
 
 ### Changed

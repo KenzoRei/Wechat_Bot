@@ -331,6 +331,52 @@ def test_whole_pallet_line_split_is_previewed_and_executed_as_shown(world):
         db.close()
 
 
+def _invoice_sku_lines(db, warehouse) -> dict[str, str]:
+    import io
+    from openpyxl import load_workbook
+    from core.uchoice_invoice_export import build_invoice_workbook
+
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    wb = load_workbook(io.BytesIO(build_invoice_workbook(db, warehouse, month)))
+    return {row[1]: row[3] for row in wb["Outbound"].iter_rows(min_row=2, values_only=True)}
+
+
+def test_batch_result_keeps_quantities_and_invoice_shows_them(world):
+    """A batch completion's stored fulfillment_lines carry the original
+    pallet/box counts, so the invoice's Outbound SKU Lines show them
+    instead of "x?" -- including rows stored before the fix (picks-only)."""
+    db = SessionLocal()
+    try:
+        w, sku = world.warehouse(), world.sku(db)
+        seed(db, w, sku, {50: 1, 105: 2})
+        r1 = world.request(db, w, pallets(105, 1, sku))
+        r2 = world.request(db, w, [{"sku_code": sku, "box_count": 1}])
+        db.commit()
+        run_batch(db, prepare_fields(db, [r1.serial_number, r2.serial_number]))
+
+        stored = db.execute(text("select result from request_log where log_id=:id"), {"id": r1.log_id}).scalar_one()
+        assert stored["fulfillment_lines"] == pallets(105, 1, sku)
+        assert stored["source_picks"][0]["picks"]  # picks still recorded
+
+        label = "Batch test SKU"
+        expected = {r1.serial_number: f"{label} x1托", r2.serial_number: f"{label} 散箱x1"}
+        assert _invoice_sku_lines(db, w) == expected
+
+        # Rows completed before the fix stored picks-only lines; the export
+        # falls back to the original request's quantities.
+        for log in (r1, r2):
+            db.execute(text(
+                "update request_log set result = jsonb_set(result, '{fulfillment_lines}', "
+                "jsonb_build_array(jsonb_build_object('sku_code', cast(:s as text), 'picks', "
+                "jsonb_build_array(jsonb_build_object('source_boxes_per_pallet', 50, 'box_count', 1))))) "
+                "where log_id=:id"
+            ), {"s": sku, "id": log.log_id})
+        db.commit()
+        assert _invoice_sku_lines(db, w) == expected
+    finally:
+        db.close()
+
+
 def test_full_confirm_rerenders_when_stock_moved_but_stayed_sufficient(world):
     """Test 17 (round-2 finding 2): no shortage, but different buckets."""
     from core.uchoice_storage import apply_storage_delta

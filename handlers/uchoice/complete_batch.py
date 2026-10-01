@@ -147,6 +147,13 @@ class RunCompletionBatchHandler(BaseHandler):
                     raise _BatchBlocked("rejected", [serial], e.user_message) from e
                 if result.get("_kefu_stop_workflow"):
                     raise _BatchBlocked("stock", [serial], f"{serial} 库存已变动，现有库存不足")
+                # The handler echoes its picks-only input lines back as
+                # fulfillment_lines; the picks themselves are already kept in
+                # source_picks. A batch ships at the original quantities, so
+                # store the original lines -- the same shape the single flow
+                # stores when nothing is restated -- or the invoice export has
+                # no pallet/box count to show ("x?").
+                result = {**result, "fulfillment_lines": [dict(l) for l in target.sku_lines()]}
             else:
                 sub = self._sub_context(context, target, {"reference_serial": serial})
                 sub["_uchoice_target"] = uchoice_targets[serial]
