@@ -654,6 +654,24 @@ def _valid_caller_warehouse_scope(context: dict, collected_fields: dict, db: DBS
     )
 
 
+def _valid_known_warehouse_code(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """
+    Rejects a warehouse_code that isn't one of the platform's warehouses,
+    for every role. _valid_caller_warehouse_scope alone can't: an unscoped
+    caller (admin/accountant) passes it with any value, and view_invoice's
+    queries filter by exact equality, so a value like "JFK,DE" or "all"
+    silently produced an all-zero invoice instead of an error.
+    """
+    del context, db
+    from core.uchoice_constants import VALID_WAREHOUSE_CODES
+
+    code = collected_fields.get("warehouse_code")
+    if not code or code in VALID_WAREHOUSE_CODES:  # missing is the required-field check's job
+        return None
+    codes_list = "、".join(sorted(VALID_WAREHOUSE_CODES))
+    return f"未知仓库：{code}。请提供有效的仓库代码（{codes_list}）。"
+
+
 def _valid_upsert_address_warehouse_scope(context: dict, collected_fields: dict, db: DBSession) -> str | None:
     """
     upsert_address's own warehouse-scope check -- _valid_caller_warehouse_scope
@@ -832,7 +850,10 @@ PRE_CONFIRM_VALIDATORS = {
     ),
     "view_storage": _valid_caller_warehouse_scope,
     "view_storage_history": _valid_caller_warehouse_scope,
-    "view_invoice": _valid_caller_warehouse_scope,
+    "view_invoice": _compose(
+        _valid_known_warehouse_code,
+        _valid_caller_warehouse_scope,
+    ),
     "upsert_address": _valid_upsert_address_warehouse_scope,
     "fedex_label": _valid_label_phone_numbers,
     "ups_label": _valid_label_phone_numbers,

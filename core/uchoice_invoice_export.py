@@ -32,6 +32,13 @@ def _autosize(ws) -> None:
         ws.column_dimensions[get_column_letter(col_cells[0].column)].width = min(max(length + 2, 10), 60)
 
 
+def _finish_detail_sheet(ws) -> None:
+    """Header row stays visible while scrolling, with a filter on every column."""
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+    _autosize(ws)
+
+
 def build_invoice_workbook(
     db: DBSession, warehouse_code: str, start_month: str, end_month: str | None = None,
     generated_at: datetime | None = None,
@@ -81,9 +88,11 @@ def build_invoice_workbook(
     # ── Transportation & Palletization (outbound completions) ──────────────
     from models.uchoice import UchoiceAddress
 
-    ws2 = wb.create_sheet("outbound")
+    # Every detail row carries its own Warehouse, so a row copied out of
+    # this workbook (or a future multi-warehouse invoice) stays identifiable.
+    ws2 = wb.create_sheet("Outbound")
     _write_header(ws2, 1, [
-        "Serial Number", "Completed At (UTC)", "SKU Lines",
+        "Warehouse", "Serial Number", "Completed At (UTC)", "SKU Lines",
         "Destination Company", "Destination Address",
         "Transportation Fee", "Palletization Fee",
     ])
@@ -110,6 +119,7 @@ def build_invoice_workbook(
                 destination_addr = addr.addr
 
         ws2.append([
+            warehouse_code,
             log.serial_number,
             log.completed_at.strftime("%Y-%m-%d %H:%M") if log.completed_at else "",
             sku_summary,
@@ -118,11 +128,11 @@ def build_invoice_workbook(
             float(Decimal(str(result.get("transportation_fee", 0)))),
             float(Decimal(str(result.get("palletization_fee", 0)))),
         ])
-    _autosize(ws2)
+    _finish_detail_sheet(ws2)
 
     # ── Unpacking (inbound completions) ─────────────────────────────────────
-    ws3 = wb.create_sheet("inbound")
-    _write_header(ws3, 1, ["Serial Number", "Completed At (UTC)", "SKU Lines", "Unpacking Fee"])
+    ws3 = wb.create_sheet("Inbound")
+    _write_header(ws3, 1, ["Warehouse", "Serial Number", "Completed At (UTC)", "SKU Lines", "Unpacking Fee"])
     inbound_logs = _completed_logs(db, "uchoice_inbound_request", warehouse_code, start, end_exclusive)
     for log in inbound_logs:
         result = log.result or {}
@@ -132,19 +142,20 @@ def build_invoice_workbook(
             for l in lines
         )
         ws3.append([
+            warehouse_code,
             log.serial_number,
             log.completed_at.strftime("%Y-%m-%d %H:%M") if log.completed_at else "",
             sku_summary,
             float(Decimal(str(result.get("unpacking_fee", 0)))),
         ])
-    _autosize(ws3)
+    _finish_detail_sheet(ws3)
 
     # ── Storage (daily ledger) ───────────────────────────────────────────
     ws4 = wb.create_sheet("Storage")
-    _write_header(ws4, 1, ["Date", "Pallet Count", "Storage Fee"])
+    _write_header(ws4, 1, ["Warehouse", "Date", "Pallet Count", "Storage Fee"])
     for row in _ledger_rows(db, warehouse_code, start, end):
-        ws4.append([row.fee_date.isoformat(), row.pallet_count, float(row.storage_fee)])
-    _autosize(ws4)
+        ws4.append([warehouse_code, row.fee_date.isoformat(), row.pallet_count, float(row.storage_fee)])
+    _finish_detail_sheet(ws4)
 
     buf = io.BytesIO()
     wb.save(buf)

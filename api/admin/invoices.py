@@ -8,10 +8,24 @@ from database import get_db
 from middleware.admin_auth import verify_admin_key
 from core.uchoice_invoice_export import build_invoice_workbook
 from core.download_tokens import create_token
+from core.uchoice_constants import VALID_WAREHOUSE_CODES
 
 router = APIRouter(prefix="/admin/invoices", dependencies=[Depends(verify_admin_key)])
 
 _SERVER_BASE_URL = getattr(config, "SERVER_BASE_URL", "https://wechat-bot-atse.onrender.com")
+
+
+def _require_known_warehouse(warehouse_code: str) -> None:
+    """
+    Same rule as core.pre_confirm_validators._valid_known_warehouse_code: an
+    unknown code would otherwise build an all-zero invoice (exact-match
+    filters) and be echoed into the download filename.
+    """
+    if warehouse_code not in VALID_WAREHOUSE_CODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"warehouse_code must be one of: {', '.join(sorted(VALID_WAREHOUSE_CODES))}",
+        )
 
 
 @router.get("/export")
@@ -26,6 +40,7 @@ def export_invoice(
     one row per contributing transaction) — not just the totals the chat
     response shows. warehouse_code: JFK, DE, or NJ. start_month/end_month: 'YYYY-MM'.
     """
+    _require_known_warehouse(warehouse_code)
     try:
         data = build_invoice_workbook(db, warehouse_code, start_month, end_month)
     except ValueError:
@@ -55,6 +70,7 @@ def export_invoice_link(
     itself the entire access control, standing in for the admin key so this
     one link is safe to open/share without exposing the real credential.
     """
+    _require_known_warehouse(warehouse_code)
     try:
         data = build_invoice_workbook(db, warehouse_code, start_month, end_month)
     except ValueError:
