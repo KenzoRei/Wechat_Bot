@@ -77,6 +77,11 @@ def compute_invoice(db: DBSession, warehouse_code: str, start_month: str, end_mo
 
     total = transportation_total + palletization_total + unpacking_total + storage_fee_total
 
+    # Opening/closing pallet totals for the chat reply's one-line inventory
+    # summary; the per-SKU detail is the workbook's Inventory sheet.
+    from core.uchoice_inventory import inventory_balances
+    balances = inventory_balances(db, [warehouse_code], start, end_exclusive)
+
     return {
         "warehouse_code":     warehouse_code,
         "start_month":        start_month,
@@ -86,4 +91,6 @@ def compute_invoice(db: DBSession, warehouse_code: str, start_month: str, end_mo
         "unpacking_fee":      unpacking_total,
         "storage_fee":        storage_fee_total,
         "total":              total,
+        "opening_pallets":    sum(b["opening"] for b in balances),
+        "closing_pallets":    sum(b["closing"] for b in balances),
     }

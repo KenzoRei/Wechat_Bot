@@ -13,6 +13,7 @@ from openpyxl.styles import Font, Alignment
 from openpyxl.utils import get_column_letter
 
 from core.uchoice_invoice import compute_invoice, _resolve_range, _completed_logs, _ledger_rows
+from core.uchoice_inventory import inventory_balances, format_closing_mix
 from core.uchoice_context import sku_label_map, get_original_fields
 from core.xlsx_determinism import freeze_xlsx_timestamps
 
@@ -28,7 +29,12 @@ def _write_header(ws, row: int, headers: list[str]) -> None:
 
 def _autosize(ws) -> None:
     for col_cells in ws.columns:
-        length = max((len(str(c.value)) if c.value is not None else 0) for c in col_cells)
+        # Longest line, not longest string: a wrapped multi-line cell (the
+        # Inventory sheet's Closing Detail) shouldn't widen its column.
+        length = max(
+            (max(len(line) for line in str(c.value).splitlines() or [""]) if c.value is not None else 0)
+            for c in col_cells
+        )
         ws.column_dimensions[get_column_letter(col_cells[0].column)].width = min(max(length + 2, 10), 60)
 
 
@@ -37,6 +43,63 @@ def _finish_detail_sheet(ws) -> None:
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
     _autosize(ws)
+
+
+_INVENTORY_NOTES = (
+    "Inbound / Outbound / Other count pallets. A loose-box pick doesn't change the pallet count; "
+    "it shows in Closing Detail as a smaller pallet.",
+    "Other Net Change = transfers between warehouses, internal moves/repackaging, adjustments and "
+    "recounts. See the storage history export for each change.",
+    "Balances are as recorded in the system.",
+)
+
+
+def _write_inventory_sheet(wb, db: DBSession, warehouse_code: str, start, end_exclusive, sku_labels: dict) -> None:
+    """
+    Per-SKU opening/closing pallets for the period (core/uchoice_inventory.py).
+    Closing is a formula so staff can see it add up; Closing Detail lists the
+    closing balance per pallet size, one per line, like the 库存查询 reply.
+    """
+    ws = wb.create_sheet("Inventory")
+    _write_header(ws, 1, [
+        "Warehouse", "SKU", "Description", "Opening (plt)", "Closing (plt)",
+        "Inbound (plt)", "Outbound (plt)", "Other Net Change (plt)", "Closing Detail",
+    ])
+    top = Alignment(vertical="top")
+    wrap_top = Alignment(vertical="top", wrap_text=True)
+    row = 2
+    for b in inventory_balances(db, [warehouse_code], start, end_exclusive):
+        ws.append([
+            b["warehouse_code"], b["sku_code"], sku_labels.get(b["sku_code"], ""),
+            b["opening"], f"=D{row}+F{row}+G{row}+H{row}",
+            b["inbound"], b["outbound"], b["other"],
+            format_closing_mix(b["closing_mix"]),
+        ])
+        for col in range(1, 9):
+            ws.cell(row=row, column=col).alignment = top
+        ws.cell(row=row, column=9).alignment = wrap_top
+        lines = len(b["closing_mix"])
+        if lines > 1:
+            ws.row_dimensions[row].height = 15 * lines
+        row += 1
+    last = row - 1
+
+    total = ["Total", None, None]
+    total += [f"=SUM({col}2:{col}{last})" if last >= 2 else 0 for col in "DEFGH"]
+    ws.append(total + [None])
+    for col in range(1, 10):
+        ws.cell(row=row, column=col).font = _HEADER_FONT
+
+    ws.append([])
+    for note in _INVENTORY_NOTES:
+        ws.append([note])
+        ws.cell(row=ws.max_row, column=1).font = Font(italic=True)
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:I{max(last, 1)}"
+    _autosize(ws)
+    # Notes are long single cells in column A; size A to the data, not them.
+    ws.column_dimensions["A"].width = 12
 
 
 def build_invoice_workbook(
@@ -83,7 +146,13 @@ def build_invoice_workbook(
     ws.append(["Total", float(summary["total"])])
     ws.cell(row=total_row, column=1).font = _HEADER_FONT
     ws.cell(row=total_row, column=2).font = _HEADER_FONT
+    ws.append([])
+    _write_header(ws, ws.max_row + 1, ["Inventory", "Pallets"])
+    ws.append(["Opening pallets", summary["opening_pallets"]])
+    ws.append(["Closing pallets", summary["closing_pallets"]])
     _autosize(ws)
+
+    _write_inventory_sheet(wb, db, warehouse_code, start, end_exclusive, sku_labels)
 
     # ── Transportation & Palletization (outbound completions) ──────────────
     from models.uchoice import UchoiceAddress

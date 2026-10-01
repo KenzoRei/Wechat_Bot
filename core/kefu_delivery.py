@@ -21,7 +21,7 @@ from clients.kefu_client import (
     KefuWindowClosed,
 )
 from core.kefu_contracts import Artifact, ArtifactLike, KefuIdentity, coerce_artifact
-from models.kefu import KefuOutboundDelivery, KefuStaff
+from models.kefu import KefuArtifactBlob, KefuOutboundDelivery, KefuStaff
 
 
 @dataclass(frozen=True)
@@ -158,6 +158,52 @@ def enqueue_text(
     return delivery
 
 
+# File doc types whose bytes depend on live data that can change between
+# enqueue and send (a current-month invoice; the Inventory sheet's stock
+# history). Their exact bytes are stored once at enqueue (V37) and read back
+# by core/kefu_artifact_loader.py instead of being rebuilt.
+STORED_ARTIFACT_DOC_TYPES = frozenset({"invoice_workbook"})
+ARTIFACT_BLOB_RETENTION = timedelta(days=30)
+
+
+def _store_artifact_blob(db: Session, artifact: Artifact) -> None:
+    db.execute(
+        insert(KefuArtifactBlob)
+        .values(
+            artifact_key=artifact.artifact_key,
+            content=artifact.content,
+            filename=artifact.filename,
+            content_type=artifact.content_type,
+            content_hash=content_hash(artifact.content),
+        )
+        .on_conflict_do_nothing(index_elements=[KefuArtifactBlob.artifact_key])
+    )
+    stored_hash = db.execute(
+        select(KefuArtifactBlob.content_hash).where(KefuArtifactBlob.artifact_key == artifact.artifact_key)
+    ).scalar_one()
+    if stored_hash != content_hash(artifact.content):
+        raise ValueError("artifact_key_collision")
+
+
+def purge_expired_artifact_blobs(db: Session, *, now: datetime | None = None) -> int:
+    """
+    Decision D8: keep a stored file while any delivery of it is pending, and
+    for 30 days in total. A duplicate-message replay of a purged file skips
+    it (core/kefu_case_adapter.py), never rebuilds it. Returns rows deleted;
+    the caller commits.
+    """
+    cutoff = (now or datetime.now(timezone.utc)) - ARTIFACT_BLOB_RETENTION
+    result = db.execute(
+        text(
+            "DELETE FROM kefu_artifact_blob b WHERE b.created_at < :cutoff "
+            "AND NOT EXISTS (SELECT 1 FROM kefu_outbound_delivery d "
+            "WHERE d.artifact_key = b.artifact_key AND d.status = 'pending')"
+        ),
+        {"cutoff": cutoff},
+    )
+    return result.rowcount
+
+
 def enqueue_file(
     db: Session,
     *,
@@ -168,6 +214,8 @@ def enqueue_file(
     artifact: ArtifactLike,
 ) -> KefuOutboundDelivery:
     artifact = coerce_artifact(artifact)
+    if doc_type in STORED_ARTIFACT_DOC_TYPES:
+        _store_artifact_blob(db, artifact)
     statement = (
         insert(KefuOutboundDelivery)
         .values(

@@ -464,12 +464,19 @@ def _load_replay_artifacts(session, artifact_keys) -> tuple:
     """Reconstruct stored artifacts without re-running AI or business work."""
     if session is None or not session.request_log_id or not artifact_keys:
         return ()
-    from core.kefu_artifact_loader import load_artifact
+    from core.kefu_artifact_loader import ArtifactUnavailable, load_artifact
 
     artifacts = []
     for key in artifact_keys:
         doc_type = key.rsplit(":", 1)[-1]
-        artifacts.append(load_artifact(session.request_log_id, doc_type, key))
+        try:
+            # Never rebuild here: the replay sends nothing (the original
+            # turn's files were already queued durably), so a stored file
+            # purged after retention (decision D8) is simply skipped rather
+            # than failing a harmless duplicate message (D9).
+            artifacts.append(load_artifact(session.request_log_id, doc_type, key, allow_rebuild=False))
+        except ArtifactUnavailable:
+            continue
     return tuple(artifacts)
 
 

@@ -165,6 +165,7 @@ _TXN_TYPE_LABELS = {
     "move_in": "调拨入", "move_out": "调拨出",
     "transfer_in": "转仓入", "transfer_out": "转仓出",
     "adjust": "调整", "recount": "盘点",
+    "opening": "期初",
 }
 
 
@@ -330,6 +331,10 @@ def _invoice_sections_builder(context: dict, db: DBSession) -> list[dict]:
         "仓储费": f"${result.get('storage_fee', 0)}",
         "合计":   f"${result.get('total', 0)}",
     }
+    if "opening_pallets" in result:
+        # One line only -- the per-SKU list lives in the workbook's Inventory
+        # sheet (Kefu text replies are capped at 2048 bytes).
+        items["库存（托）"] = f"期初 {result['opening_pallets']} → 期末 {result['closing_pallets']}"
     sections = [
         {"label": None, "type": "raw", "items": [f"仓库：{warehouse_code}　范围：{range_str}"]},
         {"label": None, "type": "kv", "items": items},

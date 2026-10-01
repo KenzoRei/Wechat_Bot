@@ -419,7 +419,10 @@ Downloads the full detail backing an invoice as `.xlsx` — a Summary sheet plus
 one row per contributing transaction on the Outbound (transportation &
 palletization), Inbound (unpacking) and Storage sheets, not just the totals
 the chat `view_invoice` reply shows. Every detail row starts with a
-Warehouse column; each detail sheet has a frozen header row and filters. Same underlying `compute_invoice()` row-selection logic as the
+Warehouse column; each detail sheet has a frozen header row and filters. An
+Inventory sheet (after Summary) gives each SKU's opening and closing pallets
+for the period, with Inbound/Outbound/Other Net Change in pallets and the
+closing balance per pallet size; Summary adds opening/closing pallet totals. Same underlying `compute_invoice()` row-selection logic as the
 chat response, so the two can never silently disagree.
 
 ```powershell

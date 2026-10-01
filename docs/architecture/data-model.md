@@ -16,7 +16,7 @@ a constraint or column in those sources, the migration/model is authoritative.
 | Service catalog | `service_type`, `workflow`, `workflow_step` |
 | Conversation lifecycle | `conversation_session`, `request_log`, `interaction_log` |
 | U-Choice | `uchoice_customer`, `uchoice_sku`, `uchoice_storage`, `uchoice_storage_txn`, `uchoice_address`, fee/digest tables |
-| Kefu identities and durability | `kefu_staff`, `case_turn`, `case_execution`, staff-case context, inbound/sync/delivery tables, `kefu_voice_usage_alert` |
+| Kefu identities and durability | `kefu_staff`, `case_turn`, `case_execution`, staff-case context, inbound/sync/delivery tables, `kefu_artifact_blob`, `kefu_voice_usage_alert` |
 | Customer master data and labels | `customer`, `customer_credential`, `label_shipment` |
 | Company warehouse directory | `company_warehouse` |
 
@@ -35,7 +35,16 @@ a constraint or column in those sources, the migration/model is authoritative.
 - Kefu turn and execution ledgers provide replay/idempotency boundaries distinct
   from Smart Bot processing.
 - U-Choice inventory mutation is recorded in transaction history and protected
-  by PostgreSQL locking/constraints.
+  by PostgreSQL locking/constraints. Every stock write goes through
+  `apply_storage_delta`, which always writes a `uchoice_storage_txn` row, so
+  the balance at any instant is the sum of earlier changes; the invoice
+  Inventory sheet is derived this way (`core/uchoice_inventory.py`), with no
+  snapshot table. `scripts/check_storage_history.py` verifies history against
+  current stock.
+- `txn_type = 'opening'` (V36) marks starting stock: it counts in the
+  Inventory sheet's Opening column of its period, not as a movement. Each
+  warehouse's go-live 库存盘点 was relabelled to it
+  (`scripts/relabel_golive_opening.py`).
 - `kefu_inbound_message` is processed strictly in order per staff identity:
   only the oldest outstanding (pending/claimed) row is claimable, and only
   when due (`next_attempt_at`). A voice row also carries its transcript,
@@ -45,6 +54,11 @@ a constraint or column in those sources, the migration/model is authoritative.
   `request_log_id` or `inbound_message_msgid` (V34). The last is used for a
   reply to a message that never became a case turn (unsupported type, voice
   failure/retry notices).
+- `kefu_artifact_blob` (V37) holds the exact bytes of file artifacts that
+  would otherwise be rebuilt from changing live data (currently the invoice
+  workbook), written once at enqueue and read back on every send. Rows are
+  purged 30 days after creation unless a delivery of them is still pending; a
+  duplicate-message replay skips a purged file rather than rebuilding it.
 
 ## Authorization model
 

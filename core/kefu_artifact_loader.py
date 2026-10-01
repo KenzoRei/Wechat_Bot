@@ -6,15 +6,37 @@ from uuid import UUID
 from core.kefu_contracts import Artifact, ArtifactLike
 
 
-def load_artifact(request_log_id: UUID, doc_type: str, artifact_key: str) -> ArtifactLike:
-    """Rebuild an artifact identically after deferral or process restart."""
+class ArtifactUnavailable(LookupError):
+    """A stored-bytes artifact has no stored row and rebuilding wasn't allowed."""
+
+
+def load_artifact(request_log_id: UUID, doc_type: str, artifact_key: str, *, allow_rebuild: bool = True) -> ArtifactLike:
+    """
+    Rebuild an artifact identically after deferral or process restart.
+
+    Doc types in core.kefu_delivery.STORED_ARTIFACT_DOC_TYPES are read back
+    from kefu_artifact_blob (V37), never rebuilt from live data that may have
+    changed since enqueue. A missing row there means either a delivery
+    enqueued before V37 (rebuilt as before, still hash-checked by the
+    sender) or a file purged after its retention (decision D8). Callers that
+    must never rebuild -- the duplicate-message replay -- pass
+    allow_rebuild=False and get ArtifactUnavailable instead.
+    """
     from database import SessionLocal
+    from core.kefu_delivery import STORED_ARTIFACT_DOC_TYPES
     from handlers.uchoice.pdf_stub import GeneratePdfStubHandler
+    from models.kefu import KefuArtifactBlob
     from models.request_log import RequestLog
     from models.session import ConversationSession
 
     db = SessionLocal()
     try:
+        if doc_type in STORED_ARTIFACT_DOC_TYPES:
+            blob = db.get(KefuArtifactBlob, artifact_key)
+            if blob is not None:
+                return Artifact(bytes(blob.content), blob.filename, blob.content_type, blob.artifact_key)
+            if not allow_rebuild:
+                raise ArtifactUnavailable(f"stored {doc_type} {artifact_key} not found (expired or never stored)")
         log = db.get(RequestLog, request_log_id)
         if log is None:
             raise LookupError(f"request_log {request_log_id} not found")

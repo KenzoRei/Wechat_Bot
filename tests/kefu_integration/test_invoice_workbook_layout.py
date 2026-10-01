@@ -54,7 +54,7 @@ def workbook(db, ledger_row):
 
 
 def test_sheet_names(workbook):
-    assert workbook.sheetnames == ["Summary", "Outbound", "Inbound", "Storage"]
+    assert workbook.sheetnames == ["Summary", "Inventory", "Outbound", "Inbound", "Storage"]
 
 
 @pytest.mark.parametrize("sheet, headers", [
