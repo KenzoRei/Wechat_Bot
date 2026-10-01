@@ -464,12 +464,19 @@ def _load_replay_artifacts(session, artifact_keys) -> tuple:
     """Reconstruct stored artifacts without re-running AI or business work."""
     if session is None or not session.request_log_id or not artifact_keys:
         return ()
-    from core.kefu_artifact_loader import load_artifact
+    from core.kefu_artifact_loader import ArtifactUnavailable, load_artifact
 
     artifacts = []
     for key in artifact_keys:
         doc_type = key.rsplit(":", 1)[-1]
-        artifacts.append(load_artifact(session.request_log_id, doc_type, key))
+        try:
+            # Never rebuild here: the replay sends nothing (the original
+            # turn's files were already queued durably), so a stored file
+            # purged after retention (decision D8) is simply skipped rather
+            # than failing a harmless duplicate message (D9).
+            artifacts.append(load_artifact(session.request_log_id, doc_type, key, allow_rebuild=False))
+        except ArtifactUnavailable:
+            continue
     return tuple(artifacts)
 
 
@@ -796,9 +803,20 @@ def _authorize_case(access, session) -> str | None:
         if str(session.service_type_id) not in allowed_ids:
             return "case_service_not_granted"
     if access.warehouse_codes is not None:
-        session_warehouse = (session.collected_fields or {}).get("warehouse_code")
-        if session_warehouse is not None and session_warehouse not in access.warehouse_codes:
-            return "case_wrong_warehouse"
+        fields = session.collected_fields or {}
+        service_name = next((s.get("name") for s in access.allowed_services
+                             if s["service_type_id"] == str(session.service_type_id)), None)
+        # A 费用报告 case is exempt: it runs as soon as its fields are
+        # complete, against the caller's access at that moment
+        # (core/uchoice_invoice_scope.py + its pre-confirm validator), and is
+        # closed once it has run -- so a later turn never reaches this check
+        # (case_closed comes first). While it is still a draft, denying here
+        # on a warehouse the staff member typed would only stop them
+        # correcting it (Codex code audit #2).
+        if service_name != "view_invoice":
+            session_warehouse = fields.get("warehouse_code")
+            if session_warehouse is not None and session_warehouse not in access.warehouse_codes:
+                return "case_wrong_warehouse"
     return None
 
 

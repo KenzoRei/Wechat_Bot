@@ -580,16 +580,18 @@ def _workflow_steps(db: DBSession, context: dict, service: dict, session) -> Non
             # That handler's download-link/group-webhook behavior is
             # Smart Robot-only machinery (response_url can't carry a file at
             # all) -- irrelevant here since Kefu sends the file natively.
-            from core.uchoice_invoice import compute_invoice
-            from core.uchoice_invoice_export import build_invoice_artifact
+            from core.uchoice_invoice import serialize_invoice
+            from core.uchoice_invoice_export import build_invoice_artifact_with_summary
+            from core.uchoice_invoice_scope import invoice_warehouses_for_execution
 
             fields = session.collected_fields or {}
-            warehouse_code = fields.get("warehouse_code")
+            warehouse_codes = invoice_warehouses_for_execution(context, fields)
             start_month = fields.get("start_month")
             end_month = fields.get("end_month")
-            invoice = compute_invoice(db, warehouse_code, start_month, end_month)
-            context["result"].update({k: (str(v) if hasattr(v, "quantize") else v) for k, v in invoice.items()})
-            artifact = build_invoice_artifact(db, warehouse_code, start_month, end_month, context.get("request_log_id"))
+            # One calculation for both the reply and the attached file.
+            artifact, invoice = build_invoice_artifact_with_summary(
+                db, warehouse_codes, start_month, end_month, context.get("request_log_id"))
+            context["result"].update(serialize_invoice(invoice))
             context["_kefu_artifacts"].append({"doc_type": "invoice_workbook", "artifact": artifact})
             context["result"]["invoice_artifact_key"] = artifact["artifact_key"]
             continue
@@ -1405,6 +1407,19 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
             return clarification
     if service["name"] == "confirm_outbound_completion":
         _resolve_outbound_completion_loose_picks(db, session, context)
+    if service["name"] == "view_invoice":
+        # Optional warehouse: resolved once, here, to the effective list
+        # (omitted = every warehouse the caller may see) and frozen in the
+        # case; _authorize_case re-checks it, never re-expands it
+        # (core/uchoice_invoice_scope.py).
+        from core.uchoice_invoice_scope import resolve_invoice_warehouses
+        resolved, denial = resolve_invoice_warehouses(context, session.collected_fields or {})
+        if denial:
+            context["_reply"] = denial
+            _append(session, "assistant", denial)
+            return denial
+        session.collected_fields = resolved
+        context["collected_fields"] = session.collected_fields
     validation_error = pre_confirm_validators.run(service["name"], context, session.collected_fields or {}, db)
     if validation_error:
         context["_reply"] = validation_error

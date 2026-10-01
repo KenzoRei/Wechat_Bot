@@ -165,6 +165,7 @@ _TXN_TYPE_LABELS = {
     "move_in": "调拨入", "move_out": "调拨出",
     "transfer_in": "转仓入", "transfer_out": "转仓出",
     "adjust": "调整", "recount": "盘点",
+    "opening": "期初",
 }
 
 
@@ -316,9 +317,15 @@ def _storage_history_sections_builder(context: dict, db: DBSession) -> list[dict
 
 
 def _invoice_sections_builder(context: dict, db: DBSession) -> list[dict]:
-    """view_invoice. Header line states the queried warehouse + range."""
+    """
+    view_invoice. Header line states the warehouses covered + range -- always
+    listed, so a defaulted "all warehouses" is visible to the requester.
+    Several warehouses add one total line each; the per-warehouse fee detail
+    is in the workbook.
+    """
     result = context.get("result", {})
-    warehouse_code = result.get("warehouse_code", "?")
+    codes = result.get("warehouse_codes") or [result.get("warehouse_code", "?")]
+    warehouse_code = "、".join(codes)
     start_month = result.get("start_month", "?")
     end_month = result.get("end_month", start_month)
     range_str = start_month if start_month == end_month else f"{start_month} 至 {end_month}"
@@ -330,10 +337,19 @@ def _invoice_sections_builder(context: dict, db: DBSession) -> list[dict]:
         "仓储费": f"${result.get('storage_fee', 0)}",
         "合计":   f"${result.get('total', 0)}",
     }
+    if "opening_pallets" in result:
+        # One line only -- the per-SKU list lives in the workbook's Inventory
+        # sheet (Kefu text replies are capped at 2048 bytes).
+        items["库存（托）"] = f"期初 {result['opening_pallets']} → 期末 {result['closing_pallets']}"
     sections = [
         {"label": None, "type": "raw", "items": [f"仓库：{warehouse_code}　范围：{range_str}"]},
         {"label": None, "type": "kv", "items": items},
     ]
+    per_warehouse = result.get("per_warehouse") or {}
+    if len(per_warehouse) > 1:
+        sections.append({"label": "各仓合计", "type": "kv", "items": {
+            code: f"${per_warehouse[code].get('total', 0)}" for code in codes if code in per_warehouse
+        }})
 
     download_url = result.get("download_url")
     if download_url:

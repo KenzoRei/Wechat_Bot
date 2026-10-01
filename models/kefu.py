@@ -1,6 +1,6 @@
 from sqlalchemy import String, Text, Boolean, Integer, ForeignKey, DateTime, CheckConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
+from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY, BYTEA
 from database import Base
 import uuid
 from datetime import datetime
@@ -231,3 +231,21 @@ class KefuOutboundDelivery(Base):
     last_error:                           Mapped[str | None] = mapped_column(Text)
     created_at:                           Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     updated_at:                           Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class KefuArtifactBlob(Base):
+    """
+    V37: the exact bytes of a Kefu file artifact that would otherwise be
+    rebuilt from live data on every send attempt (the invoice and
+    storage-history workbooks). Written once by core.kefu_delivery.enqueue_file, read back by
+    core.kefu_artifact_loader, purged by purge_expired_artifact_blobs once no
+    delivery of it is pending and it is over 30 days old (decision D8).
+    """
+    __tablename__ = "kefu_artifact_blob"
+
+    artifact_key: Mapped[str]      = mapped_column(String(200), primary_key=True)
+    content:      Mapped[bytes]    = mapped_column(BYTEA, nullable=False)
+    filename:     Mapped[str]      = mapped_column(Text, nullable=False)
+    content_type: Mapped[str]      = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str]      = mapped_column(String(64), nullable=False)
+    created_at:   Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))

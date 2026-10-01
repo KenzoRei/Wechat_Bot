@@ -415,10 +415,15 @@ Returns the FedEx/UPS label as a PDF download.
 
 ## U-Choice Invoice Export
 
-Downloads the full detail backing an invoice as `.xlsx` — Summary sheet plus
-one row per contributing transaction (Transportation & Palletization,
-Unpacking, Storage sheets), not just the totals the chat `view_invoice`
-reply shows. Same underlying `compute_invoice()` row-selection logic as the
+Downloads the full detail backing an invoice as `.xlsx`, for one or several
+warehouses — a Summary sheet (charges by warehouse, with totals) plus
+one row per contributing transaction on the Outbound (transportation &
+palletization), Inbound (unpacking) and Storage sheets, not just the totals
+the chat `view_invoice` reply shows. Every detail row starts with a
+Warehouse column; each detail sheet has a frozen header row and filters. An
+Inventory sheet (after Summary) gives each SKU's opening and closing pallets
+for the period, with Inbound/Outbound/Other Net Change in pallets and the
+closing balance per pallet size; Summary adds opening/closing pallet totals. Same underlying `compute_invoice()` row-selection logic as the
 chat response, so the two can never silently disagree.
 
 ```powershell
@@ -427,7 +432,7 @@ Invoke-WebRequest "$base/admin/invoices/export?warehouse_code=JFK&start_month=20
 ```
 | Param | Required | Notes |
 |---|---|---|
-| `warehouse_code` | ✅ | `JFK`, `DE`, or `NJ` |
+| `warehouse_code` | ✅ | `JFK`, `DE` or `NJ`; a comma list (`JFK,DE`) for one combined invoice; or `all`. Any unknown code returns 400 |
 | `start_month` | ✅ | `YYYY-MM` |
 | `end_month` | — | `YYYY-MM`, defaults to `start_month` for a single-month invoice |
 

@@ -152,6 +152,20 @@ if config.KEFU_ENABLED:
     def _run_kefu_delivery_job():
         kefu_delivery_worker.run_delivery_sweep(SessionLocal, _kefu_client, kefu_artifact_loader.load_artifact)
 
+    def _run_kefu_artifact_purge_job():
+        from core.kefu_delivery import purge_expired_artifact_blobs
+        db = SessionLocal()
+        try:
+            deleted = purge_expired_artifact_blobs(db)
+            db.commit()
+            if deleted:
+                print(f"[main] purged {deleted} expired Kefu artifact file(s)", flush=True)
+        except Exception as e:
+            db.rollback()
+            print(f"[main] Kefu artifact purge failed: {e}", flush=True)
+        finally:
+            db.close()
+
     # Kefu's reply-window and quota semantics govern how many messages can be
     # sent per window, not how
     # often we're allowed to poll; there's no WeCom-imposed floor on these.
@@ -165,6 +179,11 @@ if config.KEFU_ENABLED:
     scheduler.add_job(
         _run_kefu_delivery_job, "interval", seconds=2, id="kefu_delivery",
         max_instances=1, coalesce=True, misfire_grace_time=5,
+    )
+    # Stored invoice files (V37) are kept 30 days unless still pending (D8).
+    scheduler.add_job(
+        _run_kefu_artifact_purge_job, "cron", hour=7, id="kefu_artifact_purge",
+        max_instances=1, coalesce=True, misfire_grace_time=3600,
     )
 
 if config.KEFU_CALLBACK_ENABLED:
@@ -188,7 +207,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Logistics WeChat Bot Platform",
-    version="1.3.1",
+    version="1.4.0",
     lifespan=lifespan
 )
 

@@ -12,7 +12,10 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 from openpyxl.utils import get_column_letter
 
-from core.uchoice_invoice import compute_invoice, _resolve_range, _completed_logs, _ledger_rows
+from core.uchoice_invoice import (
+    compute_combined_invoice, invoice_warehouse_list, select_invoice_rows, _resolve_range,
+)
+from core.uchoice_inventory import inventory_balances, format_closing_mix
 from core.uchoice_context import sku_label_map, get_original_fields
 from core.xlsx_determinism import freeze_xlsx_timestamps
 
@@ -28,15 +31,156 @@ def _write_header(ws, row: int, headers: list[str]) -> None:
 
 def _autosize(ws) -> None:
     for col_cells in ws.columns:
-        length = max((len(str(c.value)) if c.value is not None else 0) for c in col_cells)
+        # Longest line, not longest string: a wrapped multi-line cell (the
+        # Inventory sheet's Closing Detail) shouldn't widen its column.
+        length = max(
+            (max(len(line) for line in str(c.value).splitlines() or [""]) if c.value is not None else 0)
+            for c in col_cells
+        )
         ws.column_dimensions[get_column_letter(col_cells[0].column)].width = min(max(length + 2, 10), 60)
 
 
+def _finish_detail_sheet(ws) -> None:
+    """Header row stays visible while scrolling, with a filter on every column."""
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+    _autosize(ws)
+
+
+_INVENTORY_NOTES = (
+    "Inbound / Outbound / Other count pallets. A loose-box pick doesn't change the pallet count; "
+    "it shows in Closing Detail as a smaller pallet.",
+    "Other Net Change = transfers between warehouses, internal moves/repackaging, adjustments and "
+    "recounts. See the storage history export for each change.",
+    "Balances are as recorded in the system.",
+)
+
+
+def _write_inventory_sheet(wb, balances: list[dict], sku_labels: dict) -> None:
+    """
+    Per-SKU opening/closing pallets for the period (core/uchoice_inventory.py),
+    from the same balances the Summary and chat totals use.
+    Closing is a formula so staff can see it add up; Closing Detail lists the
+    closing balance per pallet size, one per line, like the 库存查询 reply.
+    """
+    ws = wb.create_sheet("Inventory")
+    _write_header(ws, 1, [
+        "Warehouse", "SKU", "Description", "Opening (plt)", "Closing (plt)",
+        "Inbound (plt)", "Outbound (plt)", "Other Net Change (plt)", "Closing Detail",
+    ])
+    top = Alignment(vertical="top")
+    wrap_top = Alignment(vertical="top", wrap_text=True)
+    row = 2
+    for b in balances:
+        ws.append([
+            b["warehouse_code"], b["sku_code"], sku_labels.get(b["sku_code"], ""),
+            b["opening"], f"=D{row}+F{row}+G{row}+H{row}",
+            b["inbound"], b["outbound"], b["other"],
+            format_closing_mix(b["closing_mix"]),
+        ])
+        for col in range(1, 9):
+            ws.cell(row=row, column=col).alignment = top
+        ws.cell(row=row, column=9).alignment = wrap_top
+        lines = len(b["closing_mix"])
+        if lines > 1:
+            ws.row_dimensions[row].height = 15 * lines
+        row += 1
+    last = row - 1
+
+    total = ["Total", None, None]
+    total += [f"=SUM({col}2:{col}{last})" if last >= 2 else 0 for col in "DEFGH"]
+    ws.append(total + [None])
+    for col in range(1, 10):
+        ws.cell(row=row, column=col).font = _HEADER_FONT
+
+    ws.append([None])  # spacer row (append([]) writes nothing)
+    for note in _INVENTORY_NOTES:
+        ws.append([note])
+        ws.cell(row=ws.max_row, column=1).font = Font(italic=True)
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:I{max(last, 1)}"
+    _autosize(ws)
+    # Notes are long single cells in column A; size A to the data, not them.
+    ws.column_dimensions["A"].width = 12
+
+
+def invoice_filename(warehouse_codes, start_month: str, end_month: str | None) -> str:
+    """invoice_DE-JFK-NJ_2026-09_2026-09.xlsx -- the warehouses it covers, sorted."""
+    codes = invoice_warehouse_list(warehouse_codes)
+    return f"invoice_{'-'.join(codes)}_{start_month}_{end_month or start_month}.xlsx"
+
+
+_CHARGE_ROWS = (
+    ("Transportation fee", "transportation_fee"),
+    ("Palletization fee", "palletization_fee"),
+    ("Unpacking fee", "unpacking_fee"),
+    ("Storage fee", "storage_fee"),
+)
+
+
+def _write_summary_sheet(ws, combined: dict, start_month: str, end_month: str, generated_at: datetime) -> None:
+    """
+    Charges by warehouse: one column per warehouse plus a Total column, with
+    a Total row; totals are SUM formulas. A single-warehouse invoice uses the
+    same layout with one warehouse column (decision D1).
+    """
+    codes = combined["warehouse_codes"]
+    per = combined["per_warehouse"]
+    last_wh_col = get_column_letter(1 + len(codes))
+    total_col = len(codes) + 2
+
+    ws.title = "Summary"
+    ws.append(["Warehouses", ", ".join(codes)])
+    ws.append(["Range", f"{start_month} to {end_month}"])
+    ws.append(["Generated at (UTC)", generated_at.strftime("%Y-%m-%d %H:%M")])
+    ws.append([None])  # spacer row (append([]) writes nothing)
+
+    _write_header(ws, ws.max_row + 1, ["Charge (USD)", *codes, "Total"])
+    first_charge = ws.max_row + 1
+    for label, key in _CHARGE_ROWS:
+        row = ws.max_row + 1
+        ws.append([label, *(float(per[c][key]) for c in codes), f"=SUM(B{row}:{last_wh_col}{row})"])
+    last_charge = ws.max_row
+    total_row = ws.max_row + 1
+    ws.append(["Total", *(
+        f"=SUM({get_column_letter(col)}{first_charge}:{get_column_letter(col)}{last_charge})"
+        for col in range(2, total_col + 1)
+    )])
+    for col in range(1, total_col + 1):
+        ws.cell(row=total_row, column=col).font = _HEADER_FONT
+
+    ws.append([None])  # spacer row (append([]) writes nothing)
+    _write_header(ws, ws.max_row + 1, ["Inventory (plt)", *codes, "Total"])
+    for label, key in (("Opening pallets", "opening_pallets"), ("Closing pallets", "closing_pallets")):
+        row = ws.max_row + 1
+        ws.append([label, *(per[c][key] for c in codes), f"=SUM(B{row}:{last_wh_col}{row})"])
+    _autosize(ws)
+
+
 def build_invoice_workbook(
-    db: DBSession, warehouse_code: str, start_month: str, end_month: str | None = None,
+    db: DBSession, warehouse_codes, start_month: str, end_month: str | None = None,
     generated_at: datetime | None = None,
 ) -> bytes:
+    """The workbook bytes only; see build_invoice_report."""
+    return build_invoice_report(db, warehouse_codes, start_month, end_month, generated_at)[0]
+
+
+def build_invoice_report(
+    db: DBSession, warehouse_codes, start_month: str, end_month: str | None = None,
+    generated_at: datetime | None = None,
+) -> tuple[bytes, dict]:
     """
+    Returns (workbook bytes, the combined invoice it was built from).
+    Callers use that same dict for the chat reply, so the reply and the
+    attached file can never describe different reads of the data (Codex
+    code audit #4): the fees are computed once, and the per-SKU balances are
+    read once and feed the Inventory sheet, the Summary pallet lines and
+    the reply's opening/closing totals alike.
+
+    warehouse_codes: one code or a list (invoice-inventory plan, Phase 3);
+    the workbook covers them all, every detail row naming its warehouse.
+
     generated_at: pass a stable, persisted timestamp (e.g. RequestLog.created_at)
     for any caller that needs byte-identical regeneration -- Kefu's durable
     delivery queue verifies a content hash before every send (core/kefu_delivery.py),
@@ -50,9 +194,19 @@ def build_invoice_workbook(
     Defaults to datetime.now() for Smart Robot's one-shot, never-re-verified
     send path, where determinism doesn't matter.
     """
+    codes = invoice_warehouse_list(warehouse_codes)
     end_month = end_month or start_month
-    start, end, end_exclusive = _resolve_range(start_month, end_month)
-    summary = compute_invoice(db, warehouse_code, start_month, end_month)
+    start, _end, end_exclusive = _resolve_range(start_month, end_month)
+    # Fee rows and stock balances are each read once; totals, sheets and the
+    # returned dict (the chat reply) are all derived from those reads.
+    rows_by_warehouse = {code: select_invoice_rows(db, code, start_month, end_month) for code in codes}
+    combined = compute_combined_invoice(db, codes, start_month, end_month, include_inventory=False,
+                                        rows_by_warehouse=rows_by_warehouse)
+    balances = inventory_balances(db, codes, start, end_exclusive)
+    for key, field in (("opening_pallets", "opening"), ("closing_pallets", "closing")):
+        for code in codes:
+            combined["per_warehouse"][code][key] = sum(b[field] for b in balances if b["warehouse_code"] == code)
+        combined[key] = sum(b[field] for b in balances)
     sku_labels = sku_label_map(db)
     generated_at = generated_at or datetime.now(timezone.utc)
 
@@ -60,101 +214,102 @@ def build_invoice_workbook(
     wb.properties.created = generated_at
     wb.properties.modified = generated_at
 
-    # ── Summary ──────────────────────────────────────────────────────────
-    ws = wb.active
-    ws.title = "Summary"
-    ws.append(["Warehouse", warehouse_code])
-    ws.append(["Range", f"{start_month} to {end_month}"])
-    ws.append(["Generated at (UTC)", generated_at.strftime("%Y-%m-%d %H:%M")])
-    ws.append([])
-    _write_header(ws, ws.max_row + 1, ["Charge", "Amount (USD)"])
-    ws.append(["Transportation fee", float(summary["transportation_fee"])])
-    ws.append(["Palletization fee", float(summary["palletization_fee"])])
-    ws.append(["Unpacking fee", float(summary["unpacking_fee"])])
-    ws.append(["Storage fee", float(summary["storage_fee"])])
-    total_row = ws.max_row + 1
-    ws.append(["Total", float(summary["total"])])
-    ws.cell(row=total_row, column=1).font = _HEADER_FONT
-    ws.cell(row=total_row, column=2).font = _HEADER_FONT
-    _autosize(ws)
+    _write_summary_sheet(wb.active, combined, start_month, end_month, generated_at)
+    _write_inventory_sheet(wb, balances, sku_labels)
 
     # ── Transportation & Palletization (outbound completions) ──────────────
     from models.uchoice import UchoiceAddress
 
-    ws2 = wb.create_sheet("outbound")
+    # Every detail row carries its own Warehouse, so a row copied out of
+    # this workbook stays identifiable. Rows are grouped by warehouse
+    # (sorted), then by completion time.
+    ws2 = wb.create_sheet("Outbound")
     _write_header(ws2, 1, [
-        "Serial Number", "Completed At (UTC)", "SKU Lines",
+        "Warehouse", "Serial Number", "Completed At (UTC)", "SKU Lines",
         "Destination Company", "Destination Address",
         "Transportation Fee", "Palletization Fee",
     ])
-    outbound_logs = _completed_logs(db, "uchoice_outbound_request", warehouse_code, start, end_exclusive)
-    for log in outbound_logs:
-        result = log.result or {}
-        lines = result.get("fulfillment_lines") or []
-        sku_summary = "; ".join(
-            f"{sku_labels.get(l.get('sku_code'), l.get('sku_code', '?'))} x{l.get('pallet_count', l.get('box_count', '?'))}"
-            for l in lines
-        )
+    for warehouse_code in codes:
+        for log in rows_by_warehouse[warehouse_code].outbound:
+            result = log.result or {}
+            lines = result.get("fulfillment_lines") or []
+            sku_summary = "; ".join(
+                f"{sku_labels.get(l.get('sku_code'), l.get('sku_code', '?'))} x{l.get('pallet_count', l.get('box_count', '?'))}"
+                for l in lines
+            )
 
-        # destination isn't in result — it's on the original request, not the
-        # completion's own fields, so it's resolved the same way the
-        # confirmation/response builders do (core/uchoice_context.py).
-        destination_company = ""
-        destination_addr = ""
-        original_fields = get_original_fields(db, log)
-        destination_address_id = original_fields.get("destination_address_id")
-        if destination_address_id:
-            addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
-            if addr:
-                destination_company = addr.company_name or ""
-                destination_addr = addr.addr
+            # destination isn't in result — it's on the original request, not the
+            # completion's own fields, so it's resolved the same way the
+            # confirmation/response builders do (core/uchoice_context.py).
+            destination_company = ""
+            destination_addr = ""
+            original_fields = get_original_fields(db, log)
+            destination_address_id = original_fields.get("destination_address_id")
+            if destination_address_id:
+                addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
+                if addr:
+                    destination_company = addr.company_name or ""
+                    destination_addr = addr.addr
 
-        ws2.append([
-            log.serial_number,
-            log.completed_at.strftime("%Y-%m-%d %H:%M") if log.completed_at else "",
-            sku_summary,
-            destination_company,
-            destination_addr,
-            float(Decimal(str(result.get("transportation_fee", 0)))),
-            float(Decimal(str(result.get("palletization_fee", 0)))),
-        ])
-    _autosize(ws2)
+            ws2.append([
+                warehouse_code,
+                log.serial_number,
+                log.completed_at.strftime("%Y-%m-%d %H:%M") if log.completed_at else "",
+                sku_summary,
+                destination_company,
+                destination_addr,
+                float(Decimal(str(result.get("transportation_fee", 0)))),
+                float(Decimal(str(result.get("palletization_fee", 0)))),
+            ])
+    _finish_detail_sheet(ws2)
 
     # ── Unpacking (inbound completions) ─────────────────────────────────────
-    ws3 = wb.create_sheet("inbound")
-    _write_header(ws3, 1, ["Serial Number", "Completed At (UTC)", "SKU Lines", "Unpacking Fee"])
-    inbound_logs = _completed_logs(db, "uchoice_inbound_request", warehouse_code, start, end_exclusive)
-    for log in inbound_logs:
-        result = log.result or {}
-        lines = result.get("received_lines") or []
-        sku_summary = "; ".join(
-            f"{sku_labels.get(l.get('sku_code'), l.get('sku_code', '?'))} x{l.get('pallet_count', l.get('box_count', '?'))}"
-            for l in lines
-        )
-        ws3.append([
-            log.serial_number,
-            log.completed_at.strftime("%Y-%m-%d %H:%M") if log.completed_at else "",
-            sku_summary,
-            float(Decimal(str(result.get("unpacking_fee", 0)))),
-        ])
-    _autosize(ws3)
+    ws3 = wb.create_sheet("Inbound")
+    _write_header(ws3, 1, ["Warehouse", "Serial Number", "Completed At (UTC)", "SKU Lines", "Unpacking Fee"])
+    for warehouse_code in codes:
+        for log in rows_by_warehouse[warehouse_code].inbound:
+            result = log.result or {}
+            lines = result.get("received_lines") or []
+            sku_summary = "; ".join(
+                f"{sku_labels.get(l.get('sku_code'), l.get('sku_code', '?'))} x{l.get('pallet_count', l.get('box_count', '?'))}"
+                for l in lines
+            )
+            ws3.append([
+                warehouse_code,
+                log.serial_number,
+                log.completed_at.strftime("%Y-%m-%d %H:%M") if log.completed_at else "",
+                sku_summary,
+                float(Decimal(str(result.get("unpacking_fee", 0)))),
+            ])
+    _finish_detail_sheet(ws3)
 
     # ── Storage (daily ledger) ───────────────────────────────────────────
     ws4 = wb.create_sheet("Storage")
-    _write_header(ws4, 1, ["Date", "Pallet Count", "Storage Fee"])
-    for row in _ledger_rows(db, warehouse_code, start, end):
-        ws4.append([row.fee_date.isoformat(), row.pallet_count, float(row.storage_fee)])
-    _autosize(ws4)
+    _write_header(ws4, 1, ["Warehouse", "Date", "Pallet Count", "Storage Fee"])
+    for warehouse_code in codes:
+        for row in rows_by_warehouse[warehouse_code].ledger:
+            ws4.append([warehouse_code, row.fee_date.isoformat(), row.pallet_count, float(row.storage_fee)])
+    _finish_detail_sheet(ws4)
 
     buf = io.BytesIO()
     wb.save(buf)
-    return freeze_xlsx_timestamps(buf.getvalue(), generated_at)
+    return freeze_xlsx_timestamps(buf.getvalue(), generated_at), combined
 
 
 def build_invoice_artifact(
-    db: DBSession, warehouse_code: str, start_month: str, end_month: str | None, request_log_id
+    db: DBSession, warehouse_codes, start_month: str, end_month: str | None, request_log_id
 ) -> dict:
+    """The artifact mapping only; see build_invoice_artifact_with_summary."""
+    return build_invoice_artifact_with_summary(db, warehouse_codes, start_month, end_month, request_log_id)[0]
+
+
+def build_invoice_artifact_with_summary(
+    db: DBSession, warehouse_codes, start_month: str, end_month: str | None, request_log_id
+) -> tuple[dict, dict]:
     """
+    Returns (artifact mapping, the combined invoice the file was built from;
+    use it for the chat reply -- see build_invoice_report).
+
     Channel-neutral artifact wrapper around build_invoice_workbook, matching
     the {bytes, filename, content_type, artifact_key} shape handlers/uchoice/
     pdf_stub.py's PDF artifacts use -- so Kefu delivery (core/kefu_delivery.py's
@@ -174,10 +329,10 @@ def build_invoice_artifact(
     end_month = end_month or start_month
     log = db.query(RequestLog).filter_by(log_id=request_log_id).first() if request_log_id else None
     generated_at = log.created_at if log is not None else None
-    data = build_invoice_workbook(db, warehouse_code, start_month, end_month, generated_at=generated_at)
+    data, combined = build_invoice_report(db, warehouse_codes, start_month, end_month, generated_at=generated_at)
     return {
         "bytes": data,
-        "filename": f"invoice_{warehouse_code}_{start_month}_{end_month}.xlsx",
+        "filename": invoice_filename(warehouse_codes, start_month, end_month),
         "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "artifact_key": f"{request_log_id}:invoice_workbook",
-    }
+    }, combined

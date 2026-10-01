@@ -26,6 +26,7 @@ _TXN_TYPE_LABELS = {
     "move_in": "调拨入", "move_out": "调拨出",
     "transfer_in": "转仓入", "transfer_out": "转仓出",
     "adjust": "调整", "recount": "盘点",
+    "opening": "期初",
 }
 
 

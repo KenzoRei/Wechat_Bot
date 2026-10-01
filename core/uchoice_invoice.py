@@ -11,6 +11,7 @@ detail workbook — both the chat summary and the Excel export read the exact
 same rows, so they can never silently drift apart.
 """
 import calendar
+from typing import NamedTuple
 from datetime import date, timedelta
 from decimal import Decimal
 from sqlalchemy.orm import Session as DBSession
@@ -56,26 +57,65 @@ def _ledger_rows(db: DBSession, warehouse_code: str, start: date, end: date) -> 
     )
 
 
-def compute_invoice(db: DBSession, warehouse_code: str, start_month: str, end_month: str | None = None) -> dict:
+class InvoiceRows(NamedTuple):
+    """The rows one warehouse's fees are computed from."""
+    outbound: list[RequestLog]
+    inbound: list[RequestLog]
+    ledger: list[UchoiceStorageFeeLedger]
+
+
+def select_invoice_rows(db: DBSession, warehouse_code: str, start_month: str, end_month: str | None = None) -> InvoiceRows:
+    """
+    Select once, use everywhere: core/uchoice_invoice_export.build_invoice_report
+    computes the fee totals AND writes the detail sheets from these same
+    rows, so the Summary/chat totals always equal the sum of the detail
+    rows even if a request completes mid-build (Codex code audit, round 2 #1).
+    """
+    start, end, end_exclusive = _resolve_range(start_month, end_month)
+    return InvoiceRows(
+        outbound=_completed_logs(db, "uchoice_outbound_request", warehouse_code, start, end_exclusive),
+        inbound=_completed_logs(db, "uchoice_inbound_request", warehouse_code, start, end_exclusive),
+        ledger=_ledger_rows(db, warehouse_code, start, end),
+    )
+
+
+def compute_invoice(
+    db: DBSession, warehouse_code: str, start_month: str, end_month: str | None = None,
+    include_inventory: bool = True, rows: InvoiceRows | None = None,
+) -> dict:
     """
     start_month/end_month: 'YYYY-MM', inclusive range. end_month defaults to
     start_month for a single-month invoice (same range-not-free-date
     principle as view_storage_history).
+
+    include_inventory=False skips the opening/closing pallet query, for a
+    caller that computes the per-SKU balances itself and fills those in from
+    the same rows (core/uchoice_invoice_export.build_invoice_report).
+    rows: pre-selected fee rows (select_invoice_rows), so a caller that also
+    lists them computes totals from exactly what it lists.
     """
     start, end, end_exclusive = _resolve_range(start_month, end_month)
     end_month = end_month or start_month
+    rows = rows or select_invoice_rows(db, warehouse_code, start_month, end_month)
 
-    outbound_logs = _completed_logs(db, "uchoice_outbound_request", warehouse_code, start, end_exclusive)
+    outbound_logs = rows.outbound
     transportation_total = sum((Decimal(str((log.result or {}).get("transportation_fee", 0))) for log in outbound_logs), Decimal("0"))
     palletization_total = sum((Decimal(str((log.result or {}).get("palletization_fee", 0))) for log in outbound_logs), Decimal("0"))
 
-    inbound_logs = _completed_logs(db, "uchoice_inbound_request", warehouse_code, start, end_exclusive)
+    inbound_logs = rows.inbound
     unpacking_total = sum((Decimal(str((log.result or {}).get("unpacking_fee", 0))) for log in inbound_logs), Decimal("0"))
 
-    ledger_rows = _ledger_rows(db, warehouse_code, start, end)
+    ledger_rows = rows.ledger
     storage_fee_total = sum((row.storage_fee for row in ledger_rows), Decimal("0"))
 
     total = transportation_total + palletization_total + unpacking_total + storage_fee_total
+
+    # Opening/closing pallet totals for the chat reply's one-line inventory
+    # summary; the per-SKU detail is the workbook's Inventory sheet.
+    balances = []
+    if include_inventory:
+        from core.uchoice_inventory import inventory_balances
+        balances = inventory_balances(db, [warehouse_code], start, end_exclusive)
 
     return {
         "warehouse_code":     warehouse_code,
@@ -86,4 +126,58 @@ def compute_invoice(db: DBSession, warehouse_code: str, start_month: str, end_mo
         "unpacking_fee":      unpacking_total,
         "storage_fee":        storage_fee_total,
         "total":              total,
+        "opening_pallets":    sum(b["opening"] for b in balances),
+        "closing_pallets":    sum(b["closing"] for b in balances),
     }
+
+
+_FEE_KEYS = ("transportation_fee", "palletization_fee", "unpacking_fee", "storage_fee", "total")
+_PALLET_KEYS = ("opening_pallets", "closing_pallets")
+
+
+def invoice_warehouse_list(warehouse_codes) -> list[str]:
+    """Accept one code or a list; return the de-duplicated, sorted list."""
+    if isinstance(warehouse_codes, str):
+        warehouse_codes = [warehouse_codes]
+    return sorted(dict.fromkeys(warehouse_codes or []))
+
+
+def compute_combined_invoice(
+    db: DBSession, warehouse_codes, start_month: str, end_month: str | None = None,
+    include_inventory: bool = True, rows_by_warehouse: dict[str, InvoiceRows] | None = None,
+) -> dict:
+    """
+    One invoice over several warehouses (invoice-inventory plan, Phase 3).
+    The fee logic stays in compute_invoice, run once per warehouse; this only
+    adds them up. Top-level keys mirror compute_invoice's (grand totals), plus
+    warehouse_codes and per_warehouse {code: compute_invoice result}.
+    """
+    codes = invoice_warehouse_list(warehouse_codes)
+    end_month = end_month or start_month
+    per_warehouse = {
+        code: compute_invoice(db, code, start_month, end_month, include_inventory=include_inventory,
+                              rows=(rows_by_warehouse or {}).get(code))
+        for code in codes
+    }
+    combined = {
+        "warehouse_codes": codes,
+        "start_month":     start_month,
+        "end_month":       end_month,
+        "per_warehouse":   per_warehouse,
+    }
+    for key in _FEE_KEYS:
+        combined[key] = sum((inv[key] for inv in per_warehouse.values()), Decimal("0"))
+    for key in _PALLET_KEYS:
+        combined[key] = sum(inv[key] for inv in per_warehouse.values())
+    return combined
+
+
+def serialize_invoice(invoice: dict) -> dict:
+    """Decimals -> strings (nested per_warehouse too), for request_log.result JSON."""
+    def _plain(value):
+        if hasattr(value, "quantize"):
+            return str(value)
+        if isinstance(value, dict):
+            return {k: _plain(v) for k, v in value.items()}
+        return value
+    return _plain(invoice)

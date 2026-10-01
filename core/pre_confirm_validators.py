@@ -654,6 +654,34 @@ def _valid_caller_warehouse_scope(context: dict, collected_fields: dict, db: DBS
     )
 
 
+def _valid_invoice_warehouses(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """
+    view_invoice: every warehouse the request covers must be a real
+    warehouse (an unknown code would otherwise give an all-zero invoice,
+    since the queries filter by exact equality) and within the caller's
+    scope. Runs after core.uchoice_invoice_scope.resolve_invoice_warehouses
+    has filled in the effective warehouse_codes list; reads the legacy
+    single warehouse_code too. Names the first failing code.
+    """
+    del db
+    from core import role_policy
+    from core.uchoice_constants import VALID_WAREHOUSE_CODES
+    from core.uchoice_invoice_scope import InvalidWarehouseSelection, requested_invoice_warehouses
+
+    codes_list = "、".join(sorted(VALID_WAREHOUSE_CODES))
+    try:
+        codes = requested_invoice_warehouses(collected_fields)
+    except InvalidWarehouseSelection as exc:
+        return str(exc)
+    for code in codes:
+        if code not in VALID_WAREHOUSE_CODES:
+            return f"未知仓库：{code}。请提供有效的仓库代码（{codes_list}）。"
+        denial = role_policy.check_warehouse_scope(context.get("role"), context.get("warehouse_codes"), code)
+        if denial:
+            return denial if denial != role_policy.OUT_OF_WAREHOUSE_SCOPE_MESSAGE else f"{code}：{denial}"
+    return None
+
+
 def _valid_upsert_address_warehouse_scope(context: dict, collected_fields: dict, db: DBSession) -> str | None:
     """
     upsert_address's own warehouse-scope check -- _valid_caller_warehouse_scope
@@ -832,7 +860,7 @@ PRE_CONFIRM_VALIDATORS = {
     ),
     "view_storage": _valid_caller_warehouse_scope,
     "view_storage_history": _valid_caller_warehouse_scope,
-    "view_invoice": _valid_caller_warehouse_scope,
+    "view_invoice": _valid_invoice_warehouses,
     "upsert_address": _valid_upsert_address_warehouse_scope,
     "fedex_label": _valid_label_phone_numbers,
     "ups_label": _valid_label_phone_numbers,
