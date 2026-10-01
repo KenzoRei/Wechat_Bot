@@ -236,8 +236,8 @@ class KefuOutboundDelivery(Base):
 class KefuArtifactBlob(Base):
     """
     V37: the exact bytes of a Kefu file artifact that would otherwise be
-    rebuilt from live data on every send attempt (currently the invoice
-    workbook). Written once by core.kefu_delivery.enqueue_file, read back by
+    rebuilt from live data on every send attempt (the invoice and
+    storage-history workbooks). Written once by core.kefu_delivery.enqueue_file, read back by
     core.kefu_artifact_loader, purged by purge_expired_artifact_blobs once no
     delivery of it is pending and it is over 30 days old (decision D8).
     """

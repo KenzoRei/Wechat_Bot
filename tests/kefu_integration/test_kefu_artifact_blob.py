@@ -1,5 +1,5 @@
 """
-Stored Kefu invoice files (V37; invoice-inventory plan, Phase 2 "Replay
+Stored Kefu invoice and storage-history files (V37; invoice-inventory plan, Phase 2 "Replay
 stability", decisions D8/D9).
 
 - enqueue_file stores an invoice workbook's exact bytes once;
@@ -47,33 +47,38 @@ def env():
     db.close()
 
 
-def _artifact(log_id, content=b"original workbook bytes"):
-    return {"bytes": content, "filename": "invoice.xlsx",
+def _artifact(log_id, content=b"original workbook bytes", doc=DOC):
+    return {"bytes": content, "filename": f"{doc}.xlsx",
             "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "artifact_key": f"{log_id}:{DOC}"}
+            "artifact_key": f"{log_id}:{doc}"}
 
 
-def _enqueue(db, staff_id, log_id, artifact, suffix="a"):
+def _enqueue(db, staff_id, log_id, artifact, suffix="a", doc=DOC):
     from core.kefu_delivery import enqueue_file
     delivery = enqueue_file(db, recipient_staff_id=staff_id, idempotency_key=f"blobtest:{log_id}:{suffix}",
-                            request_log_id=log_id, doc_type=DOC, artifact=artifact)
+                            request_log_id=log_id, doc_type=doc, artifact=artifact)
     db.commit()
     return delivery
 
 
-def test_loader_returns_stored_bytes_and_never_rebuilds(env, monkeypatch):
-    from core import uchoice_invoice_export
+@pytest.mark.parametrize("doc, module, builder", [
+    ("invoice_workbook", "core.uchoice_invoice_export", "build_invoice_artifact"),
+    ("storage_history_workbook", "core.uchoice_storage_history_export", "build_storage_history_artifact"),
+])
+def test_loader_returns_stored_bytes_and_never_rebuilds(env, monkeypatch, doc, module, builder):
+    import importlib
+
     from core.kefu_artifact_loader import load_artifact
     from core.kefu_delivery import content_hash
 
     db, staff_id, log_id = env
-    delivery = _enqueue(db, staff_id, log_id, _artifact(log_id))
+    delivery = _enqueue(db, staff_id, log_id, _artifact(log_id, doc=doc), doc=doc)
 
     def _must_not_rebuild(*args, **kwargs):
-        raise AssertionError("invoice rebuilt from live data")
-    monkeypatch.setattr(uchoice_invoice_export, "build_invoice_artifact", _must_not_rebuild)
+        raise AssertionError(f"{doc} rebuilt from live data")
+    monkeypatch.setattr(importlib.import_module(module), builder, _must_not_rebuild)
 
-    loaded = load_artifact(log_id, DOC, f"{log_id}:{DOC}")
+    loaded = load_artifact(log_id, doc, f"{log_id}:{doc}")
     assert loaded.content == b"original workbook bytes"
     assert content_hash(loaded.content) == delivery.payload_hash
 

@@ -12,15 +12,17 @@
 -- that an invoice workbook is a pure function of stored data is false: any
 -- range including the current month changes when a request completes or the
 -- daily storage-fee row is written, and the new Inventory sheet reads stock
--- history that a later correction can change. A rebuilt file then fails the
--- hash check (artifact_hash_mismatch) and the delivery is lost.
+-- history that a later correction can change. The storage-history export has
+-- the same problem for any range including the current month. A rebuilt file
+-- then fails the hash check (artifact_hash_mismatch) and the delivery is lost.
 --
 -- enqueue_file now stores the exact bytes once, keyed by artifact_key, for
--- such doc types (currently invoice_workbook); core/kefu_artifact_loader.py
--- reads them back instead of rebuilding. Retention (D8): a row is purged
--- 30 days after no delivery of it is still pending (core/kefu_delivery.py
--- purge_expired_artifact_blobs, scheduled daily in main.py). A duplicate-
--- message replay never rebuilds or fails on a purged file (D9).
+-- these doc types (invoice_workbook, storage_history_workbook), and
+-- core/kefu_artifact_loader.py reads them back instead of rebuilding.
+-- Retention (D8): a row is purged once it is over 30 days old and no delivery
+-- of it is pending (core/kefu_delivery.py purge_expired_artifact_blobs,
+-- scheduled daily in main.py). A duplicate-message replay never rebuilds or
+-- fails on a purged file (D9).
 --
 -- Additive: safe to apply while the previous code runs. Idempotent.
 -- ============================================================

@@ -159,10 +159,11 @@ def enqueue_text(
 
 
 # File doc types whose bytes depend on live data that can change between
-# enqueue and send (a current-month invoice; the Inventory sheet's stock
-# history). Their exact bytes are stored once at enqueue (V37) and read back
-# by core/kefu_artifact_loader.py instead of being rebuilt.
-STORED_ARTIFACT_DOC_TYPES = frozenset({"invoice_workbook"})
+# enqueue and send: a current-month invoice or storage-history export, and
+# the invoice Inventory sheet's stock history. Their exact bytes are stored
+# once at enqueue (V37) and read back by core/kefu_artifact_loader.py instead
+# of being rebuilt.
+STORED_ARTIFACT_DOC_TYPES = frozenset({"invoice_workbook", "storage_history_workbook"})
 ARTIFACT_BLOB_RETENTION = timedelta(days=30)
 
 

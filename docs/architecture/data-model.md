@@ -55,8 +55,8 @@ a constraint or column in those sources, the migration/model is authoritative.
   reply to a message that never became a case turn (unsupported type, voice
   failure/retry notices).
 - `kefu_artifact_blob` (V37) holds the exact bytes of file artifacts that
-  would otherwise be rebuilt from changing live data (currently the invoice
-  workbook), written once at enqueue and read back on every send. Rows are
+  would otherwise be rebuilt from changing live data (the invoice and
+  storage-history workbooks), written once at enqueue and read back on every send. Rows are
   purged 30 days after creation unless a delivery of them is still pending; a
   duplicate-message replay skips a purged file rather than rebuilding it.
 
