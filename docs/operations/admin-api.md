@@ -415,7 +415,8 @@ Returns the FedEx/UPS label as a PDF download.
 
 ## U-Choice Invoice Export
 
-Downloads the full detail backing an invoice as `.xlsx` — a Summary sheet plus
+Downloads the full detail backing an invoice as `.xlsx`, for one or several
+warehouses — a Summary sheet (charges by warehouse, with totals) plus
 one row per contributing transaction on the Outbound (transportation &
 palletization), Inbound (unpacking) and Storage sheets, not just the totals
 the chat `view_invoice` reply shows. Every detail row starts with a
@@ -431,7 +432,7 @@ Invoke-WebRequest "$base/admin/invoices/export?warehouse_code=JFK&start_month=20
 ```
 | Param | Required | Notes |
 |---|---|---|
-| `warehouse_code` | ✅ | `JFK`, `DE`, or `NJ`; any other value returns 400 |
+| `warehouse_code` | ✅ | `JFK`, `DE` or `NJ`; a comma list (`JFK,DE`) for one combined invoice; or `all`. Any unknown code returns 400 |
 | `start_month` | ✅ | `YYYY-MM` |
 | `end_month` | — | `YYYY-MM`, defaults to `start_month` for a single-month invoice |
 

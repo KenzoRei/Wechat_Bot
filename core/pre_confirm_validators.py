@@ -654,22 +654,28 @@ def _valid_caller_warehouse_scope(context: dict, collected_fields: dict, db: DBS
     )
 
 
-def _valid_known_warehouse_code(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+def _valid_invoice_warehouses(context: dict, collected_fields: dict, db: DBSession) -> str | None:
     """
-    Rejects a warehouse_code that isn't one of the platform's warehouses,
-    for every role. _valid_caller_warehouse_scope alone can't: an unscoped
-    caller (admin/accountant) passes it with any value, and view_invoice's
-    queries filter by exact equality, so a value like "JFK,DE" or "all"
-    silently produced an all-zero invoice instead of an error.
+    view_invoice: every warehouse the request covers must be a real
+    warehouse (an unknown code would otherwise give an all-zero invoice,
+    since the queries filter by exact equality) and within the caller's
+    scope. Runs after core.uchoice_invoice_scope.resolve_invoice_warehouses
+    has filled in the effective warehouse_codes list; reads the legacy
+    single warehouse_code too. Names the first failing code.
     """
-    del context, db
+    del db
+    from core import role_policy
     from core.uchoice_constants import VALID_WAREHOUSE_CODES
+    from core.uchoice_invoice_scope import requested_invoice_warehouses
 
-    code = collected_fields.get("warehouse_code")
-    if not code or code in VALID_WAREHOUSE_CODES:  # missing is the required-field check's job
-        return None
     codes_list = "、".join(sorted(VALID_WAREHOUSE_CODES))
-    return f"未知仓库：{code}。请提供有效的仓库代码（{codes_list}）。"
+    for code in requested_invoice_warehouses(collected_fields):
+        if code not in VALID_WAREHOUSE_CODES:
+            return f"未知仓库：{code}。请提供有效的仓库代码（{codes_list}）。"
+        denial = role_policy.check_warehouse_scope(context.get("role"), context.get("warehouse_codes"), code)
+        if denial:
+            return denial if denial != role_policy.OUT_OF_WAREHOUSE_SCOPE_MESSAGE else f"{code}：{denial}"
+    return None
 
 
 def _valid_upsert_address_warehouse_scope(context: dict, collected_fields: dict, db: DBSession) -> str | None:
@@ -850,10 +856,7 @@ PRE_CONFIRM_VALIDATORS = {
     ),
     "view_storage": _valid_caller_warehouse_scope,
     "view_storage_history": _valid_caller_warehouse_scope,
-    "view_invoice": _compose(
-        _valid_known_warehouse_code,
-        _valid_caller_warehouse_scope,
-    ),
+    "view_invoice": _valid_invoice_warehouses,
     "upsert_address": _valid_upsert_address_warehouse_scope,
     "fedex_label": _valid_label_phone_numbers,
     "ups_label": _valid_label_phone_numbers,

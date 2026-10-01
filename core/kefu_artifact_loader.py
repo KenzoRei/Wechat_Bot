@@ -60,10 +60,13 @@ def load_artifact(request_log_id: UUID, doc_type: str, artifact_key: str, *, all
             mapping = GeneratePdfStubHandler._build_outbound_instruction_artifact(context, db)
         elif doc_type == "invoice_workbook":
             from core.uchoice_invoice_export import build_invoice_artifact
+            from core.uchoice_invoice_scope import requested_invoice_warehouses
 
+            # Only reached for a delivery enqueued before V37 stored its bytes;
+            # the case already holds the resolved list (or a legacy single code).
             fields = session.collected_fields or {}
             mapping = build_invoice_artifact(
-                db, fields.get("warehouse_code"), fields.get("start_month"), fields.get("end_month"), log.log_id
+                db, requested_invoice_warehouses(fields), fields.get("start_month"), fields.get("end_month"), log.log_id
             )
         elif doc_type == "storage_history_workbook":
             from core.uchoice_storage_history_export import build_storage_history_artifact

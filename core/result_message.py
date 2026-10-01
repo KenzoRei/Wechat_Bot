@@ -317,9 +317,15 @@ def _storage_history_sections_builder(context: dict, db: DBSession) -> list[dict
 
 
 def _invoice_sections_builder(context: dict, db: DBSession) -> list[dict]:
-    """view_invoice. Header line states the queried warehouse + range."""
+    """
+    view_invoice. Header line states the warehouses covered + range -- always
+    listed, so a defaulted "all warehouses" is visible to the requester.
+    Several warehouses add one total line each; the per-warehouse fee detail
+    is in the workbook.
+    """
     result = context.get("result", {})
-    warehouse_code = result.get("warehouse_code", "?")
+    codes = result.get("warehouse_codes") or [result.get("warehouse_code", "?")]
+    warehouse_code = "、".join(codes)
     start_month = result.get("start_month", "?")
     end_month = result.get("end_month", start_month)
     range_str = start_month if start_month == end_month else f"{start_month} 至 {end_month}"
@@ -339,6 +345,11 @@ def _invoice_sections_builder(context: dict, db: DBSession) -> list[dict]:
         {"label": None, "type": "raw", "items": [f"仓库：{warehouse_code}　范围：{range_str}"]},
         {"label": None, "type": "kv", "items": items},
     ]
+    per_warehouse = result.get("per_warehouse") or {}
+    if len(per_warehouse) > 1:
+        sections.append({"label": "各仓合计", "type": "kv", "items": {
+            code: f"${per_warehouse[code].get('total', 0)}" for code in codes if code in per_warehouse
+        }})
 
     download_url = result.get("download_url")
     if download_url:

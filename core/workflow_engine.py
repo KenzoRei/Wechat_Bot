@@ -524,6 +524,18 @@ def _on_all_fields_collected(
     if service["name"] == "confirm_outbound_completion":
         _resolve_outbound_loose_pick_defaults(context, session, db)
 
+    if service["name"] == "view_invoice":
+        # Optional warehouse: resolved once, here, to the effective list
+        # (omitted = every warehouse the caller may see) and saved, so the
+        # request records exactly what it covered (core/uchoice_invoice_scope.py).
+        from core.uchoice_invoice_scope import resolve_invoice_warehouses
+        resolved, denial = resolve_invoice_warehouses(context, session.collected_fields or {})
+        if denial:
+            send_message(context, denial)
+            return
+        session_manager.update_collected_fields(db, session, {"warehouse_codes": resolved["warehouse_codes"]})
+        context["collected_fields"] = session.collected_fields
+
     error = pre_confirm_validators.run(service["name"], context, session.collected_fields, db)
     if error:
         send_message(context, error)

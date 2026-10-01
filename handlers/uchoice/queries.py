@@ -153,30 +153,31 @@ class ComputeInvoiceHandler(BaseHandler):
     """
 
     def handle(self, context: dict, config: dict, db) -> dict:
-        from core.uchoice_invoice import compute_invoice
+        from core.uchoice_invoice import compute_combined_invoice, serialize_invoice
+        from core.uchoice_invoice_scope import invoice_warehouses_for_execution
 
         fields = context.get("collected_fields", {})
-        warehouse_code = fields.get("warehouse_code")
+        warehouse_codes = invoice_warehouses_for_execution(context, fields)
         start_month = fields.get("start_month")
         end_month = fields.get("end_month")
 
-        invoice = compute_invoice(db, warehouse_code, start_month, end_month)
-        result = {k: (str(v) if hasattr(v, "quantize") else v) for k, v in invoice.items()}
+        invoice = compute_combined_invoice(db, warehouse_codes, start_month, end_month)
+        result = serialize_invoice(invoice)
 
-        download_url = self._try_build_workbook_and_link(context, db, warehouse_code, start_month, end_month)
+        download_url = self._try_build_workbook_and_link(context, db, warehouse_codes, start_month, end_month)
         if download_url:
             result["download_url"] = download_url
         return result
 
     @staticmethod
-    def _try_build_workbook_and_link(context: dict, db, warehouse_code: str, start_month: str, end_month: str) -> str | None:
+    def _try_build_workbook_and_link(context: dict, db, warehouse_codes: list[str], start_month: str, end_month: str) -> str | None:
         try:
             import config
-            from core.uchoice_invoice_export import build_invoice_workbook
+            from core.uchoice_invoice_export import build_invoice_workbook, invoice_filename
             from core.download_tokens import create_token
 
-            data = build_invoice_workbook(db, warehouse_code, start_month, end_month)
-            filename = f"invoice_{warehouse_code}_{start_month}_{end_month or start_month}.xlsx"
+            data = build_invoice_workbook(db, warehouse_codes, start_month, end_month)
+            filename = invoice_filename(warehouse_codes, start_month, end_month)
             token = create_token(
                 data, filename,
                 content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
