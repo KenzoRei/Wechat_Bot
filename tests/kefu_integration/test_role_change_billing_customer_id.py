@@ -141,9 +141,12 @@ def test_customer_to_staff_clears_stale_billing_customer_id():
         db.close()
 
 
-def test_kefu_target_rejected_for_customer_role_end_to_end():
-    """KefuStaff has no billing_customer_id column -- must be rejected
-    outright at the real handler, not just the mock-DB pre-confirm tests."""
+def test_kefu_target_customer_role_requires_billing_customer_end_to_end():
+    """Since V31 a Kefu staff member can hold a customer-identity role too
+    (KefuStaff.billing_customer_id; generalized in 93e952f), so the old
+    outright "客服账号 can't be a customer" rejection is gone. What must still
+    hold at the real handler: assigning the customer role without a billing
+    customer is rejected."""
     from models.kefu import KefuStaff
     from core.role_identity import tag_kefu_identity
 
@@ -165,9 +168,9 @@ def test_kefu_target_rejected_for_customer_role_end_to_end():
         }
         try:
             RoleChangeHandler().handle(context, {}, db)
-            assert False, "expected RuntimeError for kefu target + customer role"
+            assert False, "expected RuntimeError for kefu target + customer role without billing customer"
         except RuntimeError as exc:
-            assert "客服账号" in str(exc)
+            assert "客户编号" in str(exc)
     finally:
         from sqlalchemy import text
         db.execute(text("delete from kefu_staff where staff_id = :s"), {"s": staff.staff_id})

@@ -5,7 +5,7 @@
 **Last verified against commit:** `f3492b6` (2026-09-15)
 # Logistics WeChat Bot Platform — v1
 
-**Base URL (Render testing):** `https://wechat-bot-atse.onrender.com`
+**Base URL (production):** `https://wechat-bot-5c5w.onrender.com`
 
 **Auth header required on all `/admin` endpoints:**
 ```
@@ -14,7 +14,7 @@ X-Admin-Key: <your ADMIN_API_KEY>
 
 **PowerShell shorthand** (paste at start of session):
 ```powershell
-$base = "https://wechat-bot-atse.onrender.com"
+$base = "https://wechat-bot-5c5w.onrender.com"
 $h    = @{"X-Admin-Key"="<your ADMIN_API_KEY>"}
 ```
 Security note: a previously exposed production key was redacted and rotated on
@@ -407,7 +407,7 @@ Fields: `wechat_openid`, `display_name`, `service_name`, `status`, `collected_fi
 
 No auth required — the serial number acts as the token.
 ```
-GET https://wechat-bot-atse.onrender.com/labels/REQ-20260501-000001
+GET https://wechat-bot-5c5w.onrender.com/labels/REQ-20260501-000001
 ```
 Returns the FedEx/UPS label as a PDF download.
 

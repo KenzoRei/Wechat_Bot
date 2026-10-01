@@ -125,7 +125,7 @@ class QueryStorageHistoryHandler(BaseHandler):
                 data, filename,
                 content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-            base_url = getattr(config, "SERVER_BASE_URL", "https://wechat-bot-atse.onrender.com")
+            base_url = config.SERVER_BASE_URL
             return f"{base_url}/files/download/{token}"
         except Exception as e:
             # Same non-fatal contract as ComputeInvoiceHandler's identical
@@ -187,7 +187,7 @@ class ComputeInvoiceHandler(BaseHandler):
                 data, filename,
                 content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-            base_url = getattr(config, "SERVER_BASE_URL", "https://wechat-bot-atse.onrender.com")
+            base_url = config.SERVER_BASE_URL
 
             ComputeInvoiceHandler._try_push_workbook(context, db, data, filename)
 

@@ -15,7 +15,7 @@ import config
 from core.message_sections import render_sections
 from core.confirmation import build_display_name
 
-_LABEL_BASE_URL = getattr(config, "SERVER_BASE_URL", "https://wechat-bot-atse.onrender.com")
+_LABEL_BASE_URL = config.SERVER_BASE_URL
 
 
 def build_result_message(title: str, serial_number: str | None, sections: list[dict]) -> str:

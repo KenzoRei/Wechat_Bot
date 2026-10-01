@@ -151,8 +151,11 @@ DATABASE_URL = _require("DATABASE_URL")
 # Session
 SESSION_EXPIRY_MINUTES = int(os.getenv("SESSION_EXPIRY_MINUTES", "60"))
 
-# Server base URL — used for label download links sent via WeChat
-SERVER_BASE_URL = os.getenv("SERVER_BASE_URL", "https://wechat-bot-atse.onrender.com")
+# Server base URL — the public origin used in download links sent via WeChat
+# (labels, PDFs, invoice workbooks). Set it explicitly in every deployment;
+# the default is the production service (the old wechat-bot-atse test
+# service no longer exists).
+SERVER_BASE_URL = os.getenv("SERVER_BASE_URL", "https://wechat-bot-5c5w.onrender.com")
 
 # Exactly one deployed process/instance should run the BackgroundScheduler.
 # Defaults true so a single-instance deployment (the only supported

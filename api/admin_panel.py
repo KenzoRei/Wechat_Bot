@@ -930,7 +930,7 @@ async function createCustomer() {
   document.getElementById("customerError").textContent = "";
   const customer_id = document.getElementById("newCustomerId").value.trim().toUpperCase();
   const display_name = document.getElementById("newCustomerName").value.trim();
-  if (!/^F\d{6}$/.test(customer_id)) {
+  if (!/^F\\d{6}$/.test(customer_id)) {
     document.getElementById("customerError").textContent = "Customer ID must be F followed by 6 digits (e.g. F123456).";
     return;
   }

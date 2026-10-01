@@ -23,7 +23,7 @@ def _wrap_artifact_for_smart_robot(artifact: dict) -> dict:
     from core.download_tokens import create_token
 
     token = create_token(artifact["bytes"], artifact["filename"], content_type=artifact["content_type"])
-    base_url = getattr(app_config, "SERVER_BASE_URL", "https://wechat-bot-atse.onrender.com")
+    base_url = app_config.SERVER_BASE_URL
     return {
         "pdf_url": f"{base_url}/files/download/{token}",
         "pdf_status": "ready",

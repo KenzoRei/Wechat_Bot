@@ -169,7 +169,7 @@ def test_billing_customer_id_rejected_for_non_customer_role():
             "billing_customer_id": customer_id,
         })
         assert update_resp.status_code == 400
-        assert "billing_customer_id only applies to role=customer" in update_resp.text
+        assert "billing_customer_id only applies to a customer-identity role" in update_resp.text
     finally:
         db = SessionLocal()
         db.execute(text("delete from group_member where wechat_openid = :o and group_id = :g"), {"o": openid, "g": group_id})

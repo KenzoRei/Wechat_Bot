@@ -12,7 +12,7 @@ from core.uchoice_constants import VALID_WAREHOUSE_CODES
 
 router = APIRouter(prefix="/admin/invoices", dependencies=[Depends(verify_admin_key)])
 
-_SERVER_BASE_URL = getattr(config, "SERVER_BASE_URL", "https://wechat-bot-atse.onrender.com")
+_SERVER_BASE_URL = config.SERVER_BASE_URL
 
 
 def _parse_warehouses(warehouse_code: str) -> list[str]:

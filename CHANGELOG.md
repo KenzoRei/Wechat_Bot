@@ -7,6 +7,27 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.4.1] - 2026-10-01
+
+### Fixed
+- `SERVER_BASE_URL` defaulted to the old `wechat-bot-atse` test service, which
+  no longer exists; the default is now the production service
+  (`https://wechat-bot-5c5w.onrender.com`). Download links (labels, PDFs,
+  invoice workbooks) and the admin export link read `config.SERVER_BASE_URL`
+  directly instead of repeating the stale URL as their own fallback. Set
+  `SERVER_BASE_URL` explicitly in every deployment, as before.
+- Removed a `SyntaxWarning` at startup (`api/admin_panel.py`, an unescaped
+  `\d` in the embedded admin-panel JavaScript). The served page is unchanged.
+
+### Documentation
+- `docs/operations/admin-api.md` now points at the production base URL.
+
+### Tests
+- Updated two stale assertions from the customer-identity role change
+  (`93e952f`): the error now reads "customer-identity role", and a Kefu staff
+  member can hold the customer role, so the test now checks that assigning it
+  without a billing customer is rejected. The full suite passes.
+
 ## [1.4.0] - 2026-10-01
 
 ### Added
