@@ -160,6 +160,11 @@ class CandidateOption:
     (e.g. a serial number), not a database identifier."""
     candidate_key: str
     label: str
+    # Optional: a heading the option is listed under (e.g. "JFK 仓"; options
+    # must already be ordered so each group is contiguous), and extra lines
+    # shown indented under the label.
+    group: str | None = None
+    details: tuple[str, ...] = ()
 
     def __post_init__(self):
         _require(self.candidate_key, "candidate_key must be non-empty")

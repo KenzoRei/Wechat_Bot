@@ -446,7 +446,10 @@ def _direct_send(client: KefuClient, identity: KefuIdentity, delivery_key: str, 
                 f"direct Kefu reply blocked by service_state={state.state}"
                 + (f" servicer_userid={state.servicer_userid}" if state.servicer_userid else "")
             )
-    result = send_reply(client, recipient=identity, delivery_key=delivery_key, payload=TextPayload(text))
+    from core.kefu_response_renderer import kefu_plain_text
+
+    result = send_reply(client, recipient=identity, delivery_key=delivery_key,
+                        payload=TextPayload(kefu_plain_text(text)))
     if isinstance(result, Sent):
         return
     if isinstance(result, WindowClosed):
@@ -967,7 +970,11 @@ def _finalize_turn(
         request_log=log,
         context=context,
     )
-    reply_text = compose_staff_reply(reply_text, customer_copy_text)
+    # Kefu shows plain text: convert before the reply is stored or queued, so
+    # the case record matches what staff actually saw.
+    from core.kefu_response_renderer import kefu_plain_text
+    customer_copy_text = kefu_plain_text(customer_copy_text)
+    reply_text = kefu_plain_text(compose_staff_reply(reply_text, customer_copy_text))
     artifact_entries = context.get("_kefu_artifacts") or []
     artifacts = tuple(entry["artifact"] for entry in artifact_entries)
     artifact_keys = [artifact["artifact_key"] for artifact in artifacts] or None

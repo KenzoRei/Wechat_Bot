@@ -132,10 +132,24 @@ def parse_partial_reply(text: str, n: int):
 
 # ── Selection resolution ─────────────────────────────────────────────────────
 
+def order_pending_candidates(candidates: list[dict]) -> list[dict]:
+    """
+    The order the Kefu pending list shows -- grouped by warehouse, oldest
+    first within each -- and therefore the order its numbers mean. The one
+    place this order is defined: the list rendering
+    (kefu_turn_apply._pending_candidate_options) and snapshot_serials both use
+    it, so a number always resolves to the request shown next to it.
+    """
+    return sorted(
+        (c for c in candidates if c.get("serial_number")),
+        key=lambda c: (c.get("warehouse_code") or "", c.get("created_at") or "", c["serial_number"]),
+    )
+
+
 def snapshot_serials(candidates: list[dict]) -> list[str]:
-    """The numbered list: oldest first (pending_request_candidates already
-    orders by created_at), capped at MAX_BATCH_SIZE."""
-    return [c["serial_number"] for c in candidates if c.get("serial_number")][:MAX_BATCH_SIZE]
+    """The numbered list, in display order (order_pending_candidates), capped
+    at MAX_BATCH_SIZE."""
+    return [c["serial_number"] for c in order_pending_candidates(candidates)][:MAX_BATCH_SIZE]
 
 
 def _match_serial(token, eligible: list[str]) -> str | None:

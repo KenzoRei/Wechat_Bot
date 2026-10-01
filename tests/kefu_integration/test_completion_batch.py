@@ -692,7 +692,7 @@ def test_mixed_number_reply_at_summary_never_executes_the_batch(world, monkeypat
     restated = _turn(processor, identity, "确认，但第三笔少发两箱", mixed.case_number)
     assert "单独确认" in restated.reply_text
     vague = _turn(processor, identity, "行吧就这样", restated.case_number)
-    assert "未执行任何操作" in vague.reply_text and "回复 **确认** 提交全部" in vague.reply_text
+    assert "未执行任何操作" in vague.reply_text and "回复「确认」提交全部" in vague.reply_text
 
     db = SessionLocal()
     try:
@@ -758,7 +758,7 @@ def test_single_list_pivots_to_batch_and_blocked_request_rerenders(world, monkey
     assert "请问是哪一条" in listing.reply_text
     assert "9. " in listing.reply_text and "10. " not in listing.reply_text
     assert "还有 2 笔未列出" in listing.reply_text
-    assert "多条可一起确认" in listing.reply_text
+    assert "可多选" in listing.reply_text
 
     summary = _turn(processor, identity, "1和3", listing.case_number)  # deterministic, no AI call
     assert "批量出库完成确认（共 2 笔）" in summary.reply_text

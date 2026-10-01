@@ -13,3 +13,4 @@ pydantic
 openpyxl
 reportlab
 imageio-ffmpeg
+tzdata

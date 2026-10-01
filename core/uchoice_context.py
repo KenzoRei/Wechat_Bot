@@ -172,6 +172,72 @@ def _summarize_sku_lines(lines: list[dict], sku_labels: dict[str, str]) -> str:
     return "，".join(parts) if parts else "（无商品明细）"
 
 
+def _sku_display_lines(lines: list[dict], sku_labels: dict[str, str]) -> list[str]:
+    """
+    One line per SKU for the Kefu pending list, units spelled out:
+    'T1 3-inch Clear Packing Tape ×1托' / 'S2 1500 ft Stretch Wrap ×2箱（散）'.
+    Same totals as _summarize_sku_lines (which stays as the AI's compact form).
+    """
+    from collections import defaultdict
+
+    palletized_totals: dict[str, int] = defaultdict(int)
+    loose_totals: dict[str, int] = defaultdict(int)
+    for line in lines or []:
+        sku = line.get("sku_code", "?")
+        if "box_count" in line:
+            loose_totals[sku] += line["box_count"]
+        elif "pallet_count" in line:
+            palletized_totals[sku] += line["pallet_count"]
+
+    out = [f"{sku_labels.get(sku, sku)} ×{qty}托" for sku, qty in sorted(palletized_totals.items())]
+    out += [f"{sku_labels.get(sku, sku)} ×{qty}箱（散）" for sku, qty in sorted(loose_totals.items())]
+    return out
+
+
+def _creator_names(db: DBSession, rows: list) -> dict:
+    """
+    request log_id -> the submitter's display name: the Kefu staff member
+    for a Kefu request, the group member for a group-chat one. Two queries
+    for the whole list. A submitter with no display name is simply absent
+    (the list then shows no name, never an ID).
+    """
+    from models.kefu import KefuStaff
+
+    staff_ids = {r.submitted_by_staff_id for r in rows if r.submitted_by_staff_id}
+    member_keys = {(r.group_id, r.wechat_openid) for r in rows if r.wechat_openid}
+    staff_names = {
+        s.staff_id: s.display_name
+        for s in (db.query(KefuStaff).filter(KefuStaff.staff_id.in_(staff_ids)).all() if staff_ids else [])
+        if s.display_name
+    }
+    member_names = {}
+    if member_keys:
+        openids = {openid for _, openid in member_keys}
+        for m in db.query(GroupMember).filter(GroupMember.wechat_openid.in_(openids)).all():
+            if (m.group_id, m.wechat_openid) in member_keys and m.display_name:
+                member_names[(m.group_id, m.wechat_openid)] = m.display_name
+    names = {}
+    for r in rows:
+        name = staff_names.get(r.submitted_by_staff_id) or member_names.get((r.group_id, r.wechat_openid))
+        if name:
+            names[r.log_id] = name
+    return names
+
+
+def _display_fields(r, original_fields: dict, addr, sku_labels: dict[str, str], creator_names: dict) -> dict:
+    """Structured fields for the Kefu pending-list layout (kefu_turn_apply._pending_candidate_options)."""
+    fields = {"sku_lines_display": _sku_display_lines(original_fields.get("sku_lines", []), sku_labels)}
+    if addr is not None:
+        name = (addr.company_name or "").strip() or (addr.addr or "").strip()
+        if name:
+            fields["destination_name"] = name
+        if (addr.addr or "").strip():
+            fields["destination_address"] = addr.addr.strip()
+    if r.log_id in creator_names:
+        fields["created_by_name"] = creator_names[r.log_id]
+    return fields
+
+
 def pending_request_candidates(
     db: DBSession, group_id, allowed_warehouse_codes: list[str] | None, service_type_ids: list[str]
 ) -> list[dict]:
@@ -200,6 +266,7 @@ def pending_request_candidates(
     )
 
     sku_labels = sku_label_map(db)
+    creator_names = _creator_names(db, rows)
     candidates = []
     for r in rows:
         original_fields = get_original_fields(db, r)
@@ -219,11 +286,13 @@ def pending_request_candidates(
             "sku_summary":    _summarize_sku_lines(original_fields.get("sku_lines", []), sku_labels),
         }
 
+        addr = None
         destination_address_id = original_fields.get("destination_address_id")
         if destination_address_id:
             addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
             if addr:
                 candidate["destination"] = format_address_label(addr)
+        candidate.update(_display_fields(r, original_fields, addr, sku_labels, creator_names))
 
         candidates.append(candidate)
 
@@ -265,6 +334,7 @@ def cancelable_request_candidates(db: DBSession, group_id, service_type_ids: lis
     rows = query.order_by(RequestLog.created_at.asc()).all()
 
     sku_labels = sku_label_map(db)
+    creator_names = _creator_names(db, rows)
     candidates = []
     for r in rows:
         original_fields = get_original_fields(db, r)
@@ -275,11 +345,13 @@ def cancelable_request_candidates(db: DBSession, group_id, service_type_ids: lis
             "warehouse_code": original_fields.get("warehouse_code"),
             "sku_summary":    _summarize_sku_lines(original_fields.get("sku_lines", []), sku_labels),
         }
+        addr = None
         destination_address_id = original_fields.get("destination_address_id")
         if destination_address_id:
             addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
             if addr:
                 candidate["destination"] = format_address_label(addr)
+        candidate.update(_display_fields(r, original_fields, addr, sku_labels, creator_names))
         candidates.append(candidate)
 
     return candidates

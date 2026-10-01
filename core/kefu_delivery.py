@@ -124,6 +124,10 @@ def enqueue_text(
 ) -> KefuOutboundDelivery:
     """inbound_message_msgid targets a reply to an inbound message that never
     became a case turn (e.g. an unsupported message type) -- V34."""
+    from core.kefu_response_renderer import kefu_plain_text
+
+    # Kefu shows plain text; the stored row is exactly what gets sent.
+    text_content = kefu_plain_text(text_content)
     if sum(t is not None for t in (session_id, request_log_id, inbound_message_msgid)) != 1:
         raise ValueError("exactly one delivery target is required")
     statement = (

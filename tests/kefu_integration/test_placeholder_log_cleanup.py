@@ -261,7 +261,7 @@ def test_wrong_status_serial_discards_placeholder_and_leaves_real_target_untouch
 # Ambiguous candidates must keep the case open for the staff's answer.
 #
 # Live regression (2026-09-24): "确认发货" with two pending outbound requests
-# got the deterministic "当前有多个待处理的出库申请，请问是哪一条？" listing,
+# got the deterministic "当前有 N 笔待处理的出库申请，请问是哪一条？" listing,
 # but the same turn also discarded the placeholder and cancelled the case --
 # so the staff's answer ("REQ-20260924-000088" / "第二条") arrived with no
 # open case and was answered "抱歉，没能理解您需要哪项服务".

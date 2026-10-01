@@ -75,8 +75,8 @@ def test_outbound_uses_its_own_candidate_key_and_label():
     assert keep_open is True
     assert reply is not None
     assert "出库申请" in reply
-    assert "REQ-C" in reply and "发往ABC Corp" in reply
-    assert "REQ-D" in reply and "发往XYZ Corp" in reply
+    assert "REQ-C" in reply and "→ ABC Corp" in reply
+    assert "REQ-D" in reply and "→ XYZ Corp" in reply
 
 
 def test_non_targets_existing_request_service_is_a_no_op():

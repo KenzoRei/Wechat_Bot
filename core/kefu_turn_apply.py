@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session as DBSession
 
@@ -99,16 +100,58 @@ _PENDING_CANDIDATE_KEYS = {
 }
 
 
-def _candidate_label(candidate: dict) -> str:
-    detail = []
-    if candidate.get("warehouse_code"):
-        detail.append(f'{candidate["warehouse_code"]}仓')
-    if candidate.get("sku_summary"):
-        detail.append(candidate["sku_summary"])
-    if candidate.get("destination"):
-        detail.append(f'发往{candidate["destination"]}')
-    serial = candidate.get("serial_number", "?")
-    return f'{serial}（{"，".join(detail)}）' if detail else serial
+# The warehouses' local time, for times shown to staff (stored values are UTC).
+_DISPLAY_TZ = ZoneInfo("America/New_York")
+
+
+def _display_time(created_at: str | None) -> str | None:
+    """'9/28 14:05' in New York time."""
+    if not created_at:
+        return None
+    try:
+        when = datetime.fromisoformat(created_at)
+    except ValueError:
+        return None
+    local = when.astimezone(_DISPLAY_TZ)
+    return f"{local.month}/{local.day} {local:%H:%M}"
+
+
+def _pending_candidate_options(candidates: list[dict], limit: int) -> tuple:
+    """
+    The Kefu pending-request list: grouped by warehouse, oldest first, one
+    block per request -- SKU lines, destination name, and who created it
+    when. Returns CandidateOptions in display order; the caller stores their
+    keys as the numbered snapshot, so a reply's numbers mean exactly what
+    was shown (completion_batch.order_pending_candidates is the one ordering).
+    The destination's street address is shown only when two listed requests
+    go to the same-named destination.
+    """
+    from collections import Counter
+
+    from core import completion_batch
+    from core.kefu_outcomes import CandidateOption
+
+    shown = completion_batch.order_pending_candidates(candidates)[:limit]
+    name_counts = Counter(c.get("destination_name") for c in shown if c.get("destination_name"))
+    options = []
+    for c in shown:
+        details = list(c.get("sku_lines_display") or [c.get("sku_summary") or "（无商品明细）"])
+        # destination_name is the short form; candidates without it (older
+        # shapes, test doubles) still show their full destination label.
+        name = c.get("destination_name") or c.get("destination")
+        if name:
+            if name_counts[name] > 1 and c.get("destination_address") and c["destination_address"] != name:
+                name = f"{name}（{c['destination_address']}）"
+            details.append(f"→ {name}")
+        created = " · ".join(part for part in (c.get("created_by_name"), _display_time(c.get("created_at"))) if part)
+        if created:
+            details.append(f"创建：{created}")
+        warehouse = c.get("warehouse_code")
+        options.append(CandidateOption(
+            candidate_key=c["serial_number"], label=c["serial_number"],
+            group=f"{warehouse} 仓" if warehouse else None, details=tuple(details),
+        ))
+    return tuple(options)
 
 
 def _resolve_reference_serial(context: dict, session, service: dict) -> tuple[str | None, bool]:
@@ -149,7 +192,7 @@ def _resolve_reference_serial(context: dict, session, service: dict) -> tuple[st
     candidate_key, label = key_info
     candidates = (context.get("uchoice_candidates") or {}).get(candidate_key) or []
 
-    from core.kefu_outcomes import CandidateAmbiguousOutcome, CandidateNoneEligibleOutcome, CandidateOption
+    from core.kefu_outcomes import CandidateAmbiguousOutcome, CandidateNoneEligibleOutcome
     from core.kefu_response_renderer import render_kefu_outcome
 
     if not candidates:
@@ -171,10 +214,7 @@ def _resolve_reference_serial(context: dict, session, service: dict) -> tuple[st
     from core import completion_batch
 
     listed = [c for c in candidates if c.get("serial_number")]
-    options = tuple(
-        CandidateOption(candidate_key=c["serial_number"], label=_candidate_label(c))
-        for c in listed[:completion_batch.MAX_BATCH_SIZE]
-    )
+    options = _pending_candidate_options(listed, completion_batch.MAX_BATCH_SIZE)
     if len(options) < 2:
         return None, False
     session.collected_fields = {**fields, "_candidate_snapshot": [o.candidate_key for o in options]}
@@ -185,9 +225,9 @@ def _resolve_reference_serial(context: dict, session, service: dict) -> tuple[st
         footer.append(f"还有 {len(listed) - len(options)} 笔未列出，可直接回复申请编号，或处理完后再次发起。")
     batch_name = completion_batch.BATCH_SERVICE_BY_SINGLE.get(service.get("name"))
     if batch_name and any(s.get("name") == batch_name for s in context.get("allowed_services") or []):
-        footer.append("可回复编号，多条可一起确认（如：13 或 全部）。")
+        footer.append("回复编号确认，可多选（如「1 3」或「全部」）。")
     return render_kefu_outcome(CandidateAmbiguousOutcome(
-        prompt=f"当前有多个待处理的{label}，请问是哪一条？",
+        prompt=f"当前有 {len(listed)} 笔待处理的{label}，请问是哪一条？",
         options=options,
         footer=tuple(footer),
     )), True
@@ -290,6 +330,9 @@ def _all_required_fields_present(service: dict, collected_fields: dict) -> bool:
 
 
 def _append(session, role: str, content: str) -> None:
+    if role == "assistant":
+        from core.kefu_response_renderer import kefu_plain_text
+        content = kefu_plain_text(content)   # history shows what Kefu actually sent
     session.conversation_history = (session.conversation_history or []) + [
         {"role": role, "content": content}
     ]
@@ -1002,19 +1045,16 @@ def _render_batch_candidate_question(context: dict, service: dict, session, cand
     """A batch case with no usable selection yet: list the (capped) pending
     requests, store that numbered snapshot, and wait for the user's pick."""
     from core import completion_batch
-    from core.kefu_outcomes import CandidateAmbiguousOutcome, CandidateOption
+    from core.kefu_outcomes import CandidateAmbiguousOutcome
     from core.kefu_response_renderer import render_kefu_outcome
 
     label = completion_batch.DIRECTION_LABELS[completion_batch.DIRECTION_BY_SERVICE[service["name"]]]
     listed = [c for c in candidates if c.get("serial_number")]
-    options = tuple(
-        CandidateOption(candidate_key=c["serial_number"], label=_candidate_label(c))
-        for c in listed[:completion_batch.MAX_BATCH_SIZE]
-    )
+    options = _pending_candidate_options(listed, completion_batch.MAX_BATCH_SIZE)
     footer = []
     if len(listed) > len(options):
         footer.append(f"还有 {len(listed) - len(options)} 笔未列出，可直接回复申请编号，或处理完后再次发起。")
-    footer.append("请回复要确认的编号（如：13），或回复 全部。")
+    footer.append("请回复要确认的编号（如「1 3」），或回复「全部」。")
     session.collected_fields = {
         **(session.collected_fields or {}), "_candidate_snapshot": [o.candidate_key for o in options],
     }

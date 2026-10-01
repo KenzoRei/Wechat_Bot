@@ -4,12 +4,14 @@ already-validated and labeled facts, never querying or mutating the database.
 Orchestration resolves labels before constructing a KefuOutcome; this module
 only formats it.
 
-Two published entry points:
+Published entry points:
     validate_address_match(ai_response, candidates) -> AddressDecision
     render_kefu_outcome(outcome: KefuOutcome) -> str
+    kefu_plain_text(text) -> str   (markdown bold -> plain text, see below)
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from core.kefu_outcomes import (
@@ -159,10 +161,68 @@ def _render_field_correction_accepted(o: FieldCorrectionAcceptedOutcome) -> str:
     return f"已更新{o.field_label}为{o.new_value_label}。"
 
 
+_BOLD_LINE = re.compile(r"^(\s*)\*\*([^*\n]+?)\*\*\s*$", re.MULTILINE)
+_BOLD_INLINE = re.compile(r" ?\*\*([^*\n]+?)\*\* ?")
+
+
+def kefu_plain_text(text: str | None) -> str | None:
+    """
+    WeCom Kefu sends plain text: markdown bold shows up as literal asterisks.
+    The message builders are shared with Smart Robot (whose group chat does
+    render markdown), so Kefu converts at its own boundary instead:
+    a line that is entirely **标题** becomes 【标题】, inline **确认** becomes
+    「确认」 (absorbing one space on each side, which only existed for the
+    markdown), and any stray ** is dropped. Applied wherever Kefu text is sent
+    or stored (core/kefu_delivery.enqueue_text, kefu_case_adapter._direct_send
+    and its turn commit, kefu_turn_apply._append). Idempotent.
+    """
+    if not text or "**" not in text:
+        return text
+    text = _BOLD_LINE.sub(lambda m: f"{m.group(1)}【{m.group(2).strip()}】", text)
+    text = _BOLD_INLINE.sub(lambda m: f"「{m.group(1).strip()}」", text)
+    return text.replace("**", "")
+
+
+# WeCom Kefu's send_text limit (clients/kefu_client.py rejects anything longer).
+KEFU_TEXT_MAX_BYTES = 2048
+
+
 def _render_candidate_ambiguous(o: CandidateAmbiguousOutcome) -> str:
-    lines = "\n".join(f"{i}. {opt.label}" for i, opt in enumerate(o.options, start=1))
     footer = "\n".join(o.footer)
-    return f"{o.prompt}\n{lines}\n\n{footer}" if footer else f"{o.prompt}\n{lines}"
+    if not any(opt.group or opt.details for opt in o.options):
+        lines = "\n".join(f"{i}. {opt.label}" for i, opt in enumerate(o.options, start=1))
+        return f"{o.prompt}\n{lines}\n\n{footer}" if footer else f"{o.prompt}\n{lines}"
+
+    # Grouped layout: 【group】 headings, one block per option with its details
+    # indented underneath. If that would exceed Kefu's limit, each option's
+    # details are folded onto one line, then dropped -- the numbers (and so
+    # what a reply like "13" means) never change.
+    for mode in ("full", "compact", "bare"):
+        text = _render_grouped_candidates(o, footer, mode)
+        if len(text.encode("utf-8")) <= KEFU_TEXT_MAX_BYTES:
+            return text
+    return text
+
+
+def _render_grouped_candidates(o: CandidateAmbiguousOutcome, footer: str, mode: str) -> str:
+    lines = [o.prompt]
+    current_group = object()
+    for i, opt in enumerate(o.options, start=1):
+        if opt.group != current_group:
+            current_group = opt.group
+            lines.append("")
+            if opt.group:
+                lines.append(f"【{opt.group}】")
+        if mode == "full":
+            lines.append(f"{i}. {opt.label}")
+            lines.extend(f"   {detail}" for detail in opt.details)
+        elif mode == "compact" and opt.details:
+            lines.append(f"{i}. {opt.label} · {'；'.join(opt.details)}")
+        else:
+            lines.append(f"{i}. {opt.label}")
+    if footer:
+        lines += ["", footer]
+    return "\n".join(lines)
 
 
 def _render_candidate_none_eligible(o: CandidateNoneEligibleOutcome) -> str:

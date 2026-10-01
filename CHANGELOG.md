@@ -7,6 +7,32 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.5.0] - 2026-10-01
+
+### Changed
+- **Kefu pending-request list redesigned** (confirm outbound/inbound, both
+  cancel lists, and the batch "请问要确认哪几笔" question):
+  - Grouped by warehouse (【JFK 仓】), oldest first within each.
+  - One block per request: one line per SKU with units spelled out (`×1托`,
+    `×2箱（散）`), `→ destination`, and `创建：name · 9/28 14:05`.
+  - Times are New York time. The creator is the Kefu staff member or group
+    member who submitted it; with no name on record it is left out.
+  - The street address is shown only when two listed requests go to the same
+    destination name; no more empty `散客（）`.
+  - Header "当前有 N 笔待处理的…"; footer "回复编号确认，可多选（如「1 3」或「全部」）".
+  - Reply numbers always match what was shown: the display order and the
+    fallback used for "全部确认出库" (no list shown) come from one ordering.
+  - If a long list would exceed Kefu's 2048-byte limit, each request's details
+    fold onto one line, then drop; numbers never change.
+- **Kefu replies are plain text.** WeCom Kefu doesn't render markdown, so
+  `**bold**` showed as literal asterisks in confirmations, footers, section
+  headings and prompts. Kefu now converts it: a bold line becomes 【标题】, an
+  inline bold word 「确认」. Applied to every Kefu reply as sent and as stored
+  (case record and conversation history). Smart Robot keeps its markdown.
+
+### Dependencies
+- Added `tzdata`, so New York time works even without system time-zone data.
+
 ## [1.4.1] - 2026-10-01
 
 ### Fixed
