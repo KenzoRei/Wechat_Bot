@@ -1414,6 +1414,7 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
         session.collected_fields = apply_address_turn(
             previous_fields, session.collected_fields or {}, extracted,
             getattr(ai_response, "estimated_drive_minutes", None),
+            stated_flag=getattr(ai_response, "charge_type_stated", False) is True,
         )
         context["collected_fields"] = session.collected_fields
 

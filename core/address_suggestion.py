@@ -13,6 +13,8 @@ collected_fields, under keys the address handler never copies:
   _charge_type_suggested         True when the system (not the user) set charge_type
   _charge_type_estimate_minutes  the minutes behind that suggestion
 """
+import re
+
 from core.uchoice_rates import CHARGE_TYPE_RATES
 
 SUGGESTED_KEY = "_charge_type_suggested"
@@ -36,6 +38,28 @@ def valid_minutes(value) -> int | None:
 
 def valid_charge_type(value) -> str | None:
     return value if isinstance(value, str) and value in CHARGE_TYPE_RATES else None
+
+
+# The normalized address format the prompt asks for (ai/prompt_builder.py):
+# "123 Main St, City, ST 12345" -- house number and street, city, two-letter
+# state, ZIP (optional suite parts in between). Anything less is incomplete
+# and gets no estimate.
+_COMPLETE_ADDRESS = re.compile(r"^\s*\d[^,]*\s[^,]*(,[^,]+)+,\s*[A-Z]{2}\s+\d{5}(-\d{4})?\s*$")
+
+
+def address_complete(addr) -> bool:
+    return isinstance(addr, str) and bool(_COMPLETE_ADDRESS.match(addr))
+
+
+def _can_suggest(fields: dict) -> bool:
+    """Both ends of the drive are known, and this is a new address: an
+    update (matched_address_id) keeps the stored charge type unless the
+    user states a new one."""
+    return (
+        address_complete(fields.get("addr"))
+        and bool(fields.get("warehouse_code"))
+        and not fields.get("matched_address_id")
+    )
 
 
 def tier_for_minutes(minutes: int) -> str:
@@ -87,34 +111,39 @@ def seed_charge_type(seed: dict, new_address: dict) -> dict:
     if stated:
         return {**seed, "charge_type": stated}
     minutes = valid_minutes(new_address.get("estimated_drive_minutes"))
-    # An estimate needs both ends: no origin warehouse, no suggestion.
-    if minutes is not None and seed.get("addr") and seed.get("warehouse_code"):
+    if minutes is not None and _can_suggest(seed):
         return _suggest(seed, minutes)
     return seed
 
 
-def apply_address_turn(previous: dict, merged: dict, extracted: dict, raw_minutes) -> dict:
+def apply_address_turn(previous: dict, merged: dict, extracted: dict, raw_minutes, stated_flag: bool = False) -> dict:
     """
     One upsert_address turn, after this turn's extracted fields were merged
     over `previous` into `merged`.
     - The user stated a charge type: it stands, the suggestion is cleared.
-      (An extracted charge_type that merely repeats the current suggestion
-      is the AI echoing collected fields, not a statement.)
-    - Otherwise a valid estimate (re)sets a suggested charge type, but never
-      overrides one the user stated earlier.
+      An extracted charge_type that differs from the current suggestion can
+      only be a statement. One equal to it counts only with the AI's explicit
+      stated_flag (charge_type_stated) -- otherwise it is the AI repeating
+      the collected value.
+    - An update of an existing address (matched_address_id) never gets a
+      suggestion; one already made is dropped.
+    - Otherwise a valid estimate for a complete address (re)sets a suggested
+      charge type, but never overrides one the user stated earlier.
     - Otherwise, if addr or warehouse_code changed, a suggested charge type
       no longer applies: it is dropped, so the user is asked.
     """
     was_suggested = bool(previous.get(SUGGESTED_KEY))
     stated = valid_charge_type(extracted.get("charge_type"))
-    if stated and not (was_suggested and stated == previous.get("charge_type")):
+    if stated and (stated_flag or not was_suggested or stated != previous.get("charge_type")):
         return {**_clear_suggestion(merged, drop_charge_type=False), "charge_type": stated}
 
+    if merged.get("matched_address_id"):
+        return _clear_suggestion(merged, drop_charge_type=was_suggested)
     user_stated_before = bool(previous.get("charge_type")) and not was_suggested
     if user_stated_before:
         return merged
     minutes = valid_minutes(raw_minutes)
-    if minutes is not None and merged.get("addr") and merged.get("warehouse_code"):
+    if minutes is not None and _can_suggest(merged):
         return _suggest(merged, minutes)
     location_changed = any(
         key in extracted and extracted[key] != previous.get(key) for key in ("addr", "warehouse_code")

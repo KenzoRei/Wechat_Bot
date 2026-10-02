@@ -209,6 +209,7 @@ def _apply_address_suggestion(db: DBSession, service: dict | None, session, prev
     updated = apply_address_turn(
         previous, session.collected_fields or {}, extracted or {},
         getattr(ai_response, "estimated_drive_minutes", None),
+        stated_flag=getattr(ai_response, "charge_type_stated", False) is True,
     )
     if updated != session.collected_fields:
         session.collected_fields = updated

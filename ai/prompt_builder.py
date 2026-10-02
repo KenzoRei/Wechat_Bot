@@ -80,7 +80,10 @@ def _drive_time_instructions(is_kefu: bool) -> str:
         f"{handoff_key} 的 estimated_drive_minutes 键）。地址不全或无法判断时省略，不要瞎猜。\n"
         "  · 【重要】只给分钟数，绝不能自己给出或推断计费类型——计费类型由系统根据分钟数决定。"
         f"只有当用户自己明确说出计费类型（短途配送/配送/卡车转仓/自提）时，才填 charge_type（出库转新增地址的那一轮填入 {handoff_key} "
-        "的 charge_type 键，取值 short_delivery / delivery / truck_transfer / self_pickup），不能根据车程自行填写。\n"
+        "的 charge_type 键，取值 short_delivery / delivery / truck_transfer / self_pickup），不能根据车程自行填写。"
+        "upsert_address 会话中，用户在本条消息里明确说出计费类型时，除在 extracted_fields 填 charge_type 外，"
+        "还必须把顶层字段 charge_type_stated 设为 true（即使与当前已收集的计费类型相同）；"
+        "仅仅沿用已收集的计费类型时保持 false。\n"
         f"{reply_rule}"
     )
 
@@ -285,7 +288,8 @@ def build_system_prompt(context: dict) -> str:
   "service_type_name": null,
   "semantic_issues": [],
   "address_match": null,
-  "estimated_drive_minutes": null
+  "estimated_drive_minutes": null,
+  "charge_type_stated": false
 }"""
         reply_field_note = (
             "- 【重要，企业微信客服渠道】reply 字段不会发送给客服人员——所有实际发送的消息均由后端根据 "
@@ -304,7 +308,8 @@ def build_system_prompt(context: dict) -> str:
   "all_fields_collected": false,
   "service_type_name": null,
   "unmatched_new_address": null,
-  "estimated_drive_minutes": null
+  "estimated_drive_minutes": null,
+  "charge_type_stated": false
 }"""
         reply_field_note = ""
 
@@ -483,4 +488,5 @@ def parse_response(raw: str) -> AIResponse:
         semantic_issues=_parse_semantic_issues(data.get("semantic_issues")),
         address_match=_parse_address_match(data.get("address_match")),
         estimated_drive_minutes=data.get("estimated_drive_minutes"),
+        charge_type_stated=data.get("charge_type_stated") is True,
     )

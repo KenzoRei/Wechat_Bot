@@ -16,6 +16,12 @@ transaction as the event that causes it:
   - the address session times out: timed out with it
 Every path that changes a parked outbound locks its row and re-checks the
 link first (still_parked_for).
+
+Lock order is always address case, then outbound. The confirm, cancel and
+expiry paths update the address case first (lock_session flushes, so that
+UPDATE takes the address row lock) and only then lock the outbound; the
+redirect in core/kefu_case_adapter.py locks the address case explicitly
+before the outbound. A new path must keep this order.
 """
 from datetime import datetime, timezone
 from uuid import UUID

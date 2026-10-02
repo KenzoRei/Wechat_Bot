@@ -386,3 +386,31 @@ def test_orphaned_parked_outbound_is_closed_on_its_next_turn(world, ai):
     result = turn(identity, "继续", case_number=c["uchoice_outbound_request"]["case_number"])
     assert result.reply_text == f"出库申请 {c['uchoice_outbound_request']['serial_number']} 已失效，请重新提交。"
     assert cases(staff_id)["uchoice_outbound_request"]["status"] == "cancelled"
+
+
+# ── Audit fixes ──────────────────────────────────────────────────────────────
+
+def test_user_stating_the_suggested_tier_keeps_it_as_stated(world, ai):
+    """Audit #2: the same tier as the suggestion, said by the user, sticks."""
+    staff_id, identity, _ = start(world, ai)
+    ai.append(AIResponse(intent="continuation", service_type_name=None, reply="",
+                         extracted_fields={"charge_type": "delivery"}, all_fields_collected=False,
+                         charge_type_stated=True))
+    result = turn(identity, "就按配送")
+    fields = cases(staff_id)["upsert_address"]["collected_fields"]
+    assert fields["charge_type"] == "delivery" and "_charge_type_suggested" not in fields
+    assert "系统估算" not in result.reply_text
+
+
+def test_redirect_locks_address_case_before_outbound(monkeypatch):
+    """Audit #3: one lock order (address -> outbound) everywhere."""
+    from types import SimpleNamespace
+    order = []
+    address = SimpleNamespace(session_id="A", status="active", collected_fields={}, group_id="g")
+    outbound = SimpleNamespace(session_id="O", status="active",
+                               collected_fields={parked_outbound.PARKED_KEY: "A"}, request_log_id=None)
+    monkeypatch.setattr(parked_outbound, "lock_session",
+                        lambda db, sid: order.append(str(sid)) or {"A": address, "O": outbound}[str(sid)])
+    monkeypatch.setattr(adapter, "_authorize_case", lambda access, session: None)
+    kind, value, _ = adapter._redirect_parked_outbound(None, None, outbound, explicit=True)
+    assert (kind, value, order) == ("session", address, ["A", "O"])

@@ -62,6 +62,10 @@ class AIResponse:
     # core/address_suggestion.valid_minutes is the only check; code alone
     # turns minutes into a charge-type tier.
     estimated_drive_minutes: object = None
+    # upsert_address only: True when the user named a charge type in THIS
+    # message -- distinguishes a statement from the AI repeating an already
+    # collected (e.g. suggested) charge_type. Only `is True` counts.
+    charge_type_stated: object = False
 
 
 class AIProvider(ABC):

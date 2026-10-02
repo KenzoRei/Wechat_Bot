@@ -863,12 +863,15 @@ def _redirect_parked_outbound(db: DBSession, access, session, *, explicit: bool)
     address_id = parked_outbound.parked_for(session)
     if not address_id:
         return "session", session, None
+    # Lock order address -> outbound, the same order as every path that
+    # changes both (address confirm/cancel/expiry update the address case,
+    # then lock the outbound), so concurrent turns can't deadlock.
+    address = parked_outbound.lock_session(db, address_id)
     outbound = parked_outbound.lock_session(db, session.session_id)
     if not parked_outbound.still_parked_for(outbound, address_id):
         # Resumed or closed while this turn waited for the lock.
         return "session", (outbound if parked_outbound.is_open(outbound) else None), None
     serial = parked_outbound.serial_number(db, outbound) or "未知申请"
-    address = parked_outbound.lock_session(db, address_id)
     if not parked_outbound.is_open(address):
         parked_outbound.close(db, outbound, "cancelled")
         return "expired", render_kefu_outcome(ParkedOutboundExpiredOutcome(outbound_serial_number=serial)), None
