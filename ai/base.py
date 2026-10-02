@@ -57,6 +57,19 @@ class AIResponse:
     # these; Smart Robot's legacy path ignores them.
     semantic_issues: tuple[SemanticIssue, ...] = ()
     address_match: AddressMatch | None = None
+    # upsert_address only, both channels: the AI's estimated drive time in
+    # minutes from the origin warehouse to the address being added. Raw --
+    # core/address_suggestion.valid_minutes is the only check; code alone
+    # turns minutes into a charge-type tier.
+    estimated_drive_minutes: object = None
+    # upsert_address only: True when the user named a charge type in THIS
+    # message -- distinguishes a statement from the AI repeating an already
+    # collected (e.g. suggested) charge_type. Only `is True` counts.
+    charge_type_stated: object = False
+    # upsert_address only: the AI's reading of the address, split into
+    # {street, unit?, city, state, zip}. Raw -- core/address_suggestion.
+    # build_address checks each part and builds the stored addr string.
+    addr_parts: object = None
 
 
 class AIProvider(ABC):

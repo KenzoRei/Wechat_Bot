@@ -55,9 +55,13 @@ _SAMPLES = [
         oc.AddressOption(candidate_key="POISON-UUID-2", display_label="XYZ 公司（2 Main St）"),
     )),
     oc.AddressPivotUnavailableOutcome(escalation_note="您没有新增地址的权限，请联系管理员。"),
-    oc.AddressPivotStartedOutcome(cancelled_serial_number="REQ-1", still_missing_fields=(
-        oc.FieldPrompt(field="charge_type", label="计费类型", question="请问计费类型是？"),
-    )),
+    oc.AddressPivotStartedOutcome(parked_serial_number="REQ-1", next_step_text="还需要补充：计费类型"),
+    oc.AddressResumeOutcome(
+        address_label="ABC（1 Main St）", outbound_serial_number="REQ-1", status="resumed",
+        next_step_text="请确认以下信息：...",
+    ),
+    oc.ParkedCaseRedirectOutcome(outbound_serial_number="REQ-1"),
+    oc.ParkedOutboundExpiredOutcome(outbound_serial_number="REQ-1"),
     oc.InsufficientStockOutcome(
         warehouse_label="JFK",
         shortages=(oc.StockShortage(sku_label="S2", requested_boxes=144, available_boxes=100),),

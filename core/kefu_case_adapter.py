@@ -43,6 +43,7 @@ replay regenerate identical bytes without repeating business execution.
 from __future__ import annotations
 
 from typing import Callable
+from uuid import UUID
 
 from sqlalchemy.orm import Session as DBSession
 
@@ -575,6 +576,21 @@ def _process_turn(
             )
 
     session = _resolve_kefu_session(db, access, case_number_hint)
+    parked_prefix = None
+    if session is not None and not isinstance(session, CaseTurnDenied):
+        kind, value, parked_prefix = _redirect_parked_outbound(db, access, session, explicit=bool(case_number_hint))
+        if kind == "expired":
+            # The parked outbound's address case is gone; it was just closed.
+            if execution_row is not None:
+                from datetime import datetime, timezone
+                execution_row.status = "completed"
+                execution_row.completed_at = datetime.now(timezone.utc)
+                execution_row.db_committed_at = execution_row.db_committed_at or execution_row.completed_at
+            db.commit()
+            expired_reply = _with_voice_echo(voice, message_content, value)
+            _direct_send(client, identity, f"kefu-reply:{msgid}", expired_reply)
+            return CaseTurnSuccess(reply_text=expired_reply, customer_copy_text=None, case_number="", new_revision=0)
+        session = value
     if isinstance(session, CaseTurnDenied):
         db.rollback()
         # A transcript can carry a case number too; D2 echo applies here.
@@ -730,6 +746,8 @@ def _process_turn(
         # D2: every reply to a transcribed voice message starts with what was
         # heard, so a mishearing is visible before anything is confirmed. It's
         # part of the stored case_turn reply, so a replay is identical.
+        if parked_prefix:
+            reply_text = f"{parked_prefix}\n{reply_text}"
         reply_text = _with_voice_echo(voice, message_content, reply_text)
 
     new_session_id = context.get("session_id")
@@ -821,6 +839,47 @@ def _authorize_case(access, session) -> str | None:
             if session_warehouse is not None and session_warehouse not in access.warehouse_codes:
                 return "case_wrong_warehouse"
     return None
+
+
+def _redirect_parked_outbound(db: DBSession, access, session, *, explicit: bool):
+    """
+    A parked outbound (core/parked_outbound.py) is never acted on directly
+    while its address case is open -- reached by its case number or by a
+    staff binding, the turn is handled on the address case instead, so 取消
+    there cancels both (D1) and concurrent turns serialize on one case.
+
+    Returns (kind, value, reply_prefix):
+      ("session", session, None)      not parked: unchanged
+      ("session", address, prefix)    redirected to the open address case
+      ("session", denial|None, None)  the address case isn't authorized for
+                                      this caller: denied when asked for by
+                                      case number, else a fresh start
+      ("expired", reply, None)        its address case is gone (only after a
+                                      crash); the outbound was just closed
+    """
+    from core import parked_outbound
+    from core.kefu_outcomes import ParkedCaseRedirectOutcome, ParkedOutboundExpiredOutcome
+
+    address_id = parked_outbound.parked_for(session)
+    if not address_id:
+        return "session", session, None
+    # Lock order address -> outbound, the same order as every path that
+    # changes both (address confirm/cancel/expiry update the address case,
+    # then lock the outbound), so concurrent turns can't deadlock.
+    address = parked_outbound.lock_session(db, address_id)
+    outbound = parked_outbound.lock_session(db, session.session_id)
+    if not parked_outbound.still_parked_for(outbound, address_id):
+        # Resumed or closed while this turn waited for the lock.
+        return "session", (outbound if parked_outbound.is_open(outbound) else None), None
+    serial = parked_outbound.serial_number(db, outbound) or "未知申请"
+    if not parked_outbound.is_open(address):
+        parked_outbound.close(db, outbound, "cancelled")
+        return "expired", render_kefu_outcome(ParkedOutboundExpiredOutcome(outbound_serial_number=serial)), None
+    denial = _authorize_case(access, address)
+    if denial is not None:
+        return "session", (CaseTurnDenied(reason=denial) if explicit else None), None
+    prefix = render_kefu_outcome(ParkedCaseRedirectOutcome(outbound_serial_number=serial))
+    return "session", address, prefix
 
 
 def _resolve_kefu_session(db: DBSession, access, case_number_hint: str | None):
@@ -1003,17 +1062,27 @@ def _finalize_turn(
 
     still_open = session.status in _OPEN_SESSION_STATUSES
     binding = db.get(KefuStaffCaseContext, staff.staff_id)
-    if still_open:
-        if binding is None:
-            db.add(KefuStaffCaseContext(staff_id=staff.staff_id, active_session_id=session.session_id))
-        else:
-            binding.active_session_id = session.session_id
-    else:
+    # A saved address that resumed its parked outbound: this turn stays
+    # recorded on the address case, but the staff member carries on with
+    # the outbound (core/kefu_turn_apply._resume_parked_outbound).
+    next_session_id = (context or {}).get("_kefu_next_session_id")
+    bind_to = session.session_id if still_open else (UUID(next_session_id) if next_session_id else None)
+    if not still_open:
         # A case can be handled by more than one authorized staff member.
         # Closing it must clear every stale binding, not only today's actor.
         db.query(KefuStaffCaseContext).filter_by(active_session_id=session.session_id).update(
             {"active_session_id": None}, synchronize_session="fetch"
         )
+        binding = db.get(KefuStaffCaseContext, staff.staff_id)
+    if bind_to is not None:
+        if binding is None:
+            db.add(KefuStaffCaseContext(staff_id=staff.staff_id, active_session_id=bind_to))
+        else:
+            binding.active_session_id = bind_to
+    if still_open:
+        # A parked outbound lives exactly as long as its address case.
+        from core import parked_outbound
+        parked_outbound.follow_expiry(db, session)
 
     delivery_key = f"kefu-reply:{msgid}" if msgid else f"kefu-reply:{session.session_id}:{reply_text[:32]}"
     enqueue_text(

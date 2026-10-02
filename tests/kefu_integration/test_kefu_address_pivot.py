@@ -51,6 +51,7 @@ def _cleanup(staff_id, warehouse, sku):
 
 
 def test_unmatched_address_atomically_pivots_without_ai_operational_prose(monkeypatch):
+    import core.kefu_turn_apply as turn_apply
     staff_id, open_kfid, external_userid = _seed_staff()
     # Live incident: this file previously used the REAL warehouse/SKU
     # ("JFK", "s2") -- since this project runs tests directly against
@@ -88,6 +89,9 @@ def test_unmatched_address_atomically_pivots_without_ai_operational_prose(monkey
                 all_fields_collected=False,
             )
         monkeypatch.setattr(adapter._ai_chain, "process", ai_response)
+        # The synthetic warehouse stands in for a real one, so the pivot
+        # carries it over to the address flow like JFK/DE/NJ.
+        monkeypatch.setattr(turn_apply, "VALID_WAREHOUSE_CODES", turn_apply.VALID_WAREHOUSE_CODES | {warehouse})
         processor = adapter.make_case_turn_processor(client=None, db_factory=SessionLocal)
         msgid = f"pivot-{uuid.uuid4().hex}"
         result = processor(
@@ -108,7 +112,7 @@ def test_unmatched_address_atomically_pivots_without_ai_operational_prose(monkey
         assert replay.case_number == result.case_number
         assert calls["count"] == 1
         assert marker not in result.reply_text
-        assert "新增地址流程" in result.reply_text
+        assert "先为您新增地址" in result.reply_text and "已暂存" in result.reply_text
 
         db = SessionLocal()
         rows = db.execute(text(
@@ -120,11 +124,16 @@ def test_unmatched_address_atomically_pivots_without_ai_operational_prose(monkey
         db.close()
         by_service = {row["name"]: row for row in rows}
         assert set(by_service) == {"uchoice_outbound_request", "upsert_address"}
+        # Parked, not cancelled: it resumes once the address is saved.
         assert (by_service["uchoice_outbound_request"]["session_status"],
-                by_service["uchoice_outbound_request"]["log_status"]) == ("cancelled", "cancelled")
+                by_service["uchoice_outbound_request"]["log_status"]) == ("active", "pending")
         assert (by_service["upsert_address"]["session_status"],
                 by_service["upsert_address"]["log_status"]) == ("active", "pending")
         assert by_service["upsert_address"]["collected_fields"]["addr"] == "600 Blair Rd, Carteret, NJ 07008"
+        # The outbound's warehouse is carried over; only the charge type is asked.
+        assert by_service["upsert_address"]["collected_fields"]["warehouse_code"] == warehouse
+        assert "计费类型" in result.reply_text
+        assert "所属仓库" not in result.reply_text
     finally:
         _cleanup(staff_id, warehouse, sku)
 
@@ -161,7 +170,7 @@ def test_insufficient_boxes_reject_before_unmatched_address_pivot(monkeypatch):
 
         assert "申请 144 箱" in result.reply_text
         assert "现有 143 箱" in result.reply_text
-        assert "新增地址流程" not in result.reply_text
+        assert "先为您新增地址" not in result.reply_text
         assert "FALSE PIVOT CLAIM" not in result.reply_text
 
         db = SessionLocal()

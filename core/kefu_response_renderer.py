@@ -17,6 +17,9 @@ from dataclasses import dataclass
 from core.kefu_outcomes import (
     AddressAmbiguousOutcome,
     AddressPivotStartedOutcome,
+    AddressResumeOutcome,
+    ParkedCaseRedirectOutcome,
+    ParkedOutboundExpiredOutcome,
     AddressPivotUnavailableOutcome,
     CandidateAmbiguousOutcome,
     CandidateNoneEligibleOutcome,
@@ -86,14 +89,9 @@ class AddressDecision:
 
 
 def _sanitize_new_address(raw: dict | None) -> dict | None:
-    if not isinstance(raw, dict):
-        return None
-    sanitized = {}
-    for key in ("company_name", "addr"):
-        value = raw.get(key)
-        if isinstance(value, str) and value.strip():
-            sanitized[key] = value.strip()
-    return sanitized or None
+    # Shared with Smart Robot's unmatched_new_address (core/address_suggestion.py).
+    from core.address_suggestion import sanitize_new_address
+    return sanitize_new_address(raw)
 
 
 def validate_address_match(ai_response, candidates: list[dict]) -> AddressDecision:
@@ -239,15 +237,32 @@ def _render_address_pivot_unavailable(o: AddressPivotUnavailableOutcome) -> str:
 
 
 def _render_address_pivot_started(o: AddressPivotStartedOutcome) -> str:
-    base = (
-        f"目的地不在已收录的地址列表中，原申请 {o.cancelled_serial_number} 已自动取消，"
-        "系统已为您转入新增地址流程。"
+    return (
+        f"目的地不在已收录的地址列表中，先为您新增地址。出库申请 {o.parked_serial_number} 已暂存，"
+        "地址新增后将自动继续。\n\n"
+        f"{o.next_step_text}\n\n"
+        f"回复「取消」将同时取消出库申请 {o.parked_serial_number}。"
     )
-    if o.still_missing_fields:
-        questions = "\n".join(f"- {f.question}" for f in o.still_missing_fields)
-        base += f"\n还需要补充以下信息：\n{questions}"
-    base += "\n新增完成后请重新提交出库申请。"
-    return base
+
+
+def _render_address_resume(o: AddressResumeOutcome) -> str:
+    saved = f"地址已新增：{o.address_label}"
+    if o.status == "resumed":
+        return f"{saved}\n继续出库申请 {o.outbound_serial_number}：\n\n{o.next_step_text}"
+    if o.status == "warehouse_mismatch":
+        return (
+            f"{saved}\n但该地址所属仓库（{o.address_warehouse}）与出库申请 {o.outbound_serial_number}"
+            f"（{o.outbound_warehouse}）不同，原出库申请已取消，请重新提交。"
+        )
+    return f"{saved}\n原出库申请 {o.outbound_serial_number} 已失效，请重新提交。"
+
+
+def _render_parked_case_redirect(o: ParkedCaseRedirectOutcome) -> str:
+    return f"出库申请 {o.outbound_serial_number} 正在等待新增地址，以下为地址申请："
+
+
+def _render_parked_outbound_expired(o: ParkedOutboundExpiredOutcome) -> str:
+    return f"出库申请 {o.outbound_serial_number} 已失效，请重新提交。"
 
 
 def _render_insufficient_stock(o: InsufficientStockOutcome) -> str:
@@ -278,6 +293,12 @@ def _render_confirmation_summary(o: ConfirmationSummaryOutcome) -> str:
 
 
 def _render_confirmation_cancelled(o: ConfirmationCancelledOutcome) -> str:
+    if o.also_cancelled_serial_number:
+        cancelled = f"（{o.serial_number}）" if o.serial_number else ""
+        return (
+            f"{o.service_label}已取消{cancelled}，出库申请 {o.also_cancelled_serial_number} 也已一并取消，"
+            "您可以随时发起新申请。"
+        )
     if o.serial_number:
         return f"{o.service_label}已取消（{o.serial_number}），您可以随时发起新申请。"
     return f"{o.service_label}已取消，您可以随时发起新申请。"
@@ -386,6 +407,9 @@ _RENDERERS = {
     AddressAmbiguousOutcome: _render_address_ambiguous,
     AddressPivotUnavailableOutcome: _render_address_pivot_unavailable,
     AddressPivotStartedOutcome: _render_address_pivot_started,
+    AddressResumeOutcome: _render_address_resume,
+    ParkedCaseRedirectOutcome: _render_parked_case_redirect,
+    ParkedOutboundExpiredOutcome: _render_parked_outbound_expired,
     InsufficientStockOutcome: _render_insufficient_stock,
     StockChangedOutcome: _render_stock_changed,
     InventoryInconsistentOutcome: _render_inventory_inconsistent,

@@ -1,11 +1,12 @@
 from datetime import datetime, timezone
+from uuid import UUID
 from sqlalchemy.orm import Session as DBSession
 
 from models.session import ConversationSession
 from models.service import ServiceType
 from models.group import GroupConfig
 from models.kefu import KefuStaff
-from core import request_logger
+from core import parked_outbound, request_logger
 from core.kefu_delivery import enqueue_text
 from clients.wechat_client import send_group_webhook_message
 
@@ -26,6 +27,14 @@ def run_expiry_check(db: DBSession) -> None:
     ).all()
 
     for session in expired:
+        if session.status not in ('active', 'pending_confirmation'):
+            continue  # already closed this run, together with its address case
+        # A parked outbound whose address case is still open is timed out
+        # together with that case (below), without a notice of its own. One
+        # whose address case is gone expires normally here.
+        address_id = parked_outbound.parked_for(session)
+        if address_id and parked_outbound.is_open(db.get(ConversationSession, UUID(address_id))):
+            continue
         _expire_session(db, session)
 
 
@@ -44,6 +53,11 @@ def _expire_session(db: DBSession, session: ConversationSession) -> None:
     """
     session.status     = "timed_out"
     session.updated_at = datetime.now(timezone.utc)
+    outbound_id = parked_outbound.resumes(session)
+    if outbound_id:
+        outbound = parked_outbound.lock_session(db, outbound_id)
+        if parked_outbound.still_parked_for(outbound, session.session_id):
+            parked_outbound.close(db, outbound, "timed_out")
     db.commit()
 
     if session.request_log_id:

@@ -409,6 +409,13 @@ def _build_uchoice_candidates(
             candidates["addresses"] = uchoice_context.address_candidates(db, allowed_warehouse_codes=allowed_warehouse_codes)
         else:
             candidates["addresses"] = uchoice_context.address_candidates(db, source_warehouse_code="JFK")
+        if "upsert_address" in names:
+            # Origin addresses for the drive-time estimate behind a suggested
+            # charge type (core/address_suggestion.py) -- needed on the
+            # outbound turn that hands off to a new address too, not only
+            # inside an upsert_address session.
+            from core.address_suggestion import origin_warehouse_addresses
+            candidates["origin_warehouses"] = origin_warehouse_addresses(db)
         # boxes_per_pallet resolution (default-fill, ambiguity-clarification,
         # stock-sufficiency check) is entirely code-level now — see
         # workflow_engine._resolve_outbound_pallet_defaults — so the AI no

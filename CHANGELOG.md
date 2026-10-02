@@ -7,6 +7,49 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.6.0] - 2026-10-02
+
+### Changed
+- **Outbound request to an unsaved destination (Kefu): the request now
+  resumes after the address is added.** Previously the outbound request was
+  cancelled and had to be sent again once the address was saved.
+  - The outbound draft is put on hold, keeping its serial number, and the
+    new-address step opens already filled in: company, address, warehouse,
+    and a suggested charge type. When nothing is missing it goes straight to
+    the address confirmation.
+  - After 确认, the address is saved and the outbound continues in the same
+    reply with the new address, normally straight to its own confirmation.
+  - 取消 during the address step cancels the outbound too. If the address is
+    saved under a different warehouse, or the outbound has expired, the
+    address is still saved and the reply says the outbound must be sent again.
+  - A message sent to the on-hold outbound (by its case number, or by another
+    staff member) is handled on the address step, with a note saying so.
+  - Smart Robot still cancels the outbound and asks for it to be sent again.
+- **Suggested charge type for a new address (Kefu and Smart Robot).** The AI
+  estimates the drive time from the warehouse to the recipient; the bot maps
+  it to the tier (under 5 min 短途配送, 5–20 配送, over 20 卡车转仓) and shows
+  it in the address confirmation, e.g.
+  `配送（$45） — 预计车程约 12 分钟（JFK 仓出发，系统估算，如有误请直接说明）`.
+  A charge type the user states (including 自提) always wins. If an estimate
+  isn't possible, the charge type is asked for as before. An existing
+  address being updated never gets a suggestion.
+- **New addresses are stored in one standard format.** The AI returns its
+  reading of the address in parts (street, unit, city, state, ZIP); the bot
+  checks each part and builds the address itself, e.g.
+  `182-08 149th Avenue, Springfield Gardens, NY 11413` from a messy input.
+  The built address is what the confirmation shows and what is saved. Only
+  such a checked address gets a suggested charge type; if a part is missing
+  (e.g. no ZIP), the AI's own text is kept and the charge type is asked. On Smart Robot the
+  tier, price and minutes only ever appear in the code-built confirmation,
+  never in the AI's own reply.
+- **The warehouse carries over** from the outbound request into the
+  new-address step (both channels), instead of being asked again.
+
+### Fixed
+- A Kefu case awaiting confirmation that loses a required field through a
+  correction now goes back to collecting it, instead of letting the next
+  确认 execute an incomplete case.
+
 ## [1.5.1] - 2026-10-01
 
 ### Fixed

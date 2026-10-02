@@ -12,6 +12,10 @@ def send_message(context: dict, content: str) -> None:
     Stores reply in context["_reply"] for synchronous return,
     AND calls the external API if response_url is available (for async use).
     """
+    # One-shot framing set by a caller that hands off to a shared path which
+    # sends its own reply (e.g. the outbound -> new-address handoff showing
+    # the address confirmation).
+    content = f"{context.pop('_reply_prefix', '')}{content}{context.pop('_reply_suffix', '')}"
     context["_reply"] = content
     # also try response_url if available (for workflow steps that run after label creation)
     response_url = context.get("response_url", "")
@@ -28,6 +32,7 @@ from handlers.registry import HANDLER_REGISTRY
 from models.workflow import WorkflowStep
 from models.service import ServiceType
 from core.workflow_errors import TargetOperationRejected, LabelCreationRejected
+from core.uchoice_constants import VALID_WAREHOUSE_CODES
 
 
 def _session_provenance_kwargs(context: dict) -> dict:
@@ -127,8 +132,15 @@ def _maybe_pivot_to_add_address(context: dict, ai_response: AIResponse, db: DBSe
         # still gets sent as a normal "still collecting fields" turn.
         return False
 
+    from core import address_suggestion
+    from models.request_log import RequestLog
+
+    prior_warehouse_code = ((session.collected_fields or {}).get("warehouse_code")) if session is not None else None
+    cancelled_serial = ""
     if session is not None:
         if session.request_log_id:
+            prior_log = db.query(RequestLog).filter_by(log_id=session.request_log_id).first()
+            cancelled_serial = prior_log.serial_number if prior_log else ""
             request_logger.mark_cancelled(db, session.request_log_id)
         session_manager.close_session(db, session, status="cancelled")
 
@@ -153,7 +165,17 @@ def _maybe_pivot_to_add_address(context: dict, ai_response: AIResponse, db: DBSe
     context["serial_number"] = log.serial_number
     db.commit()
 
-    seed_fields = {k: v for k, v in guess.items() if v and k in ("company_name", "addr")}
+    new_address = address_suggestion.sanitize_new_address(guess) or {}
+    seed_fields = address_suggestion.seed_fields(new_address)
+    # Carry the outbound's warehouse over -- the new address belongs to the
+    # same origin warehouse. Stated this turn or earlier in the draft only;
+    # no actor default here, the AI's own reply decides whether to ask.
+    warehouse_code = (ai_response.extracted_fields or {}).get("warehouse_code") or prior_warehouse_code
+    if warehouse_code in VALID_WAREHOUSE_CODES:
+        seed_fields["warehouse_code"] = warehouse_code
+    # A stated charge type, else one suggested from the drive-time estimate
+    # (core/address_suggestion.py).
+    seed_fields = address_suggestion.seed_charge_type(seed_fields, new_address)
     if seed_fields:
         session_manager.update_collected_fields(db, new_session, seed_fields)
 
@@ -161,9 +183,38 @@ def _maybe_pivot_to_add_address(context: dict, ai_response: AIResponse, db: DBSe
     context["service_type_id"] = add_address_service["service_type_id"]
     context["collected_fields"] = new_session.collected_fields
 
+    if _all_required_fields_present(add_address_service, new_session.collected_fields or {}):
+        # Everything is known: the reply is the code-built confirmation, so a
+        # suggested tier, price and drive time only ever come from code --
+        # never from the AI's own reply text.
+        cancelled = f"原出库申请 {cancelled_serial} 已取消，" if cancelled_serial else "原出库申请已取消，"
+        context["_reply_prefix"] = f"该地址尚未收录，{cancelled}先新增地址：\n\n"
+        context["_reply_suffix"] = "\n\n新增后请重新提交出库申请。"
+        _on_all_fields_collected(context, ai_response, add_address_service, new_session, db)
+        return True
+
     session_manager.add_message(db, new_session, "assistant", ai_response.reply)
     send_message(context, ai_response.reply)
     return True
+
+
+def _apply_address_suggestion(db: DBSession, service: dict | None, session, previous: dict, extracted, ai_response) -> None:
+    """upsert_address: suggested charge type from the AI's drive-time
+    estimate; a stated charge type always wins (core/address_suggestion.py).
+    May drop charge_type, so it replaces collected_fields rather than
+    merging like update_collected_fields."""
+    if service is None or service["name"] != "upsert_address":
+        return
+    from core.address_suggestion import apply_address_turn
+    updated = apply_address_turn(
+        previous, session.collected_fields or {}, extracted or {},
+        getattr(ai_response, "estimated_drive_minutes", None),
+        stated_flag=getattr(ai_response, "charge_type_stated", False) is True,
+        raw_parts=getattr(ai_response, "addr_parts", None),
+    )
+    if updated != session.collected_fields:
+        session.collected_fields = updated
+        db.commit()
 
 
 # ── Intent handlers ───────────────────────────────────────────────────────────
@@ -247,9 +298,12 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
         db.commit()
 
     # save any extracted fields from the first message
+    extracted = {}
     if ai_response.extracted_fields:
-        extracted = _sanitize_extracted_fields_before_persistence(service["name"], ai_response.extracted_fields, db, context.get("group_id"))
+        extracted = _sanitize_extracted_fields_before_persistence(
+            service["name"], strip_internal_keys(ai_response.extracted_fields), db, context.get("group_id"))
         session_manager.update_collected_fields(db, session, extracted)
+    _apply_address_suggestion(db, service, session, {}, extracted, ai_response)
 
     # context["collected_fields"] was set from session.collected_fields at
     # build_context() time, when session was still None (still {}).
@@ -381,6 +435,7 @@ from core.uchoice_field_sanitization import (
     _SKU_LINES_FIELD_BY_SERVICE,
     _sanitize_role_change_fields_before_persistence,
     sanitize_extracted_fields_before_persistence as _sanitize_extracted_fields_before_persistence,
+    strip_internal_keys,
 )
 
 
@@ -926,10 +981,14 @@ def _handle_continuation(context: dict, ai_response: AIResponse, db: DBSession) 
     service = _find_service_by_type_id(context, session.service_type_id)
 
     session_manager.add_message(db, session, "user", context["content"])
-    extracted = ai_response.extracted_fields
+    previous_fields = dict(session.collected_fields or {})
+    # Internal "_" keys never come from the AI -- stripped here too, since
+    # an unresolved service skips the sanitizer below.
+    extracted = strip_internal_keys(ai_response.extracted_fields)
     if service is not None:
         extracted = _sanitize_extracted_fields_before_persistence(service["name"], extracted, db, context.get("group_id"))
     session_manager.update_collected_fields(db, session, extracted)
+    _apply_address_suggestion(db, service, session, previous_fields, extracted, ai_response)
 
     # see the matching comment in _handle_new_request — same staleness bug,
     # this is the path that actually surfaced it live (the last required

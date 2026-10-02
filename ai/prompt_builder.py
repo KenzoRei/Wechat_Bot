@@ -54,7 +54,44 @@ def _address_matching_instructions(is_kefu: bool) -> str:
         "{{\"company_name\": \"<公司名，提取不到则省略此键>\", \"addr\": \"<地址，按上面 upsert_address 的地址整理规则处理，"
         "要素不全就只填齐全的部分，不要瞎猜补全，提取不到则省略此键>\"}}，供系统据此转为新增地址流程使用。"
         "同时 reply 中必须说明：这是一个新地址、尚未收录，系统已将其转为新增地址流程，原出库申请已自动取消，"
-        "还需要补充计费类型（以及所属仓库，如果无法判断）后才能完成新增，新增完成后请重新提交出库申请。\n"
+        "还需要补充计费类型（若已在 unmatched_new_address 中给出 estimated_drive_minutes 或 charge_type 则不要再问）"
+        "以及所属仓库（如果无法判断）后才能完成新增，新增完成后请重新提交出库申请。\n"
+    )
+
+
+def _drive_time_instructions(is_kefu: bool) -> str:
+    """
+    Suggested charge type (address-pivot plan rev 3, item 2): the AI gives
+    only estimated drive minutes; code maps them to a tier
+    (core/address_suggestion.py). Smart Robot writes its own reply, so it is
+    told never to state a tier, price or drive time there -- only the
+    code-built confirmation shows them.
+    """
+    handoff_key = "address_match.new_address" if is_kefu else "unmatched_new_address"
+    reply_rule = "" if is_kefu else (
+        "  · 【重要】reply 中绝不能提及计费类型、价格或车程分钟数——这些只由系统生成的确认摘要展示。"
+        "若已给出 estimated_drive_minutes，reply 中不要再询问计费类型。\n"
+    )
+    return (
+        "- origin_warehouses：我们自己仓库（出发地）的地址，用于估算车程。\n"
+        "  · 新增地址时（upsert_address 会话，或出库目的地未收录、转为新增地址时），若收件地址要素齐全"
+        "（门牌号+街道、城市、州、邮编）且已知所属仓库，估算从该仓库到收件地址的驾车时间：取整数分钟，按普通白天路况，"
+        "填入顶层字段 estimated_drive_minutes（出库转新增地址的那一轮，改为填入 "
+        f"{handoff_key} 的 estimated_drive_minutes 键）。地址不全或无法判断时省略，不要瞎猜。\n"
+        "  · 【重要】只给分钟数，绝不能自己给出或推断计费类型——计费类型由系统根据分钟数决定。"
+        f"只有当用户自己明确说出计费类型（短途配送/配送/卡车转仓/自提）时，才填 charge_type（出库转新增地址的那一轮填入 {handoff_key} "
+        "的 charge_type 键，取值 short_delivery / delivery / truck_transfer / self_pickup），不能根据车程自行填写。"
+        "upsert_address 会话中，用户在本条消息里明确说出计费类型时，除在 extracted_fields 填 charge_type 外，"
+        "还必须把顶层字段 charge_type_stated 设为 true（即使与当前已收集的计费类型相同）；"
+        "仅仅沿用已收集的计费类型时保持 false。\n"
+        "  · 【重要】只要本条消息给出或修改了收件地址（upsert_address 会话，或出库转新增地址的那一轮），"
+        "就把你对该地址的理解拆成各部分，填入顶层字段 addr_parts（出库转新增地址的那一轮填入 "
+        f"{handoff_key} 的 addr_parts 键）："
+        "{\"street\": \"门牌号+街道，如 182-08 149th Avenue\", \"unit\": \"单元/套房，没有则省略\", "
+        "\"city\": \"城市\", \"state\": \"两位州缩写，如 NY\", \"zip\": \"5位邮编\"}。"
+        "格式凌乱、缺逗号、州名写全称或小写都没关系，按你的理解规范填写；"
+        "原话里确实没有的部分（如没给邮编）就省略该键，绝不能猜测补全。系统会据此校验并生成标准地址。\n"
+        f"{reply_rule}"
     )
 
 
@@ -170,6 +207,7 @@ def build_system_prompt(context: dict) -> str:
         "（假设其余必填字段已齐全）。错误输出（禁止）：extracted_fields 为空、或只给 t2 一行导致 t1 丢失、或反复不提取直接让系统重复问同一个问题——"
         "这会导致用户被同一个澄清问题无限循环追问。\n"
         f"{_address_matching_instructions(is_kefu)}"
+        f"{_drive_time_instructions(is_kefu) if uchoice_candidates.get('origin_warehouses') else ''}"
         "- pending_inbound_requests / pending_outbound_requests：当前所有待处理的入库/出库申请候选列表。\n"
         "  · 0 条：告知用户当前没有待处理的申请，不要设置 all_fields_collected=true。\n"
         "  · 恰好 1 条：不需要询问，也不需要列出来给用户选——直接把这唯一一条的 serial_number 填入 reference_serial，"
@@ -256,7 +294,10 @@ def build_system_prompt(context: dict) -> str:
   "all_fields_collected": false,
   "service_type_name": null,
   "semantic_issues": [],
-  "address_match": null
+  "address_match": null,
+  "estimated_drive_minutes": null,
+  "charge_type_stated": false,
+  "addr_parts": null
 }"""
         reply_field_note = (
             "- 【重要，企业微信客服渠道】reply 字段不会发送给客服人员——所有实际发送的消息均由后端根据 "
@@ -274,7 +315,10 @@ def build_system_prompt(context: dict) -> str:
   "extracted_fields": {},
   "all_fields_collected": false,
   "service_type_name": null,
-  "unmatched_new_address": null
+  "unmatched_new_address": null,
+  "estimated_drive_minutes": null,
+  "charge_type_stated": false,
+  "addr_parts": null
 }"""
         reply_field_note = ""
 
@@ -452,4 +496,7 @@ def parse_response(raw: str) -> AIResponse:
         unmatched_new_address=data.get("unmatched_new_address"),
         semantic_issues=_parse_semantic_issues(data.get("semantic_issues")),
         address_match=_parse_address_match(data.get("address_match")),
+        estimated_drive_minutes=data.get("estimated_drive_minutes"),
+        charge_type_stated=data.get("charge_type_stated") is True,
+        addr_parts=data.get("addr_parts"),
     )
