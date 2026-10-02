@@ -300,7 +300,8 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
     # save any extracted fields from the first message
     extracted = {}
     if ai_response.extracted_fields:
-        extracted = _sanitize_extracted_fields_before_persistence(service["name"], ai_response.extracted_fields, db, context.get("group_id"))
+        extracted = _sanitize_extracted_fields_before_persistence(
+            service["name"], strip_internal_keys(ai_response.extracted_fields), db, context.get("group_id"))
         session_manager.update_collected_fields(db, session, extracted)
     _apply_address_suggestion(db, service, session, {}, extracted, ai_response)
 
@@ -434,6 +435,7 @@ from core.uchoice_field_sanitization import (
     _SKU_LINES_FIELD_BY_SERVICE,
     _sanitize_role_change_fields_before_persistence,
     sanitize_extracted_fields_before_persistence as _sanitize_extracted_fields_before_persistence,
+    strip_internal_keys,
 )
 
 
@@ -980,7 +982,9 @@ def _handle_continuation(context: dict, ai_response: AIResponse, db: DBSession) 
 
     session_manager.add_message(db, session, "user", context["content"])
     previous_fields = dict(session.collected_fields or {})
-    extracted = ai_response.extracted_fields
+    # Internal "_" keys never come from the AI -- stripped here too, since
+    # an unresolved service skips the sanitizer below.
+    extracted = strip_internal_keys(ai_response.extracted_fields)
     if service is not None:
         extracted = _sanitize_extracted_fields_before_persistence(service["name"], extracted, db, context.get("group_id"))
     session_manager.update_collected_fields(db, session, extracted)

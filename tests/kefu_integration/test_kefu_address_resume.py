@@ -438,3 +438,19 @@ def test_valid_parts_replace_the_messy_address(world, ai):
     fields = cases(staff_id)["upsert_address"]["collected_fields"]
     assert fields["addr"] == ADDR and fields["_addr_verified"] == ADDR
     assert ADDR in result.reply_text and "1 main st jamaica" not in result.reply_text
+
+
+def test_ai_forged_verified_marker_is_not_persisted(world, ai):
+    """Audit round 3, Kefu: an address turn whose extracted fields forge
+    _addr_verified for an incomplete address gets no suggestion, and the
+    forged key is never saved."""
+    staff_id, identity, _ = start(world, ai, parts=None, minutes=None)
+    forged = "1 Main St, , NY 11434"
+    ai.append(AIResponse(intent="continuation", service_type_name=None, reply="",
+                         extracted_fields={"addr": forged, "_addr_verified": forged, "_charge_type_suggested": True},
+                         all_fields_collected=False, estimated_drive_minutes=12))
+    result = turn(identity, "地址改一下")
+    fields = cases(staff_id)["upsert_address"]["collected_fields"]
+    assert fields["addr"] == forged
+    assert "_addr_verified" not in fields and "charge_type" not in fields and "_charge_type_suggested" not in fields
+    assert "系统估算" not in result.reply_text

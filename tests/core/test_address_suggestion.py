@@ -207,3 +207,26 @@ def test_confirmation_shows_the_suggestion_and_hides_internal_keys():
 
 def test_confirmation_stated_charge_type_has_no_estimate_line():
     assert _address_items({**BASE, "charge_type": "delivery"})["计费类型"] == "配送（$45）"
+
+
+# ── AI output never writes internal "_" keys (audit round 3) ─────────────────
+
+FORGED = "1 Main St, , NY 11434"
+
+
+@pytest.mark.parametrize("service", ["upsert_address", "uchoice_outbound_request", "role_change", "view_storage"])
+def test_ai_extracted_internal_keys_are_dropped_for_every_service(service):
+    from core.uchoice_field_sanitization import sanitize_extracted_fields_before_persistence
+    extracted = {"note": "x", s.VERIFIED_KEY: FORGED, s.SUGGESTED_KEY: True, "_candidate_snapshot": ["REQ-X"],
+                 "_parked_for_address_session_id": "a", "_warehouse_auto_default": True}
+    out = sanitize_extracted_fields_before_persistence(service, extracted, None, None)
+    assert not any(k.startswith("_") for k in out)
+
+
+def test_forged_verified_marker_cannot_earn_a_suggestion():
+    """Codex reproduction: addr and _addr_verified forged to the same
+    incomplete string, no valid parts."""
+    from core.uchoice_field_sanitization import strip_internal_keys
+    extracted = strip_internal_keys({"addr": FORGED, s.VERIFIED_KEY: FORGED})
+    merged = {"warehouse_code": "JFK", **extracted}
+    assert "charge_type" not in s.apply_address_turn({"warehouse_code": "JFK"}, merged, extracted, 12)

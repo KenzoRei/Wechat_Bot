@@ -143,3 +143,27 @@ def test_continuation_address_change_drops_a_suggestion_but_keeps_a_stated_type(
     session = _FakeSession(_ADDRESS_ID, {**stated, "addr": "9 Other St"})
     workflow_engine._apply_address_suggestion(_FakeDB(), service, session, stated, {"addr": "9 Other St"}, ai)
     assert session.collected_fields == {**stated, "addr": "9 Other St"}
+
+
+def test_continuation_never_persists_ai_forged_internal_keys(monkeypatch):
+    """Audit round 3, Smart Robot: a forged _addr_verified (same incomplete
+    string as addr) must not be saved, so no tier is suggested."""
+    forged = "1 Main St, , NY 11434"
+    session = _FakeSession(_ADDRESS_ID, {"warehouse_code": "JFK"})
+    monkeypatch.setattr(workflow_engine, "_get_session", lambda context, db: session)
+    monkeypatch.setattr(workflow_engine.session_manager, "add_message", lambda *a, **k: None)
+    monkeypatch.setattr(
+        workflow_engine.session_manager, "update_collected_fields",
+        lambda db, s_, fields: setattr(s_, "collected_fields", {**s_.collected_fields, **fields}),
+    )
+    monkeypatch.setattr(workflow_engine, "send_message", lambda *a, **k: None)
+    monkeypatch.setattr(workflow_engine, "_close_if_no_pending_candidates", lambda *a, **k: None)
+    context = {"wechat_openid": "o1", "group_id": _GROUP_ID, "content": "地址是…", "msg_id": "m2",
+               "allowed_services": _SERVICES, "response_url": ""}
+    ai = SimpleNamespace(
+        extracted_fields={"addr": forged, address_suggestion.VERIFIED_KEY: forged},
+        estimated_drive_minutes=12, charge_type_stated=False, addr_parts=None,
+        reply="请补充城市", all_fields_collected=False, intent="continuation",
+    )
+    workflow_engine._handle_continuation(context, ai, _FakeDB())
+    assert session.collected_fields == {"warehouse_code": "JFK", "addr": forged}

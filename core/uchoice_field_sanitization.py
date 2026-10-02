@@ -30,6 +30,20 @@ _SKU_LINES_FIELD_BY_SERVICE = {
 }
 
 
+def strip_internal_keys(extracted_fields) -> dict:
+    """
+    Top-level collected_fields keys starting with "_" are internal state
+    that only code may set (e.g. _addr_verified, _charge_type_suggested,
+    _parked_for_address_session_id, _candidate_snapshot,
+    _warehouse_auto_default). No service schema defines such a field and the
+    prompt never asks for one, but the AI sees collected fields and could
+    echo or forge them -- so model output never writes them.
+    """
+    if not isinstance(extracted_fields, dict):
+        return {}
+    return {k: v for k, v in extracted_fields.items() if not (isinstance(k, str) and k.startswith("_"))}
+
+
 def sanitize_extracted_fields_before_persistence(service_name: str, extracted_fields: dict, db: DBSession, group_id: str | None = None) -> dict:
     """
     Pre-confirm validators run only immediately before confirmation. The
@@ -46,6 +60,7 @@ def sanitize_extracted_fields_before_persistence(service_name: str, extracted_fi
     valid one, preserving valid progress from mixed-line input. The pre-confirm
     validators remain as defense in depth for anything this doesn't cover.
     """
+    extracted_fields = strip_internal_keys(extracted_fields)
     if service_name == "role_change":
         return _sanitize_role_change_fields_before_persistence(extracted_fields, db, group_id)
 
