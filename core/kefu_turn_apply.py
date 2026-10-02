@@ -270,6 +270,14 @@ def _pivot_to_address(db: DBSession, context: dict, old_session, old_log, guess:
     old_session.updated_at = datetime.now(timezone.utc)
 
     seed = {key: value for key, value in (guess or {}).items() if key in {"company_name", "addr"} and value}
+    # The outbound draft already resolved its warehouse (stated, or
+    # _apply_warehouse_default ran before this pivot); the new address
+    # belongs to that same origin warehouse, so don't ask for it again.
+    # The confirmation still shows it, and the upsert's warehouse-scope
+    # validator still applies.
+    warehouse_code = (old_session.collected_fields or {}).get("warehouse_code")
+    if warehouse_code in VALID_WAREHOUSE_CODES:
+        seed["warehouse_code"] = warehouse_code
     new_session = ConversationSession(
         wechat_openid=None,
         group_id=old_session.group_id,

@@ -28,6 +28,7 @@ from handlers.registry import HANDLER_REGISTRY
 from models.workflow import WorkflowStep
 from models.service import ServiceType
 from core.workflow_errors import TargetOperationRejected, LabelCreationRejected
+from core.uchoice_constants import VALID_WAREHOUSE_CODES
 
 
 def _session_provenance_kwargs(context: dict) -> dict:
@@ -127,6 +128,7 @@ def _maybe_pivot_to_add_address(context: dict, ai_response: AIResponse, db: DBSe
         # still gets sent as a normal "still collecting fields" turn.
         return False
 
+    prior_warehouse_code = ((session.collected_fields or {}).get("warehouse_code")) if session is not None else None
     if session is not None:
         if session.request_log_id:
             request_logger.mark_cancelled(db, session.request_log_id)
@@ -154,6 +156,12 @@ def _maybe_pivot_to_add_address(context: dict, ai_response: AIResponse, db: DBSe
     db.commit()
 
     seed_fields = {k: v for k, v in guess.items() if v and k in ("company_name", "addr")}
+    # Carry the outbound's warehouse over -- the new address belongs to the
+    # same origin warehouse. Stated this turn or earlier in the draft only;
+    # no actor default here, the AI's own reply decides whether to ask.
+    warehouse_code = (ai_response.extracted_fields or {}).get("warehouse_code") or prior_warehouse_code
+    if warehouse_code in VALID_WAREHOUSE_CODES:
+        seed_fields["warehouse_code"] = warehouse_code
     if seed_fields:
         session_manager.update_collected_fields(db, new_session, seed_fields)
 
