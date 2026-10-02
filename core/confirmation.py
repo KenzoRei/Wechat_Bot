@@ -683,12 +683,19 @@ def _recount_sections_builder(collected_fields: dict, db: DBSession) -> list[dic
 
 def _address_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
     """upsert_address — must state create-vs-update mode explicitly. charge_type shown as its Chinese label, not the raw enum code."""
+    from core.address_suggestion import suggestion_note
+
     mode = "更新" if collected_fields.get("matched_address_id") else "新增"
     items = {}
     for k, v in collected_fields.items():
-        if k == "matched_address_id":
+        # _-prefixed keys are internal state (e.g. the suggested-charge-type
+        # markers), never shown or stored on the address.
+        if k == "matched_address_id" or k.startswith("_"):
             continue
-        items[_field_label(k)] = charge_type_label(v) if k == "charge_type" else v
+        if k == "charge_type":
+            note = suggestion_note(collected_fields)
+            v = f"{charge_type_label(v)} — {note}" if note else charge_type_label(v)
+        items[_field_label(k)] = v
     return [{"label": f"您正在{mode}此地址", "type": "kv", "items": items}]
 
 

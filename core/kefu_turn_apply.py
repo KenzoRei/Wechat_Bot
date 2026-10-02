@@ -8,6 +8,7 @@ the case turn, execution ledger state, staff binding, and durable deliveries.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -253,21 +254,42 @@ def _render_address_ambiguity(decision, candidates: list[dict]) -> str:
     return render_kefu_outcome(AddressAmbiguousOutcome(options=tuple(options)))
 
 
+# A turn with no AI output, for running an existing case through
+# apply_kefu_turn's own readiness steps (handoff and resume below).
+_NO_AI_OUTPUT = SimpleNamespace(
+    intent="continuation", extracted_fields={}, address_match=None, estimated_drive_minutes=None,
+)
+
+
+def _replace_last_assistant(session, content: str) -> None:
+    """apply_kefu_turn records its own next step; the case history should
+    hold the full reply that was actually sent."""
+    from core.kefu_response_renderer import kefu_plain_text
+
+    history = list(session.conversation_history or [])
+    if history and history[-1].get("role") == "assistant":
+        history[-1] = {"role": "assistant", "content": kefu_plain_text(content)}
+        session.conversation_history = history
+
+
 def _pivot_to_address(db: DBSession, context: dict, old_session, old_log, guess: dict, services: list[dict]):
-    """Atomically replace an unmatched outbound draft with address upkeep."""
+    """
+    The outbound names a destination that isn't saved: park the outbound
+    draft (it keeps its serial number) and open an address case for the new
+    destination, in this one transaction (address-pivot plan rev 3, item 3).
+    The address case then runs through the normal readiness steps, so it
+    goes straight to its confirmation when nothing is missing.
+    """
     from models.kefu import CaseExecution
     from models.request_log import RequestLog
     from models.session import ConversationSession
-    from core.kefu_outcomes import AddressPivotStartedOutcome, FieldPrompt
+    from core import address_suggestion, parked_outbound
+    from core.kefu_outcomes import AddressPivotStartedOutcome
     from core.kefu_response_renderer import render_kefu_outcome
 
     address_service = next((s for s in services if s["name"] == "upsert_address"), None)
     if address_service is None:
         return None
-
-    old_log.status = "cancelled"
-    old_session.status = "cancelled"
-    old_session.updated_at = datetime.now(timezone.utc)
 
     seed = {key: value for key, value in (guess or {}).items() if key in {"company_name", "addr"} and value}
     # The outbound draft already resolved its warehouse (stated, or
@@ -278,6 +300,9 @@ def _pivot_to_address(db: DBSession, context: dict, old_session, old_log, guess:
     warehouse_code = (old_session.collected_fields or {}).get("warehouse_code")
     if warehouse_code in VALID_WAREHOUSE_CODES:
         seed["warehouse_code"] = warehouse_code
+    seed = address_suggestion.seed_charge_type(seed, guess or {})
+    seed[parked_outbound.RESUME_KEY] = str(old_session.session_id)
+
     new_session = ConversationSession(
         wechat_openid=None,
         group_id=old_session.group_id,
@@ -297,7 +322,7 @@ def _pivot_to_address(db: DBSession, context: dict, old_session, old_log, guess:
         service_type_id=UUID(address_service["service_type_id"]),
         status="pending",
         raw_message=context["content"],
-        # The triggering msgid already belongs to the cancelled outbound log
+        # The triggering msgid already belongs to the parked outbound log
         # (request_log has a unique msgid index). CaseExecution/CaseTurn link
         # the atomic pivot; the new address log must not duplicate that key.
         wechat_msg_id=None,
@@ -309,24 +334,23 @@ def _pivot_to_address(db: DBSession, context: dict, old_session, old_log, guess:
     db.flush()
     new_session.request_log_id = new_log.log_id
 
+    old_session.collected_fields = {
+        **(old_session.collected_fields or {}),
+        parked_outbound.PARKED_KEY: str(new_session.session_id),
+    }
+    old_session.expires_at = new_session.expires_at
+    old_session.updated_at = datetime.now(timezone.utc)
+
     key = context.get("_kefu_execution_key")
     if key:
         db.query(CaseExecution).filter_by(execution_key=key, status="claimed").update({"session_id": new_session.session_id})
 
-    missing = []
-    if not seed.get("charge_type"):
-        missing.append(FieldPrompt(field="charge_type", label="计费类型", question=_FIELD_PROMPTS["charge_type"][1]))
-    if not seed.get("warehouse_code"):
-        missing.append(FieldPrompt(field="warehouse_code", label="所属仓库", question=_FIELD_PROMPTS["warehouse_code"][1]))
+    next_step = apply_kefu_turn(db, context, _NO_AI_OUTPUT, address_service, new_session, _continuing=True)
     reply = render_kefu_outcome(AddressPivotStartedOutcome(
-        cancelled_serial_number=old_log.serial_number,
-        still_missing_fields=tuple(missing),
+        parked_serial_number=old_log.serial_number,
+        next_step_text=next_step,
     ))
-    _append(new_session, "assistant", reply)
-    context["session_id"] = str(new_session.session_id)
-    context["service_type_id"] = str(new_session.service_type_id)
-    context["serial_number"] = new_log.serial_number
-    context["collected_fields"] = seed
+    _replace_last_assistant(new_session, reply)
     context["_effective_service_name"] = "upsert_address"
     context["_reply"] = reply
     return reply
@@ -771,7 +795,12 @@ def confirm_kefu_turn(db: DBSession, context: dict, service: dict, session) -> s
     if log is not None and not service.get("targets_existing_request", False):
         log.status = "processing"
     try:
-        return _finish_execution(db, context, service, session, log)
+        reply = _finish_execution(db, context, service, session, log)
+        if service["name"] == "upsert_address" and session.status == "completed":
+            from core import parked_outbound
+            if parked_outbound.resumes(session):
+                reply = _resume_parked_outbound(db, context, session, reply)
+        return reply
     except TargetOperationRejected as e:
         # Either a losing race against a concurrent completion/cancellation
         # attempt on the same target (TargetAlreadyResolvedError), or a
@@ -817,6 +846,71 @@ def confirm_kefu_turn(db: DBSession, context: dict, service: dict, session) -> s
         return reply
 
 
+def _resume_parked_outbound(db: DBSession, context: dict, address_session, address_reply: str) -> str:
+    """
+    The address from an outbound handoff was just saved, in this same
+    transaction: continue the parked outbound draft with it (address-pivot
+    plan rev 3, item 3). The outbound runs through apply_kefu_turn's own
+    readiness steps -- stock, pallet defaults, validators, confirmation --
+    exactly as if the address had been matched.
+
+    This turn stays recorded on the address case (its audit row, customer
+    copy and delivery); only the staff binding moves to the outbound, via
+    context["_kefu_next_session_id"] (core/kefu_case_adapter._finalize_turn).
+    """
+    from models.uchoice import UchoiceAddress
+    from core import parked_outbound
+    from core.kefu_outcomes import AddressResumeOutcome
+    from core.kefu_response_renderer import render_kefu_outcome
+
+    outbound = parked_outbound.lock_session(db, parked_outbound.resumes(address_session))
+    address_id = (context.get("result") or {}).get("address_id")
+    address = db.get(UchoiceAddress, UUID(address_id)) if address_id else None
+    if address is None:
+        return address_reply
+    address_label = f"{address.company_name}（{address.addr}）" if address.company_name else address.addr
+    outbound_serial = parked_outbound.serial_number(db, outbound) or "未知申请"
+    outbound_service = _allowed_service(context, "uchoice_outbound_request")
+
+    def finish(outcome) -> str:
+        reply = render_kefu_outcome(outcome)
+        _replace_last_assistant(address_session, reply)
+        context["_reply"] = reply
+        return reply
+
+    if not parked_outbound.still_parked_for(outbound, address_session.session_id) or outbound_service is None:
+        if parked_outbound.still_parked_for(outbound, address_session.session_id):
+            parked_outbound.close(db, outbound, "cancelled")
+        return finish(AddressResumeOutcome(
+            address_label=address_label, outbound_serial_number=outbound_serial, status="outbound_closed",
+        ))
+
+    outbound_warehouse = (outbound.collected_fields or {}).get("warehouse_code")
+    if address.warehouse_code != outbound_warehouse:
+        parked_outbound.close(db, outbound, "cancelled")
+        return finish(AddressResumeOutcome(
+            address_label=address_label, outbound_serial_number=outbound_serial, status="warehouse_mismatch",
+            address_warehouse=address.warehouse_code or "?", outbound_warehouse=outbound_warehouse or "?",
+        ))
+
+    parked_outbound.unpark(outbound)
+    outbound.collected_fields = {**(outbound.collected_fields or {}), "destination_address_id": str(address.address_id)}
+
+    # apply_kefu_turn points the turn context at the outbound; this turn
+    # still belongs to the address case, so restore it afterwards.
+    saved = {key: context.get(key) for key in (
+        "session_id", "service_type_id", "serial_number", "collected_fields", "customer_id", "request_log_id",
+    )}
+    next_step = apply_kefu_turn(db, context, _NO_AI_OUTPUT, outbound_service, outbound, _continuing=True)
+    context.update(saved)
+    if parked_outbound.is_open(outbound):
+        context["_kefu_next_session_id"] = str(outbound.session_id)
+    return finish(AddressResumeOutcome(
+        address_label=address_label, outbound_serial_number=outbound_serial, status="resumed",
+        next_step_text=next_step,
+    ))
+
+
 def cancel_kefu_turn(db: DBSession, context: dict, service: dict | None, session) -> str:
     from core.kefu_outcomes import ConfirmationCancelledOutcome
     from core.kefu_response_renderer import render_kefu_outcome
@@ -831,6 +925,16 @@ def cancel_kefu_turn(db: DBSession, context: dict, service: dict | None, session
     if owns_log and log is not None and log.status in ("pending", "processing"):
         log.status = "cancelled"
     session.status = "cancelled"
+    # Cancelling the address step of an outbound handoff cancels the parked
+    # outbound too (user decision D1).
+    from core import parked_outbound
+    also_cancelled = ""
+    outbound_id = parked_outbound.resumes(session)
+    if outbound_id:
+        outbound = parked_outbound.lock_session(db, outbound_id)
+        if parked_outbound.still_parked_for(outbound, session.session_id):
+            parked_outbound.close(db, outbound, "cancelled")
+            also_cancelled = parked_outbound.serial_number(db, outbound)
     # serial_number is only shown when the session genuinely owns the log
     # being closed -- for a targets_existing_request service (e.g. cancelling
     # a confirm_inbound_completion attempt), `log` is the ORIGINAL request,
@@ -843,6 +947,7 @@ def cancel_kefu_turn(db: DBSession, context: dict, service: dict | None, session
     serial_number = log.serial_number if (owns_log and log is not None and not is_batch) else ""
     reply = render_kefu_outcome(ConfirmationCancelledOutcome(
         service_label=_service_label(service), serial_number=serial_number,
+        also_cancelled_serial_number=also_cancelled,
     ))
     _append(session, "assistant", reply)
     return reply
@@ -1292,13 +1397,24 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
     if completion_batch.is_batch_service(service["name"]):
         return _apply_batch_turn(db, context, ai_response, service, session, log)
 
+    previous_fields = dict(session.collected_fields or {})
     extracted_fields = dict(ai_response.extracted_fields or {})
     selection = extracted_fields.pop("selection", None)
+    extracted = {}
     if extracted_fields:
         extracted = sanitize_extracted_fields_before_persistence(
             service["name"], extracted_fields, db, context.get("group_id")
         )
         session.collected_fields = {**(session.collected_fields or {}), **extracted}
+        context["collected_fields"] = session.collected_fields
+    if service["name"] == "upsert_address":
+        # Suggested charge type from the AI's drive-time estimate; a stated
+        # charge type always wins (core/address_suggestion.py).
+        from core.address_suggestion import apply_address_turn
+        session.collected_fields = apply_address_turn(
+            previous_fields, session.collected_fields or {}, extracted,
+            getattr(ai_response, "estimated_drive_minutes", None),
+        )
         context["collected_fields"] = session.collected_fields
 
     if selection is not None and service["name"] in completion_batch.BATCH_SERVICE_BY_SINGLE:
@@ -1428,6 +1544,12 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
     # lost by not OR-ing in the AI's claim.
     ready = _all_required_fields_present(service, session.collected_fields or {})
     if not ready:
+        # A correction to a case awaiting confirmation can leave a required
+        # field missing (e.g. an address change drops a suggested charge
+        # type): it goes back to collecting, so a later 确认 can't execute
+        # the incomplete case.
+        if session.status == "pending_confirmation":
+            session.status = "active"
         reply = _render_missing_fields(service, session.collected_fields or {})
         context["_reply"] = reply
         _append(session, "assistant", reply)

@@ -48,6 +48,9 @@ class OutcomeCode(Enum):
     ADDRESS_AMBIGUOUS = auto()
     ADDRESS_PIVOT_UNAVAILABLE = auto()
     ADDRESS_PIVOT_STARTED = auto()
+    ADDRESS_RESUME = auto()
+    PARKED_CASE_REDIRECT = auto()
+    PARKED_OUTBOUND_EXPIRED = auto()
     # Inventory
     INSUFFICIENT_STOCK = auto()
     STOCK_CHANGED_AT_FULFILLMENT = auto()
@@ -227,16 +230,63 @@ class AddressPivotUnavailableOutcome:
 @dataclass(frozen=True)
 class AddressPivotStartedOutcome:
     """Rendered ONLY after the caller's atomic pivot mutation has actually
-    committed. The response may state that cancellation or pivot occurred only
-    after the corresponding mutations are part of the successful commit; this
-    outcome existing at all is
-    itself evidence the pivot is real, never a claim ahead of the fact."""
+    committed: the outbound draft is parked (not cancelled) and an address
+    case is open. next_step_text is that address case's own already-rendered
+    next step -- its confirmation summary, or its missing-field questions."""
     code = OutcomeCode.ADDRESS_PIVOT_STARTED
-    cancelled_serial_number: str
-    still_missing_fields: tuple[FieldPrompt, ...]
+    parked_serial_number: str
+    next_step_text: str
 
     def __post_init__(self):
-        _require(self.cancelled_serial_number, "cancelled_serial_number must be non-empty")
+        _require(self.parked_serial_number, "parked_serial_number must be non-empty")
+        _require(self.next_step_text, "next_step_text must be non-empty")
+
+
+ADDRESS_RESUME_STATUSES = ("resumed", "warehouse_mismatch", "outbound_closed")
+
+
+@dataclass(frozen=True)
+class AddressResumeOutcome:
+    """After a new address from an outbound handoff was saved: whether the
+    parked outbound draft resumed (next_step_text is its own next step) or
+    could not, and why."""
+    code = OutcomeCode.ADDRESS_RESUME
+    address_label: str
+    outbound_serial_number: str
+    status: str
+    next_step_text: str = ""
+    address_warehouse: str = ""
+    outbound_warehouse: str = ""
+
+    def __post_init__(self):
+        _require(self.address_label, "address_label must be non-empty")
+        _require(self.outbound_serial_number, "outbound_serial_number must be non-empty")
+        _require(self.status in ADDRESS_RESUME_STATUSES, f"status must be one of {ADDRESS_RESUME_STATUSES}")
+        if self.status == "resumed":
+            _require(self.next_step_text, "a resumed outbound needs its next step")
+        if self.status == "warehouse_mismatch":
+            _require(self.address_warehouse and self.outbound_warehouse, "both warehouses are required")
+
+
+@dataclass(frozen=True)
+class ParkedCaseRedirectOutcome:
+    """Prefix for a turn sent to a parked outbound case and handled on its
+    open address case instead."""
+    code = OutcomeCode.PARKED_CASE_REDIRECT
+    outbound_serial_number: str
+
+    def __post_init__(self):
+        _require(self.outbound_serial_number, "outbound_serial_number must be non-empty")
+
+
+@dataclass(frozen=True)
+class ParkedOutboundExpiredOutcome:
+    """A parked outbound whose address case is gone; it has just been closed."""
+    code = OutcomeCode.PARKED_OUTBOUND_EXPIRED
+    outbound_serial_number: str
+
+    def __post_init__(self):
+        _require(self.outbound_serial_number, "outbound_serial_number must be non-empty")
 
 
 @dataclass(frozen=True)
@@ -301,6 +351,8 @@ class ConfirmationCancelledOutcome:
     code = OutcomeCode.CONFIRMATION_CANCELLED
     service_label: str
     serial_number: str = ""
+    # A parked outbound cancelled together with its address case (D1).
+    also_cancelled_serial_number: str = ""
 
     def __post_init__(self):
         _require(self.service_label, "service_label must be non-empty")
@@ -512,6 +564,9 @@ KefuOutcome = (
     | AddressAmbiguousOutcome
     | AddressPivotUnavailableOutcome
     | AddressPivotStartedOutcome
+    | AddressResumeOutcome
+    | ParkedCaseRedirectOutcome
+    | ParkedOutboundExpiredOutcome
     | InsufficientStockOutcome
     | StockChangedOutcome
     | InventoryInconsistentOutcome

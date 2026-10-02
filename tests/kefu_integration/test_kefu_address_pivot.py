@@ -112,7 +112,7 @@ def test_unmatched_address_atomically_pivots_without_ai_operational_prose(monkey
         assert replay.case_number == result.case_number
         assert calls["count"] == 1
         assert marker not in result.reply_text
-        assert "新增地址流程" in result.reply_text
+        assert "先为您新增地址" in result.reply_text and "已暂存" in result.reply_text
 
         db = SessionLocal()
         rows = db.execute(text(
@@ -124,8 +124,9 @@ def test_unmatched_address_atomically_pivots_without_ai_operational_prose(monkey
         db.close()
         by_service = {row["name"]: row for row in rows}
         assert set(by_service) == {"uchoice_outbound_request", "upsert_address"}
+        # Parked, not cancelled: it resumes once the address is saved.
         assert (by_service["uchoice_outbound_request"]["session_status"],
-                by_service["uchoice_outbound_request"]["log_status"]) == ("cancelled", "cancelled")
+                by_service["uchoice_outbound_request"]["log_status"]) == ("active", "pending")
         assert (by_service["upsert_address"]["session_status"],
                 by_service["upsert_address"]["log_status"]) == ("active", "pending")
         assert by_service["upsert_address"]["collected_fields"]["addr"] == "600 Blair Rd, Carteret, NJ 07008"
@@ -169,7 +170,7 @@ def test_insufficient_boxes_reject_before_unmatched_address_pivot(monkeypatch):
 
         assert "申请 144 箱" in result.reply_text
         assert "现有 143 箱" in result.reply_text
-        assert "新增地址流程" not in result.reply_text
+        assert "先为您新增地址" not in result.reply_text
         assert "FALSE PIVOT CLAIM" not in result.reply_text
 
         db = SessionLocal()

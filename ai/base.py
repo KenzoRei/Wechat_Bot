@@ -57,6 +57,11 @@ class AIResponse:
     # these; Smart Robot's legacy path ignores them.
     semantic_issues: tuple[SemanticIssue, ...] = ()
     address_match: AddressMatch | None = None
+    # upsert_address only, both channels: the AI's estimated drive time in
+    # minutes from the origin warehouse to the address being added. Raw --
+    # core/address_suggestion.valid_minutes is the only check; code alone
+    # turns minutes into a charge-type tier.
+    estimated_drive_minutes: object = None
 
 
 class AIProvider(ABC):
