@@ -8,10 +8,21 @@ origin warehouse to the recipient; code alone maps minutes to a tier, so
 the price shown can never disagree with the minutes. A charge type the user
 states always wins and is never replaced by an estimate.
 
-Suggestion state lives next to charge_type in the upsert_address session's
-collected_fields, under keys the address handler never copies:
+Address completeness: the AI understands the address and returns it split
+into parts (addr_parts: street, optional unit, city, state, zip). Code
+checks each part and, when all pass, builds the address string itself in
+one standard format ("182-08 149th Avenue, Springfield Gardens, NY 11413").
+That built string is what's stored and shown in the confirmation, so a
+misreading is visible before 确认. Only a verified address gets a
+suggestion; anything else keeps the AI's own addr text and the charge type
+is asked for, as before.
+
+Suggestion state lives next to charge_type/addr in the upsert_address
+session's collected_fields, under keys the address handler never copies:
   _charge_type_suggested         True when the system (not the user) set charge_type
   _charge_type_estimate_minutes  the minutes behind that suggestion
+  _addr_verified                 the addr string code built from valid parts;
+                                 addr is verified only while it still equals it
 """
 import re
 
@@ -19,6 +30,7 @@ from core.uchoice_rates import CHARGE_TYPE_RATES
 
 SUGGESTED_KEY = "_charge_type_suggested"
 MINUTES_KEY = "_charge_type_estimate_minutes"
+VERIFIED_KEY = "_addr_verified"
 
 MIN_MINUTES = 1
 MAX_MINUTES = 600
@@ -27,6 +39,14 @@ MAX_MINUTES = 600
 # minutes short delivery, 5 to 20 inclusive delivery, over 20 truck transfer.
 _SHORT_DELIVERY_BELOW = 5
 _DELIVERY_UP_TO = 20
+
+# USPS state codes, plus DC and PR.
+US_STATES = frozenset((
+    "AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM "
+    "NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC PR"
+).split())
+_ZIP = re.compile(r"^\d{5}(-\d{4})?$")
+_STREET = re.compile(r"^\d[\w-]*\s+\S")   # house number, then the street name
 
 
 def valid_minutes(value) -> int | None:
@@ -40,23 +60,45 @@ def valid_charge_type(value) -> str | None:
     return value if isinstance(value, str) and value in CHARGE_TYPE_RATES else None
 
 
-# The normalized address format the prompt asks for (ai/prompt_builder.py):
-# "123 Main St, City, ST 12345" -- house number and street, city, two-letter
-# state, ZIP (optional suite parts in between). Anything less is incomplete
-# and gets no estimate.
-_COMPLETE_ADDRESS = re.compile(r"^\s*\d[^,]*\s[^,]*(,[^,]+)+,\s*[A-Z]{2}\s+\d{5}(-\d{4})?\s*$")
+def _part(parts: dict, key: str) -> str:
+    value = parts.get(key)
+    return " ".join(value.split()) if isinstance(value, str) else ""
 
 
-def address_complete(addr) -> bool:
-    return isinstance(addr, str) and bool(_COMPLETE_ADDRESS.match(addr))
+def build_address(parts) -> str | None:
+    """
+    The AI's addr_parts, checked part by part; the standard address string
+    when every required part is valid, else None:
+      street  starts with a house number ("182-08 149th Avenue")
+      unit    optional ("Suite 2")
+      city    non-empty, contains a letter
+      state   a two-letter US state code (any case)
+      zip     5 digits, or ZIP+4
+    """
+    if not isinstance(parts, dict):
+        return None
+    street, unit, city = _part(parts, "street"), _part(parts, "unit"), _part(parts, "city")
+    state, zip_code = _part(parts, "state").upper(), _part(parts, "zip")
+    if not _STREET.match(street) or not re.search(r"[A-Za-z]", city):
+        return None
+    if state not in US_STATES or not _ZIP.match(zip_code):
+        return None
+    return ", ".join(p for p in (street, unit, city, f"{state} {zip_code}") if p)
+
+
+def _with_verified_addr(fields: dict, parts) -> dict:
+    built = build_address(parts)
+    return {**fields, "addr": built, VERIFIED_KEY: built} if built else fields
 
 
 def _can_suggest(fields: dict) -> bool:
-    """Both ends of the drive are known, and this is a new address: an
-    update (matched_address_id) keeps the stored charge type unless the
-    user states a new one."""
+    """Both ends of the drive are known, and this is a new address: the
+    addr is still the one code built from valid parts, and an update
+    (matched_address_id) keeps the stored charge type unless the user
+    states a new one."""
+    addr = fields.get("addr")
     return (
-        address_complete(fields.get("addr"))
+        bool(addr) and addr == fields.get(VERIFIED_KEY)
         and bool(fields.get("warehouse_code"))
         and not fields.get("matched_address_id")
     )
@@ -75,8 +117,9 @@ def sanitize_new_address(raw) -> dict | None:
     The AI's best-effort new destination from an unmatched outbound
     (Kefu address_match.new_address, Smart Robot unmatched_new_address).
     Keeps non-empty company_name/addr, a valid estimated_drive_minutes, and
-    a valid charge_type (only ever filled from the user's own words);
-    everything else is dropped.
+    a valid charge_type (only ever filled from the user's own words). Valid
+    addr_parts replace addr with the address built from them, marked
+    verified. Everything else is dropped.
     """
     if not isinstance(raw, dict):
         return None
@@ -85,6 +128,7 @@ def sanitize_new_address(raw) -> dict | None:
         value = raw.get(key)
         if isinstance(value, str) and value.strip():
             sanitized[key] = value.strip()
+    sanitized = _with_verified_addr(sanitized, raw.get("addr_parts"))
     minutes = valid_minutes(raw.get("estimated_drive_minutes"))
     if minutes is not None:
         sanitized["estimated_drive_minutes"] = minutes
@@ -92,6 +136,11 @@ def sanitize_new_address(raw) -> dict | None:
     if charge_type is not None:
         sanitized["charge_type"] = charge_type
     return sanitized or None
+
+
+def seed_fields(new_address: dict) -> dict:
+    """The address fields a handoff seeds from a sanitized new address."""
+    return {k: v for k, v in (new_address or {}).items() if k in ("company_name", "addr", VERIFIED_KEY) and v}
 
 
 def _suggest(fields: dict, minutes: int) -> dict:
@@ -116,10 +165,14 @@ def seed_charge_type(seed: dict, new_address: dict) -> dict:
     return seed
 
 
-def apply_address_turn(previous: dict, merged: dict, extracted: dict, raw_minutes, stated_flag: bool = False) -> dict:
+def apply_address_turn(
+    previous: dict, merged: dict, extracted: dict, raw_minutes,
+    stated_flag: bool = False, raw_parts=None,
+) -> dict:
     """
     One upsert_address turn, after this turn's extracted fields were merged
     over `previous` into `merged`.
+    - Valid addr_parts set addr to the address code builds from them.
     - The user stated a charge type: it stands, the suggestion is cleared.
       An extracted charge_type that differs from the current suggestion can
       only be a statement. One equal to it counts only with the AI's explicit
@@ -127,11 +180,16 @@ def apply_address_turn(previous: dict, merged: dict, extracted: dict, raw_minute
       the collected value.
     - An update of an existing address (matched_address_id) never gets a
       suggestion; one already made is dropped.
-    - Otherwise a valid estimate for a complete address (re)sets a suggested
+    - Otherwise a valid estimate for a verified address (re)sets a suggested
       charge type, but never overrides one the user stated earlier.
     - Otherwise, if addr or warehouse_code changed, a suggested charge type
       no longer applies: it is dropped, so the user is asked.
     """
+    built = build_address(raw_parts)
+    if built:
+        merged = {**merged, "addr": built, VERIFIED_KEY: built}
+        extracted = {**extracted, "addr": built}
+
     was_suggested = bool(previous.get(SUGGESTED_KEY))
     stated = valid_charge_type(extracted.get("charge_type"))
     if stated and (stated_flag or not was_suggested or stated != previous.get("charge_type")):

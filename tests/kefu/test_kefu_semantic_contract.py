@@ -247,3 +247,32 @@ def test_unmatched_with_blank_strings_is_none():
         _resp(AddressMatch(status="unmatched", new_address={"company_name": "  ", "addr": ""})), _CANDIDATES
     )
     assert decision.unmatched_new_address is None
+
+
+# ---------------------------------------------------------------------------
+# Address parts / drive-time contract (address-pivot plan rev 3, item 2)
+# ---------------------------------------------------------------------------
+
+def test_parse_reads_address_parts_estimate_and_stated_flag():
+    import json
+    parts = {"street": "1 Main St", "city": "Jamaica", "state": "NY", "zip": "11434"}
+    r = parse_response(json.dumps({"intent": "continuation", "extracted_fields": {},
+                                   "addr_parts": parts, "estimated_drive_minutes": 12,
+                                   "charge_type_stated": True}))
+    assert (r.addr_parts, r.estimated_drive_minutes, r.charge_type_stated) == (parts, 12, True)
+    loose = parse_response(json.dumps({"intent": "continuation", "charge_type_stated": "true"}))
+    assert (loose.addr_parts, loose.charge_type_stated) == (None, False)
+
+
+_ORIGINS = [{"warehouse_code": "JFK", "address": "145-02 156th St, Jamaica, NY 11434"}]
+
+
+def test_both_channels_ask_for_address_parts_only_when_addresses_can_be_added():
+    for channel, handoff_key in (("kefu", "address_match.new_address"), (None, "unmatched_new_address")):
+        with_origins = build_system_prompt(_base_context(
+            uchoice_candidates={"addresses": _CANDIDATES, "origin_warehouses": _ORIGINS}, source_channel=channel))
+        assert f"{handoff_key} 的 addr_parts" in with_origins
+        assert '{"street":' in with_origins and '"addr_parts": null' in with_origins
+        without = build_system_prompt(_base_context(
+            uchoice_candidates={"addresses": _CANDIDATES}, source_channel=channel))
+        assert "origin_warehouses：" not in without

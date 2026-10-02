@@ -166,7 +166,7 @@ def _maybe_pivot_to_add_address(context: dict, ai_response: AIResponse, db: DBSe
     db.commit()
 
     new_address = address_suggestion.sanitize_new_address(guess) or {}
-    seed_fields = {k: v for k, v in new_address.items() if k in ("company_name", "addr")}
+    seed_fields = address_suggestion.seed_fields(new_address)
     # Carry the outbound's warehouse over -- the new address belongs to the
     # same origin warehouse. Stated this turn or earlier in the draft only;
     # no actor default here, the AI's own reply decides whether to ask.
@@ -210,6 +210,7 @@ def _apply_address_suggestion(db: DBSession, service: dict | None, session, prev
         previous, session.collected_fields or {}, extracted or {},
         getattr(ai_response, "estimated_drive_minutes", None),
         stated_flag=getattr(ai_response, "charge_type_stated", False) is True,
+        raw_parts=getattr(ai_response, "addr_parts", None),
     )
     if updated != session.collected_fields:
         session.collected_fields = updated

@@ -24,6 +24,7 @@ _SERVICES = [
 
 AI_REPLY = "新地址，已转为新增地址流程"
 ADDR = "1 Main St, Jamaica, NY 11434"
+PARTS = {"street": "1 Main St", "city": "Jamaica", "state": "NY", "zip": "11434"}
 
 
 class _FakeSession:
@@ -97,9 +98,10 @@ def test_complete_seed_with_estimate_sends_the_code_built_confirmation(pivot):
     """16: the reply is the confirmation (framed), not the AI's text."""
     fields, reply, confirmed = pivot(
         {"warehouse_code": "JFK"}, {},
-        {"company_name": "ABC", "addr": ADDR, "estimated_drive_minutes": 12},
+        {"company_name": "ABC", "addr": "1 main st jamaica ny 11434", "addr_parts": PARTS,
+         "estimated_drive_minutes": 12},
     )
-    assert fields["charge_type"] == "delivery"
+    assert fields["addr"] == ADDR and fields["charge_type"] == "delivery"
     assert fields[address_suggestion.SUGGESTED_KEY] is True and fields[address_suggestion.MINUTES_KEY] == 12
     assert confirmed == ["upsert_address"]
     assert reply.startswith("该地址尚未收录，原出库申请已取消，先新增地址：")
@@ -111,7 +113,7 @@ def test_stated_charge_type_beats_the_estimate(pivot):
     """17"""
     fields, _, confirmed = pivot(
         {"warehouse_code": "JFK"}, {},
-        {"addr": ADDR, "estimated_drive_minutes": 12, "charge_type": "self_pickup"},
+        {"addr": ADDR, "addr_parts": PARTS, "estimated_drive_minutes": 12, "charge_type": "self_pickup"},
     )
     assert fields["charge_type"] == "self_pickup"
     assert address_suggestion.SUGGESTED_KEY not in fields and address_suggestion.MINUTES_KEY not in fields
@@ -120,8 +122,8 @@ def test_stated_charge_type_beats_the_estimate(pivot):
 
 def test_incomplete_seed_sends_the_ai_reply_and_seeds_no_tier(pivot):
     """18: no warehouse, so no estimate is applied and the AI asks."""
-    fields, reply, confirmed = pivot({}, {}, {"addr": ADDR, "estimated_drive_minutes": 12})
-    assert fields == {"addr": ADDR}
+    fields, reply, confirmed = pivot({}, {}, {"addr": ADDR, "addr_parts": PARTS, "estimated_drive_minutes": 12})
+    assert fields == {"addr": ADDR, address_suggestion.VERIFIED_KEY: ADDR}
     assert confirmed == []
     assert reply == AI_REPLY
 
@@ -129,7 +131,7 @@ def test_incomplete_seed_sends_the_ai_reply_and_seeds_no_tier(pivot):
 def test_continuation_address_change_drops_a_suggestion_but_keeps_a_stated_type():
     """19"""
     service = _SERVICES[1]
-    base = {"addr": ADDR, "warehouse_code": "JFK"}
+    base = {"addr": ADDR, address_suggestion.VERIFIED_KEY: ADDR, "warehouse_code": "JFK"}
     suggested = {**base, "charge_type": "delivery",
                  address_suggestion.SUGGESTED_KEY: True, address_suggestion.MINUTES_KEY: 12}
     session = _FakeSession(_ADDRESS_ID, {**suggested, "addr": "9 Other St"})

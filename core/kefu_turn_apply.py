@@ -291,7 +291,7 @@ def _pivot_to_address(db: DBSession, context: dict, old_session, old_log, guess:
     if address_service is None:
         return None
 
-    seed = {key: value for key, value in (guess or {}).items() if key in {"company_name", "addr"} and value}
+    seed = address_suggestion.seed_fields(guess)
     # The outbound draft already resolved its warehouse (stated, or
     # _apply_warehouse_default ran before this pivot); the new address
     # belongs to that same origin warehouse, so don't ask for it again.
@@ -1415,6 +1415,7 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
             previous_fields, session.collected_fields or {}, extracted,
             getattr(ai_response, "estimated_drive_minutes", None),
             stated_flag=getattr(ai_response, "charge_type_stated", False) is True,
+            raw_parts=getattr(ai_response, "addr_parts", None),
         )
         context["collected_fields"] = session.collected_fields
 

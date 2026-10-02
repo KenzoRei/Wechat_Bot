@@ -84,6 +84,13 @@ def _drive_time_instructions(is_kefu: bool) -> str:
         "upsert_address 会话中，用户在本条消息里明确说出计费类型时，除在 extracted_fields 填 charge_type 外，"
         "还必须把顶层字段 charge_type_stated 设为 true（即使与当前已收集的计费类型相同）；"
         "仅仅沿用已收集的计费类型时保持 false。\n"
+        "  · 【重要】只要本条消息给出或修改了收件地址（upsert_address 会话，或出库转新增地址的那一轮），"
+        "就把你对该地址的理解拆成各部分，填入顶层字段 addr_parts（出库转新增地址的那一轮填入 "
+        f"{handoff_key} 的 addr_parts 键）："
+        "{\"street\": \"门牌号+街道，如 182-08 149th Avenue\", \"unit\": \"单元/套房，没有则省略\", "
+        "\"city\": \"城市\", \"state\": \"两位州缩写，如 NY\", \"zip\": \"5位邮编\"}。"
+        "格式凌乱、缺逗号、州名写全称或小写都没关系，按你的理解规范填写；"
+        "原话里确实没有的部分（如没给邮编）就省略该键，绝不能猜测补全。系统会据此校验并生成标准地址。\n"
         f"{reply_rule}"
     )
 
@@ -289,7 +296,8 @@ def build_system_prompt(context: dict) -> str:
   "semantic_issues": [],
   "address_match": null,
   "estimated_drive_minutes": null,
-  "charge_type_stated": false
+  "charge_type_stated": false,
+  "addr_parts": null
 }"""
         reply_field_note = (
             "- 【重要，企业微信客服渠道】reply 字段不会发送给客服人员——所有实际发送的消息均由后端根据 "
@@ -309,7 +317,8 @@ def build_system_prompt(context: dict) -> str:
   "service_type_name": null,
   "unmatched_new_address": null,
   "estimated_drive_minutes": null,
-  "charge_type_stated": false
+  "charge_type_stated": false,
+  "addr_parts": null
 }"""
         reply_field_note = ""
 
@@ -489,4 +498,5 @@ def parse_response(raw: str) -> AIResponse:
         address_match=_parse_address_match(data.get("address_match")),
         estimated_drive_minutes=data.get("estimated_drive_minutes"),
         charge_type_stated=data.get("charge_type_stated") is True,
+        addr_parts=data.get("addr_parts"),
     )

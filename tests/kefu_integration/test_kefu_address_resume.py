@@ -109,8 +109,15 @@ def turn(identity, content, case_number=None):
     )
 
 
-def outbound_turn(world, *, minutes=12, charge_type=None, intent="continuation"):
-    new_address = {"company_name": "ABC Corp", "addr": ADDR}
+PARTS = {"street": "1 Main St", "city": "Jamaica", "state": "NY", "zip": "11434"}
+
+
+def outbound_turn(world, *, minutes=12, charge_type=None, intent="continuation", parts=PARTS):
+    # The AI's own addr text is messy on purpose: the stored and displayed
+    # address must be the one code builds from the parts (ADDR).
+    new_address = {"company_name": "ABC Corp", "addr": "1 main st jamaica ny11434"}
+    if parts is not None:
+        new_address["addr_parts"] = parts
     if minutes is not None:
         new_address["estimated_drive_minutes"] = minutes
     if charge_type:
@@ -414,3 +421,20 @@ def test_redirect_locks_address_case_before_outbound(monkeypatch):
     monkeypatch.setattr(adapter, "_authorize_case", lambda access, session: None)
     kind, value, _ = adapter._redirect_parked_outbound(None, None, outbound, explicit=True)
     assert (kind, value, order) == ("session", address, ["A", "O"])
+
+
+def test_address_without_valid_parts_gets_no_suggestion(world, ai):
+    """No ZIP in the AI's reading: the address isn't verified, so no tier is
+    suggested and the AI's own address text is kept."""
+    staff_id, _, result = start(world, ai, parts={k: v for k, v in PARTS.items() if k != "zip"})
+    fields = cases(staff_id)["upsert_address"]["collected_fields"]
+    assert fields["addr"] == "1 main st jamaica ny11434"
+    assert "charge_type" not in fields and "_addr_verified" not in fields
+    assert "计费类型" in result.reply_text and "系统估算" not in result.reply_text
+
+
+def test_valid_parts_replace_the_messy_address(world, ai):
+    staff_id, _, result = start(world, ai)
+    fields = cases(staff_id)["upsert_address"]["collected_fields"]
+    assert fields["addr"] == ADDR and fields["_addr_verified"] == ADDR
+    assert ADDR in result.reply_text and "1 main st jamaica" not in result.reply_text

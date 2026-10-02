@@ -66,6 +66,10 @@ class AIResponse:
     # message -- distinguishes a statement from the AI repeating an already
     # collected (e.g. suggested) charge_type. Only `is True` counts.
     charge_type_stated: object = False
+    # upsert_address only: the AI's reading of the address, split into
+    # {street, unit?, city, state, zip}. Raw -- core/address_suggestion.
+    # build_address checks each part and builds the stored addr string.
+    addr_parts: object = None
 
 
 class AIProvider(ABC):

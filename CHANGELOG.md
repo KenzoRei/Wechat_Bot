@@ -31,7 +31,15 @@ here.
   it in the address confirmation, e.g.
   `配送（$45） — 预计车程约 12 分钟（JFK 仓出发，系统估算，如有误请直接说明）`.
   A charge type the user states (including 自提) always wins. If an estimate
-  isn't possible, the charge type is asked for as before. On Smart Robot the
+  isn't possible, the charge type is asked for as before. An existing
+  address being updated never gets a suggestion.
+- **New addresses are stored in one standard format.** The AI returns its
+  reading of the address in parts (street, unit, city, state, ZIP); the bot
+  checks each part and builds the address itself, e.g.
+  `182-08 149th Avenue, Springfield Gardens, NY 11413` from a messy input.
+  The built address is what the confirmation shows and what is saved. Only
+  such a checked address gets a suggested charge type; if a part is missing
+  (e.g. no ZIP), the AI's own text is kept and the charge type is asked. On Smart Robot the
   tier, price and minutes only ever appear in the code-built confirmation,
   never in the AI's own reply.
 - **The warehouse carries over** from the outbound request into the
