@@ -7,6 +7,13 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.6.1] - 2026-10-07
+
+### Added
+- U-Choice SKU **TL1 4x6 inch Label** (`tl1`), via migration V39. The bot
+  reads the SKU catalog live, so customers can name it right away; outbound
+  needs stock to be inbounded first.
+
 ## [1.6.0] - 2026-10-02
 
 ### Changed
