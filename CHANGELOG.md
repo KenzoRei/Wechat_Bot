@@ -7,6 +7,42 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.8.0] - 2026-10-08
+
+**Apply migration V41 immediately before this deploy, in the same window.**
+(With V41 but the old code, Kefu would ask for the 柜号 by its raw field
+name and then ignore it.)
+
+### Changed
+- **Inbound requests record a container number (柜号) instead of 需要拆包.**
+  Both channels ask `柜号是多少？（没有柜号请回复「无」）`; the request
+  confirmation always shows `柜号：…` or `柜号：无`. A value not in the
+  standard format (4 letters + 7 digits) is questioned once and accepted if
+  confirmed. Spaces, dashes and lowercase are tidied automatically.
+- **The container unpacking fee (拆柜费) is set by the warehouse at
+  receipt,** replacing the flat $300.
+  - Request with a 柜号: the warehouse must give the amount before
+    confirming ($0 allowed).
+  - Request without one (including every request made before this
+    release): the confirmation warns `此入库无柜号，拆柜费将为 $0`; 确认
+    gives $0, or the warehouse replies with an amount (optionally with a
+    柜号) to charge it.
+  - Amounts are checked against what was actually typed: a mistyped
+    `45.555` is rejected even if the AI read it as 45.55; numbers from a
+    柜号, a request ID or a quantity can never become the fee. Fees above
+    $10,000 are questioned once.
+  - A 是/否 answer to one of these questions is handled in code before the
+    AI and never confirms the request or receipt.
+- **Batch receipt confirmation** leaves out requests with a 柜号 (they need
+  a fee, so they're confirmed one at a time); the others show
+  `柜号：无，拆柜费 $0`.
+- **Invoice:** the Inbound sheet has a Container # column; the fee is
+  "Container unpacking fee" / 拆柜费 everywhere.
+
+### Fixed
+- A Kefu case awaiting confirmation that fails its checks after a
+  correction now leaves the confirmation, so a later 确认 can't execute it.
+
 ## [1.7.0] - 2026-10-08
 
 **Migration V40 must be applied to production before this deploy.**

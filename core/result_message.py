@@ -342,7 +342,7 @@ def _invoice_sections_builder(context: dict, db: DBSession) -> list[dict]:
     items = {
         "运输费": f"${result.get('transportation_fee', 0)}",
         "打托费": f"${result.get('palletization_fee', 0)}",
-        "拆包费": f"${result.get('unpacking_fee', 0)}",
+        "拆柜费": f"${result.get('unpacking_fee', 0)}",
         "仓储费": f"${result.get('storage_fee', 0)}",
         "合计":   f"${result.get('total', 0)}",
     }

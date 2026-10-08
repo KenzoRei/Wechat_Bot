@@ -61,7 +61,8 @@ def test_sheet_names(workbook):
     ("Outbound", ["Warehouse", "Serial Number", "Completed At (UTC)", "SKU Lines",
                   "Destination Company", "Destination Address",
                   "Transportation Fee", "Palletization Fee"]),
-    ("Inbound", ["Warehouse", "Serial Number", "Completed At (UTC)", "SKU Lines", "Unpacking Fee"]),
+    ("Inbound", ["Warehouse", "Serial Number", "Completed At (UTC)", "SKU Lines",
+                 "Container #", "Container Unpacking Fee"]),
     ("Storage", ["Warehouse", "Date", "Pallet Count", "Storage Fee"]),
 ])
 def test_detail_sheet_headers_start_with_warehouse(workbook, sheet, headers):

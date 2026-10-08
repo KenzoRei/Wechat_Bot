@@ -144,6 +144,14 @@ def _process_message(message: dict) -> None:
         session = session_manager.resolve_session(db, result, message["content"])
         context = session_manager.build_context(db, result, session, message)
 
+        # An open 柜号/拆柜费 double-check: an exact yes/no is answered in
+        # code without calling the AI (unpacking-fee plan R5). The handler
+        # commits its own change and sends its reply.
+        early_reply = workflow_engine.pending_value_check_reply(context, db)
+        if early_reply is not None:
+            print(f"[pipeline] pending value check answered: {str(early_reply)[:40]}", flush=True)
+            return
+
         print("[pipeline] calling AI...", flush=True)
         ai_response = ai_chain.process(context)
         print(f"[pipeline] intent={ai_response.intent} service={ai_response.service_type_name} reply={ai_response.reply[:40]}", flush=True)

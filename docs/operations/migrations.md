@@ -4,7 +4,7 @@
 **Owner:** Engineering and operations
 **Last verified against commit:** `3def0eb` (2026-09-25)
 
-Migrations are sequential SQL files under `db/migrations/`, currently V1-V40.
+Migrations are sequential SQL files under `db/migrations/`, currently V1-V41.
 The project does not use Alembic or Flyway. `scripts/apply_migrations.py`
 applies migrations numerically and records completed versions in
 `public.schema_migrations`.

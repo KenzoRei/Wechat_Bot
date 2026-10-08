@@ -68,6 +68,15 @@ def run_and_get_reply(context: dict, ai_response: AIResponse, db: DBSession) -> 
     intent = ai_response.intent
     context["_reply"] = ""  # handlers write reply here
 
+    if intent == "confirm" and _inbound_still_collecting(context, db):
+        # An inbound request/receipt not awaiting confirmation -- an open
+        # 柜号/拆柜费 double-check, a rejected or missing fee -- never
+        # executes on an AI "confirm"; the same question is asked again
+        # (unpacking-fee plan R1/R3).
+        from dataclasses import replace
+        ai_response = replace(ai_response, intent="continuation", extracted_fields={})
+        intent = "continuation"
+
     if _maybe_pivot_to_add_address(context, ai_response, db):
         return context.get("_reply", "")
 
@@ -198,6 +207,73 @@ def _maybe_pivot_to_add_address(context: dict, ai_response: AIResponse, db: DBSe
     return True
 
 
+def _inbound_container_step(context: dict, ai_response, service: dict | None, session, previous: dict, db: DBSession) -> bool:
+    """
+    The 柜号 / 拆柜费 rules for an inbound request or receipt turn (shared
+    with Kefu, core/inbound_container.apply_turn). True when they produced
+    the reply for this turn -- a question, a double-check, a rejection --
+    which is sent here and the turn ends; the AI's own reply is never sent
+    then, so 柜号/fee wording only ever comes from code.
+    """
+    from core import inbound_container
+    if service is None or service["name"] not in inbound_container.INBOUND_CONTAINER_SERVICES:
+        return False
+    reply = inbound_container.apply_turn(context, service["name"], session, previous, ai_response)
+    db.commit()
+    if reply is None:
+        return False
+    session_manager.add_message(db, session, "assistant", reply)
+    send_message(context, reply)
+    return True
+
+
+def _inbound_still_collecting(context: dict, db: DBSession) -> bool:
+    from core import inbound_container
+    session = _get_session(context, db)
+    if session is None or session.status == "pending_confirmation" or not session.service_type_id:
+        return False
+    service = _find_service_by_type_id(context, session.service_type_id)
+    return service is not None and service["name"] in inbound_container.INBOUND_CONTAINER_SERVICES
+
+
+def pending_value_check_reply(context: dict, db: DBSession) -> str | None:
+    """
+    Smart Robot's pre-AI step (unpacking-fee plan R1/R5/R7), called by
+    api/webhook.py before ai_chain.process: when the case has an open
+    柜号/拆柜费 double-check, an exact yes/no is answered in code and the AI
+    is never called. Accepting runs the normal continuation (the next
+    question or the confirmation summary, never execution). Commits its own
+    change before returning -- the webhook has no final commit -- and rolls
+    back and re-raises on error (the webhook then sends its error reply).
+    Returns the reply sent, or None to continue with the AI.
+    """
+    from core import completion_batch
+    from core import inbound_container
+
+    session = _get_session(context, db)
+    if session is None or not (session.collected_fields or {}).get(inbound_container.PENDING_KEY):
+        return None
+    content = context.get("content") or ""
+    if completion_batch.is_affirmative(content):
+        context["_pending_resolution"] = "accept"
+    elif inbound_container.is_negative(content):
+        context["_pending_resolution"] = "reject"
+    else:
+        return None
+    context["_reply"] = ""
+    ai_response = AIResponse(
+        intent="continuation", reply="好的，已记录。请继续补充申请信息。", extracted_fields={},
+        all_fields_collected=False, service_type_name=None,
+    )
+    try:
+        _handle_continuation(context, ai_response, db)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return context.get("_reply", "")
+
+
 def _apply_address_suggestion(db: DBSession, service: dict | None, session, previous: dict, extracted, ai_response) -> None:
     """upsert_address: suggested charge type from the AI's drive-time
     estimate; a stated charge type always wins (core/address_suggestion.py).
@@ -304,6 +380,8 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
             service["name"], strip_internal_keys(ai_response.extracted_fields), db, context.get("group_id"))
         session_manager.update_collected_fields(db, session, extracted)
     _apply_address_suggestion(db, service, session, {}, extracted, ai_response)
+    if _inbound_container_step(context, ai_response, service, session, {}, db):
+        return
 
     # context["collected_fields"] was set from session.collected_fields at
     # build_context() time, when session was still None (still {}).
@@ -989,6 +1067,8 @@ def _handle_continuation(context: dict, ai_response: AIResponse, db: DBSession) 
         extracted = _sanitize_extracted_fields_before_persistence(service["name"], extracted, db, context.get("group_id"))
     session_manager.update_collected_fields(db, session, extracted)
     _apply_address_suggestion(db, service, session, previous_fields, extracted, ai_response)
+    if _inbound_container_step(context, ai_response, service, session, previous_fields, db):
+        return
 
     # see the matching comment in _handle_new_request — same staleness bug,
     # this is the path that actually surfaced it live (the last required

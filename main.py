@@ -207,7 +207,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Logistics WeChat Bot Platform",
-    version="1.7.0",
+    version="1.8.0",
     lifespan=lifespan
 )
 

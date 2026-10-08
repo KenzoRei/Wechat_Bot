@@ -81,14 +81,14 @@ def test_two_simultaneous_confirmations_execute_business_once(monkeypatch):
             extracted_fields={
                 "customer_id": str(customer_id),
                 "sku_lines": [{"sku_code": sku_code, "boxes_per_pallet": 48, "pallet_count": 1}],
-                "needs_unpacking": False,
+                "container_number": "无",
             },
             all_fields_collected=True,
             service_type_name="uchoice_inbound_request",
         ))
         first = processor(
             identity=identity,
-            message_content="create inbound",
+            message_content="create inbound, no container",
             message_meta={"msgid": f"confirm-create-{uuid.uuid4().hex[:8]}"},
             case_number_hint=None,
         )

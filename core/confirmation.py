@@ -117,7 +117,7 @@ _FIELD_LABELS = {
     "weight_lbs": "重量（磅）", "service_level": "服务等级", "length_in": "长度（英寸）",
     "width_in": "宽度（英寸）", "height_in": "高度（英寸）", "reference_number": "参考编号",
     # U-Choice
-    "warehouse_code": "仓库", "warehouse_codes": "负责仓库", "sku_lines": "商品明细", "needs_unpacking": "需要拆包",
+    "warehouse_code": "仓库", "warehouse_codes": "负责仓库", "sku_lines": "商品明细", "container_number": "柜号", "unpacking_fee": "拆柜费",
     "destination_address_id": "目的地地址ID", "new_pallet_count": "新增打托数",
     "reference_serial": "关联申请编号", "received_lines": "实收明细",
     "fulfillment_lines": "实发明细", "adjustment_lines": "调整明细",
@@ -309,7 +309,7 @@ def _inbound_sections_builder(collected_fields: dict, db: DBSession) -> list[dic
     uchoice_inbound_request — resolve sku_code to a human-readable product
     name, highlight quantity with WeChat markdown's supported color tag, and
     only show what actually matters at confirm time: warehouse + qty per
-    line. needs_unpacking is only shown when true — no boilerplate "否" line.
+    line, then the 柜号 (or 无) -- always shown (unpacking-fee plan D2).
 
     Sorted by (sku_code, boxes_per_pallet) rather than the order the AI
     happened to extract them in — also avoids a dict-collision bug: keying
@@ -338,12 +338,13 @@ def _inbound_sections_builder(collected_fields: dict, db: DBSession) -> list[dic
     warehouse_note = "，系统默认，如有误请更正" if collected_fields.get("_warehouse_auto_default") else ""
     sections = [{"label": f"入库明细（{warehouse_code} 仓{warehouse_note}）", "type": "list", "items": formatted}]
 
-    if collected_fields.get("needs_unpacking"):
-        sections.append({
-            "label": None,
-            "type": "list",
-            "items": ['需要拆包（+$300）'],
-        })
+    # Always shown, 无 included (unpacking-fee plan D2): at receipt a 柜号
+    # makes the 拆柜费 required, so the requester should see what was recorded.
+    sections.append({
+        "label": None,
+        "type": "list",
+        "items": [f'柜号：{collected_fields.get("container_number") or "无"}'],
+    })
     return sections
 
 
@@ -455,7 +456,25 @@ def _inbound_completion_sections_builder(collected_fields: dict, db: DBSession) 
     sections = [{"label": f"关联申请 {reference_serial}（{warehouse_code} 仓）", "type": "list", "items": formatted}]
     if not restated:
         sections.append({"label": None, "type": "list", "items": ["（沿用原申请数量，如实收数量有出入请重新说明）"]})
+    sections.append({"label": None, "type": "list", "items": _receipt_unpacking_items(collected_fields, original_fields)})
     return sections
+
+
+def _receipt_unpacking_items(collected_fields: dict, original_fields: dict) -> list[str]:
+    """
+    The receipt's 柜号 and 拆柜费 (unpacking-fee plan D4/D5): with a 柜号 the
+    fee is shown (a validator makes it required before this renders);
+    without one, either the fee the warehouse entered or the $0 warning.
+    """
+    from core import inbound_container as ic
+
+    container = ic.effective_container(collected_fields, original_fields)
+    fee = collected_fields.get("unpacking_fee")
+    if ic.has_container(container):
+        return [f"柜号：{container}", f"拆柜费：{ic.format_fee(fee)}"]
+    if fee is not None:
+        return ["柜号：无", f"拆柜费：{ic.format_fee(fee)}（仓库填写）"]
+    return ["⚠️ 此入库无柜号，拆柜费将为 $0。如需收取拆柜费，请直接回复金额（如「拆柜费 450」）。"]
 
 
 def _outbound_completion_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
@@ -608,12 +627,20 @@ def _completion_batch_sections_builder(collected_fields: dict, db: DBSession) ->
             if not plain:
                 items.append(f"　取货（系统预计）：{_format_picks(picks)}")
         items += _completion_destination_items(db, target.original_fields)
+        if target.direction == "inbound":
+            # Requests with a 柜号 never reach a batch (completion_batch.
+            # ineligibility_reason), so every one here is $0 (plan D7).
+            items.append("柜号：无，拆柜费 $0")
 
         header = f"{completion_batch.circled(index)} {serial}（{target.warehouse_code or '?'} 仓）"
         sections.append({"label": header, "type": "list", "items": items})
 
-    verb = "收货" if collected_fields.get("_batch_direction") == "inbound" else "发货"
-    sections.append({"label": None, "type": "list", "items": [f"（按原申请数量{verb}，如实际数量有出入请单独确认该申请）"]})
+    inbound = collected_fields.get("_batch_direction") == "inbound"
+    verb = "收货" if inbound else "发货"
+    closing = [f"（按原申请数量{verb}，如实际数量有出入请单独确认该申请）"]
+    if inbound:
+        closing.append("如某笔需收取拆柜费，请单独确认该笔。")
+    sections.append({"label": None, "type": "list", "items": closing})
     return sections
 
 

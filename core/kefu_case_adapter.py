@@ -335,6 +335,30 @@ def _same_completion_family(a: str | None, b: str | None) -> bool:
     return fa is not None and fa is fb
 
 
+def _inbound_confirm_while_collecting_as_continuation(context: dict, session, ai_response):
+    """
+    An inbound request or receipt that isn't awaiting confirmation -- an
+    open 柜号/拆柜费 double-check, a rejected fee, a missing fee -- never
+    executes on an AI "confirm" (unpacking-fee plan R1/R3). It continues
+    instead, so the same question (or validator message) is asked again,
+    rather than the misleading "该申请已处理或已关闭".
+    """
+    from dataclasses import replace
+    from core.inbound_container import INBOUND_CONTAINER_SERVICES
+
+    if ai_response.intent != "confirm" or session is None or session.service_type_id is None:
+        return ai_response
+    if session.status == "pending_confirmation":
+        return ai_response
+    current = next(
+        (s for s in context.get("allowed_services") or [] if s.get("service_type_id") == str(session.service_type_id)),
+        None,
+    )
+    if current is None or current["name"] not in INBOUND_CONTAINER_SERVICES:
+        return ai_response
+    return replace(ai_response, intent="continuation", extracted_fields={})
+
+
 def _batch_confirm_with_selection_as_continuation(context: dict, session, ai_response):
     """
     An AI "confirm" NEVER executes a batch. The only replies that do are
@@ -630,7 +654,12 @@ def _process_turn(
         # A pure number reply to a numbered list this case is showing (batch
         # summary or completion candidate list) is parsed in code, never by
         # the model -- see kefu_turn_apply.deterministic_selection_response.
-        ai_response = kefu_turn_apply.deterministic_selection_response(context, session, message_content)
+        # An open 柜号/拆柜费 double-check: an exact yes/no is answered in
+        # code before the AI and can never confirm the case (unpacking-fee
+        # plan R1).
+        ai_response = kefu_turn_apply.pending_value_check_response(context, session, message_content)
+        if ai_response is None:
+            ai_response = kefu_turn_apply.deterministic_selection_response(context, session, message_content)
         if ai_response is None:
             ai_response = _ai_chain.process(context)
             if (
@@ -646,6 +675,7 @@ def _process_turn(
                 ai_response = replace(ai_response, intent=_VOICE_CONFIRM_GATED)
             else:
                 ai_response = _batch_confirm_with_selection_as_continuation(context, session, ai_response)
+                ai_response = _inbound_confirm_while_collecting_as_continuation(context, session, ai_response)
         if voice and ai_response.intent == "confirm":
             # Defense in depth: nothing on a voice turn may reach the
             # executing confirm branch.

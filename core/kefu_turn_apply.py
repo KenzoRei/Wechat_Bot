@@ -42,6 +42,7 @@ _FIELD_PROMPTS = {
     "warehouse_code": ("所属仓库", f"请选择所属仓库：{_WAREHOUSE_CODE_LIST}。"),
     "warehouse_codes": ("负责仓库", f"请选择负责的仓库（可多个，用顿号或逗号分隔）：{_WAREHOUSE_CODE_LIST}。"),
     "reference_serial": ("申请编号", "请提供要处理的申请编号。"),
+    "container_number": ("柜号", "柜号是多少？（没有柜号请回复「无」）"),
     "start_month": ("开始月份", "请提供查询的开始月份。"),
     "end_month": ("结束月份", "请提供查询的结束月份。"),
     "fulfillment_lines": ("实际出库明细", "请提供更正后的实际出库数量。"),
@@ -1329,6 +1330,31 @@ def _finish_batch_stop(db: DBSession, context: dict, service: dict, session, log
     )
 
 
+# ── 柜号 / 拆柜费 (docs/ai-collaboration/2026-10-unpacking-fee/plan.md) ──────
+
+def pending_value_check_response(context: dict, session, content: str):
+    """
+    Pre-AI (R1): when the case has an open 柜号/拆柜费 double-check, an exact
+    yes or no is answered in code -- never by the model, and never as a
+    confirmation of the request or receipt. Returns a synthesized
+    continuation (the resolution rides on context["_pending_resolution"]),
+    or None to use the normal AI path.
+    """
+    from ai.base import AIResponse
+    from core import completion_batch
+    from core import inbound_container as ic
+
+    if session is None or not (session.collected_fields or {}).get(ic.PENDING_KEY):
+        return None
+    if completion_batch.is_affirmative(content):
+        context["_pending_resolution"] = "accept"
+    elif ic.is_negative(content):
+        context["_pending_resolution"] = "reject"
+    else:
+        return None
+    return AIResponse(intent="continuation", reply="", extracted_fields={}, all_fields_collected=False, service_type_name=None)
+
+
 def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, session, *, _continuing: bool = False) -> str:
     """Create/continue a Kefu case, collect fields, and confirm or execute it.
 
@@ -1435,6 +1461,14 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
             raw_parts=getattr(ai_response, "addr_parts", None),
         )
         context["collected_fields"] = session.collected_fields
+
+    from core import inbound_container
+    if service["name"] in inbound_container.INBOUND_CONTAINER_SERVICES:
+        container_reply = inbound_container.apply_turn(context, service["name"], session, previous_fields, ai_response)
+        if container_reply is not None:
+            context["_reply"] = container_reply
+            _append(session, "assistant", container_reply)
+            return container_reply
 
     if selection is not None and service["name"] in completion_batch.BATCH_SERVICE_BY_SINGLE:
         pivot_reply = _apply_completion_selection(db, context, service, session, log, selection)
@@ -1611,6 +1645,11 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
         context["collected_fields"] = session.collected_fields
     validation_error = pre_confirm_validators.run(service["name"], context, session.collected_fields or {}, db)
     if validation_error:
+        # Same rule as missing fields above: a case that no longer passes
+        # its checks leaves confirmation, so a later 确认 can't execute it
+        # (e.g. a receipt whose 拆柜费 was just rejected).
+        if session.status == "pending_confirmation":
+            session.status = "active"
         context["_reply"] = validation_error
         _append(session, "assistant", validation_error)
         return validation_error
