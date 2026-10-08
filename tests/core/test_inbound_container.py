@@ -1,0 +1,404 @@
+"""
+柜号 / 拆柜费 rules, offline (core/inbound_container.py; plan:
+docs/ai-collaboration/2026-10-unpacking-fee/plan.md rev 5).
+"""
+from decimal import Decimal
+
+import pytest
+
+from core import inbound_container as ic
+
+
+# ── 柜号 normalizing and format ───────────────────────────────────────────────
+
+@pytest.mark.parametrize("raw, normalized", [
+    ("MSCU1234567", "MSCU1234567"), ("mscu1234567", "MSCU1234567"), ("MSCU 123-4567", "MSCU1234567"),
+    ("无", "无"), ("没有", "无"), ("None", "无"), ("n/a", "无"), ("-", "无"),
+    ("XYZ123", "XYZ123"), ("", None), (None, None), (123, None),
+])
+def test_normalize_container(raw, normalized):
+    assert ic.normalize_container(raw) == normalized
+
+
+@pytest.mark.parametrize("value, standard", [
+    ("MSCU1234567", True), ("XYZ123", False), ("MSCU123456", False), ("MSCU12345678", False), ("无", False),
+])
+def test_standard_format(value, standard):
+    assert ic.is_standard(value) is standard
+
+
+# ── Message scanning (R4/R6/R8/R9) ────────────────────────────────────────────
+
+@pytest.mark.parametrize("message, valid, malformed", [
+    ("450", ["450"], []), ("$450", ["450"], []), ("450元", ["450"], []), ("450 USD", ["450"], []),
+    ("1,200", ["1200"], []), ("450.50", ["450.50"], []), ("0", ["0"], []), ("不收拆柜费", ["0"], []),
+    ("45.555", [], ["45.555"]), ("-5", [], ["-5"]),
+    ("四百五", [], []), ("300 450", [], []),
+    ("柜号 MSCU1234567 拆柜费 450", ["450"], []),                       # container digits never a fee
+    ("S2 72箱 2托，拆柜费 450", ["450"], []),                            # SKU code and quantities excluded
+    ("REQ-20261008-000141 拆柜费 450", ["450"], []),                     # request ID excluded
+    ("拆柜费：45000", ["45000"], []), ("收450", ["450"], []),
+])
+def test_amount_candidates(message, valid, malformed):
+    got_valid, got_malformed = ic.amount_candidates(message)
+    assert got_valid == [Decimal(v) for v in valid] and got_malformed == malformed
+
+
+@pytest.mark.parametrize("message, answering, expected", [
+    ("XYZ123", True, ["XYZ123"]),                       # R9: any shape when answering
+    ("MSCU 123-4567", True, ["MSCU1234567"]),
+    ("柜号 XYZ123 拆柜费 450", False, ["XYZ123"]),        # anchored: any shape
+    ("S2 72箱，XYZ123", False, []),                      # unanchored non-container shape ignored
+    ("S2 72箱 MSCU1234567", False, ["MSCU1234567"]),
+    ("MSCU1234567 和 TGHU7654321", False, ["MSCU1234567", "TGHU7654321"]),
+    ("无", True, ["无"]), ("入库 2托，没有柜号", False, ["无"]), ("柜号：无", False, ["无"]),
+    ("REQ-20261008-000141", True, []),
+])
+def test_container_candidates(message, answering, expected):
+    assert ic.container_candidates(message, answering=answering) == expected
+
+
+# ── apply_container / apply_fee (R3/R4/R8, D3, Q1) ────────────────────────────
+
+def test_typed_container_wins_over_the_ais_correction():
+    fields, reply = ic.apply_container({}, "MSCU1234567", "MSCU123456", answering=True)
+    assert fields[ic.PENDING_KEY] == {"field": "container_number", "value": "MSCU123456"}
+    assert "MSCU123456" in reply and "不是标准格式" in reply
+
+
+def test_standard_container_is_accepted_silently():
+    fields, reply = ic.apply_container({}, "MSCU1234567", "mscu 1234567", answering=True)
+    assert (fields["container_number"], reply) == ("MSCU1234567", None)
+
+
+def test_two_containers_ask_again():
+    fields, reply = ic.apply_container({}, "MSCU1234567", "MSCU1234567 和 TGHU7654321", answering=False)
+    assert "container_number" not in fields and reply == ic.ASK_CONTAINER_AGAIN
+
+
+def test_container_the_ai_made_up_asks_again():
+    fields, reply = ic.apply_container({"container_number": "OLD"}, "MSCU1234567", "好的", answering=False)
+    assert "container_number" not in fields and reply == ic.ASK_CONTAINER_AGAIN
+
+
+@pytest.mark.parametrize("message, ai, fee", [("450", 450, 450), ("$450", "450", 450), ("450元", 450, 450),
+                                              ("1,200", 1200, 1200), ("450.5", 450.5, 450.5), ("0", 0, 0)])
+def test_fee_matching_the_message_is_accepted(message, ai, fee):
+    fields, reply = ic.apply_fee({}, ai, message)
+    assert (fields["unpacking_fee"], reply) == (fee, None)
+
+
+@pytest.mark.parametrize("message, ai", [("四百五", 450), ("柜号 MSCU1234567 拆柜费 450", 1234567),
+                                         ("S2 72箱 2托，拆柜费 450", 72), ("300 450", 300)])
+def test_fee_not_in_the_message_asks_again(message, ai):
+    fields, reply = ic.apply_fee({"unpacking_fee": 100}, ai, message)
+    assert "unpacking_fee" not in fields and reply == ic.ASK_FEE_AGAIN
+
+
+def test_malformed_fee_is_rejected_out_loud_even_if_the_ai_rounded_it():
+    fields, reply = ic.apply_fee({"unpacking_fee": 450}, 45.55, "45.555")
+    assert "unpacking_fee" not in fields and fields[ic.INVALID_FEE_KEY] is True
+    assert reply == "拆柜费金额无效：45.555（须为数字，最多两位小数），请重新输入。"
+
+
+def test_valid_fee_clears_the_invalid_marker():
+    fields, _ = ic.apply_fee({ic.INVALID_FEE_KEY: True}, 500, "500")
+    assert fields == {"unpacking_fee": 500}
+
+
+def test_fee_over_cap_opens_a_check_and_accepting_it_sticks():
+    fields, reply = ic.apply_fee({}, 45000, "拆柜费 45000")
+    assert fields[ic.PENDING_KEY] == {"field": "unpacking_fee", "value": 45000} and "$45,000" in reply
+    fields, reply = ic.resolve_pending(fields, accept=True)
+    assert fields["unpacking_fee"] == 45000 and reply is None and ic.PENDING_KEY not in fields
+    again, reply = ic.apply_fee(fields, 45000, "拆柜费 45000")      # confirmed once: not asked again
+    assert again["unpacking_fee"] == 45000 and reply is None
+
+
+def test_rejecting_a_check_clears_the_value_and_asks_again():
+    fields, _ = ic.apply_container({}, "XYZ123", "XYZ123", answering=True)
+    fields, reply = ic.resolve_pending(fields, accept=False)
+    assert "container_number" not in fields and reply == ic.CONTAINER_QUESTION
+    assert fields[ic.ASKED_KEY] == "container_number"
+
+
+@pytest.mark.parametrize("text, negative", [("否", True), ("不对", True), ("no", True), ("是", False), ("XYZ", False)])
+def test_negative_replies(text, negative):
+    assert ic.is_negative(text) is negative
+
+
+def test_effective_container_prefers_the_warehouses():
+    assert ic.effective_container({"container_number": "TGHU7654321"}, {"container_number": "无"}) == "TGHU7654321"
+    assert ic.effective_container({}, {"container_number": "MSCU1234567"}) == "MSCU1234567"
+
+
+@pytest.mark.parametrize("value, text", [(450, "$450"), (450.5, "$450.50"), (45000, "$45,000"), (None, "$0")])
+def test_format_fee(value, text):
+    assert ic.format_fee(value) == text
+
+
+# ── Display and prompt ───────────────────────────────────────────────────────
+
+def test_request_confirmation_always_shows_the_container(monkeypatch):
+    import core.confirmation
+    from core.confirmation import build_confirmation_sections
+    monkeypatch.setattr(core.confirmation, "_sku_label_map", lambda db: {})
+    items = [i for s in build_confirmation_sections("uchoice_inbound_request", {
+        "warehouse_code": "JFK", "sku_lines": [], "container_number": "无"}, None) for i in s["items"]]
+    assert "柜号：无" in items and not any("拆包" in str(i) for i in items)
+
+
+def test_prompt_drops_needs_unpacking_and_adds_container_rules():
+    from ai.prompt_builder import build_system_prompt
+    prompt = build_system_prompt({
+        "display_name": "Staff", "role": "customer", "collected_fields": {}, "session_id": None,
+        "session_status": None, "group_context": None, "allowed_services": [], "uchoice_candidates": {},
+    })
+    assert "needs_unpacking" not in prompt and "拆包" not in prompt
+    assert "container_number（柜号）按用户原文提取" in prompt and "unpacking_fee（拆柜费）只能是用户写出的阿拉伯数字" in prompt
+
+
+# ── Implementation audit: a typed correction is never ignored ────────────────
+
+@pytest.mark.parametrize("message, fee", [("拆柜费 500", 500), ("$500", 500), ("不收拆柜费", 0)])
+def test_explicit_typed_fee_is_used_when_the_ai_misses_it(message, fee):
+    fields, reply = ic.apply_fee({"unpacking_fee": 450, ic.INVALID_FEE_KEY: True}, None, message)
+    assert fields == {"unpacking_fee": fee} and reply is None
+
+
+@pytest.mark.parametrize("message", ["第2个", "先收500箱再说", "不收货了", "好的，不收货"])
+def test_unrelated_text_without_the_ais_reading_changes_nothing(message):
+    """Round 2: a number inside other text, or 不收 not about the fee, never
+    changes the fee without the AI."""
+    assert ic.apply_fee({"unpacking_fee": 450}, None, message) == ({"unpacking_fee": 450}, None)
+
+
+@pytest.mark.parametrize("message, fee", [("500", 500), ("0", 0), ("$500", 500), ("500元", 500), ("不收费", 0)])
+def test_a_reply_that_is_only_an_amount_is_used(message, fee):
+    """Round 2: the plan's "a valid amount, or 0" -- the usual reply to the
+    fee question -- applies and clears a rejected fee even if the AI missed it."""
+    fields, reply = ic.apply_fee({"unpacking_fee": 450, ic.INVALID_FEE_KEY: True}, None, message)
+    assert fields == {"unpacking_fee": fee} and reply is None
+
+
+def test_two_explicit_fees_without_the_ai_ask_again():
+    fields, reply = ic.apply_fee({"unpacking_fee": 450}, None, "拆柜费 300 和 $400")
+    assert "unpacking_fee" not in fields and reply == ic.ASK_FEE_AGAIN
+
+
+# ── Combination grid (round 3) ───────────────────────────────────────────────
+# Every kind of fee statement x every kind of other content, with the AI's
+# value matching, missing, or wrong. The point is the interactions between
+# the rules (anchors, exclusions, no-fee phrases, amount-only replies), which
+# single-example tests kept missing. Outcomes, starting from a $100 fee and a
+# set invalid-fee marker:
+#   ("set", n)  fee becomes n, marker cleared
+#   "keep"      nothing changes
+#   "ask"       fee removed, "请确认拆柜费金额" asked
+#   "reject"    fee removed, "拆柜费金额无效" (malformed typed amount)
+
+STATEMENTS = {           # text, the value an AI reading it correctly returns
+    "bare": ("450", 450),
+    "dollar": ("$450", 450),
+    "worded": ("拆柜费 450", 450),
+    "no_fee": ("不收拆柜费", 0),
+    "zero": ("0", 0),
+    "malformed": ("45.555", 45.55),
+    "chinese": ("四百五", 450),
+}
+OTHERS = {
+    "alone": "",
+    "container": "柜号 MSCU1234567",
+    "quantity": "S2 72箱 2托",
+    "request_id": "REQ-20261008-000141",
+    "unrelated": "不收货了",
+    "second_fee": "拆柜费 300",
+    "zero_fee": "拆柜费 0",                                  # final audit: $0 agrees with "no fee"
+}
+# (outcome with the AI's value missing, outcome with it matching)
+EXPECTED = {
+    ("bare", "alone"): (("set", 450), ("set", 450)),
+    ("bare", "container"): ("keep", ("set", 450)),
+    ("bare", "quantity"): ("keep", ("set", 450)),
+    ("bare", "request_id"): ("keep", ("set", 450)),
+    ("bare", "unrelated"): ("keep", ("set", 450)),
+    ("bare", "second_fee"): (("set", 300), "ask"),          # the anchored amount wins (R6)
+    **{(s, o): (("set", 450), ("set", 450))
+       for s in ("dollar", "worded") for o in ("alone", "container", "quantity", "request_id", "unrelated")},
+    ("dollar", "second_fee"): ("ask", ("set", 450)),        # two typed amounts: only the AI picks
+    ("worded", "second_fee"): ("ask", ("set", 450)),
+    **{("no_fee", o): (("set", 0), ("set", 0))
+       for o in ("alone", "container", "quantity", "request_id", "unrelated")},
+    ("no_fee", "second_fee"): ("ask", "ask"),               # contradictory: always asked
+    ("zero", "alone"): (("set", 0), ("set", 0)),
+    **{("zero", o): ("keep", ("set", 0)) for o in ("container", "quantity", "request_id", "unrelated")},
+    ("zero", "second_fee"): (("set", 300), "ask"),
+    **{("malformed", o): ("reject", "reject")
+       for o in ("alone", "container", "quantity", "request_id", "unrelated")},
+    ("malformed", "second_fee"): (("set", 300), "ask"),     # the anchored 300 is the only candidate
+    **{("chinese", o): ("keep", "ask")
+       for o in ("alone", "container", "quantity", "request_id", "unrelated")},
+    ("chinese", "second_fee"): (("set", 300), "ask"),
+    # A second amount of $0 (final audit). Consistent with no-fee / zero
+    # statements; otherwise the same rules as any second amount.
+    ("bare", "zero_fee"): (("set", 0), "ask"),
+    ("dollar", "zero_fee"): ("ask", ("set", 450)),
+    ("worded", "zero_fee"): ("ask", ("set", 450)),
+    ("no_fee", "zero_fee"): (("set", 0), ("set", 0)),
+    ("zero", "zero_fee"): (("set", 0), ("set", 0)),
+    ("malformed", "zero_fee"): (("set", 0), "ask"),
+    ("chinese", "zero_fee"): (("set", 0), "ask"),
+}
+
+
+def _grid_message(statement: str, other: str) -> str:
+    text = STATEMENTS[statement][0]
+    return f"{OTHERS[other]}，{text}" if OTHERS[other] else text
+
+
+def _check(outcome, fields, reply, message):
+    start = {"unpacking_fee": 100, ic.INVALID_FEE_KEY: True}
+    if outcome == "keep":
+        assert (fields, reply) == (start, None), message
+    elif outcome == "ask":
+        assert "unpacking_fee" not in fields and reply == ic.ASK_FEE_AGAIN, message
+    elif outcome == "reject":
+        assert "unpacking_fee" not in fields and fields[ic.INVALID_FEE_KEY] is True, message
+        assert reply.startswith("拆柜费金额无效"), message
+    else:
+        _, value = outcome
+        assert fields == {"unpacking_fee": value} and reply is None, message
+
+
+def test_grid_covers_every_combination():
+    assert set(EXPECTED) == {(s, o) for s in STATEMENTS for o in OTHERS}
+
+
+@pytest.mark.parametrize("statement, other", sorted(EXPECTED))
+@pytest.mark.parametrize("ai", ["missing", "matching", "wrong"])
+def test_fee_grid(statement, other, ai):
+    message = _grid_message(statement, other)
+    ai_value = {"missing": None, "matching": STATEMENTS[statement][1], "wrong": 1234567}[ai]
+    fields, reply = ic.apply_fee({"unpacking_fee": 100, ic.INVALID_FEE_KEY: True}, ai_value, message)
+    expected_missing, expected_matching = EXPECTED[(statement, other)]
+    if ai == "missing":
+        outcome = expected_missing
+    elif ai == "matching":
+        outcome = expected_matching
+    else:
+        # A value nobody typed is never accepted: malformed input is still
+        # rejected out loud, everything else is asked again.
+        outcome = "reject" if expected_matching == "reject" else "ask"
+    _check(outcome, fields, reply, message)
+
+
+@pytest.mark.parametrize("message", ["不收拆柜费 0", "拆柜费 0，不收费", "不收拆柜费，$0"])
+@pytest.mark.parametrize("ai", [None, 0])
+def test_no_fee_and_a_zero_amount_agree(message, ai):
+    """Final audit: consistent zero-fee wording is not a conflict."""
+    fields, reply = ic.apply_fee({"unpacking_fee": 450, ic.INVALID_FEE_KEY: True}, ai, message)
+    assert fields == {"unpacking_fee": 0} and reply is None
+
+
+def test_no_fee_and_a_non_zero_amount_still_conflict():
+    fields, reply = ic.apply_fee({"unpacking_fee": 450}, 0, "不收拆柜费，不对，450")
+    assert "unpacking_fee" not in fields and reply == ic.ASK_FEE_AGAIN
+
+
+# ── 柜号 combination grid ─────────────────────────────────────────────────────
+# Every kind of typed 柜号 x every context it can appear in, with the AI's
+# value matching, missing, or "corrected". Each case states what the scan
+# of the typed message should find:
+#   ("set", v)    exactly one candidate, standard or 无 -> stored as v
+#   ("check", v)  exactly one non-standard candidate -> the double-check
+#   "none"        nothing recognized as a 柜号
+#   "ask"         several candidates -> asked again
+# The AI's value never decides (R8): it only matters when nothing was typed,
+# where a value from the AI means the bot asks rather than trusting it.
+
+CONTAINER_GRID = {
+    # statement      context            message                                answering  expected
+    ("standard", "reply"):          ("MSCU1234567", True, ("set", "MSCU1234567")),
+    ("standard", "not_asked"):      ("MSCU1234567", False, ("set", "MSCU1234567")),
+    ("standard", "anchored"):       ("柜号 MSCU1234567，拆柜费 450", False, ("set", "MSCU1234567")),
+    ("standard", "mixed"):          ("S2 72箱，MSCU1234567", False, ("set", "MSCU1234567")),
+    ("standard", "two"):            ("MSCU1234567 和 TGHU7654321", False, "ask"),
+    ("standard", "with_none"):      ("没有柜号，MSCU1234567", False, "ask"),
+
+    ("spaced", "reply"):            ("mscu 123-4567", True, ("set", "MSCU1234567")),
+    ("spaced", "not_asked"):        ("mscu 123-4567", False, ("set", "MSCU1234567")),
+    ("spaced", "anchored"):         ("柜号 mscu 123-4567，拆柜费 450", False, ("set", "MSCU1234567")),
+    ("spaced", "mixed"):            ("S2 72箱，mscu 123-4567", False, ("set", "MSCU1234567")),
+    ("spaced", "two"):              ("mscu 123-4567 和 TGHU7654321", False, "ask"),
+    ("spaced", "with_none"):        ("没有柜号，mscu 123-4567", False, "ask"),
+
+    ("non_standard", "reply"):      ("XYZ123", True, ("check", "XYZ123")),            # R9
+    ("non_standard", "not_asked"):  ("XYZ123", False, "none"),                        # unanchored, not container-shaped
+    ("non_standard", "anchored"):   ("柜号 XYZ123，拆柜费 450", False, ("check", "XYZ123")),
+    ("non_standard", "mixed"):      ("S2 72箱，XYZ123", False, "none"),
+    ("non_standard", "two"):        ("XYZ123 和 TGHU7654321", False, ("set", "TGHU7654321")),  # only the shaped one counts
+    ("non_standard", "with_none"):  ("没有柜号，柜号 XYZ123", False, "ask"),
+
+    ("short", "reply"):             ("MSCU123456", True, ("check", "MSCU123456")),
+    ("short", "not_asked"):         ("MSCU123456", False, ("check", "MSCU123456")),
+    ("short", "anchored"):          ("柜号 MSCU123456，拆柜费 450", False, ("check", "MSCU123456")),
+    ("short", "mixed"):             ("S2 72箱，MSCU123456", False, ("check", "MSCU123456")),
+    ("short", "two"):               ("MSCU123456 和 TGHU7654321", False, "ask"),
+    ("short", "with_none"):         ("没有柜号，MSCU123456", False, "ask"),
+
+    ("none_word", "reply"):         ("无", True, ("set", "无")),
+    ("none_word", "not_asked"):     ("无", False, ("set", "无")),
+    ("none_word", "anchored"):      ("柜号：无，拆柜费 450", False, ("set", "无")),
+    ("none_word", "mixed"):         ("S2 72箱，无", False, "none"),                    # a bare 无 inside text is not about the 柜号
+    ("none_word", "two"):           ("柜号：无，TGHU7654321", False, "ask"),
+    ("none_word", "with_none"):     ("柜号：无，没有柜号", False, ("set", "无")),       # the same answer twice
+
+    ("none_phrase", "reply"):       ("没有柜号", True, ("set", "无")),
+    ("none_phrase", "not_asked"):   ("没有柜号", False, ("set", "无")),
+    ("none_phrase", "anchored"):    ("入库 2托，没有柜号", False, ("set", "无")),
+    ("none_phrase", "mixed"):       ("S2 72箱，no container", False, ("set", "无")),
+    ("none_phrase", "two"):         ("没有柜号 和 TGHU7654321", False, "ask"),
+    ("none_phrase", "with_none"):   ("无柜号，没有柜号", False, ("set", "无")),
+
+    ("absent", "reply"):            ("好的", True, "none"),
+    ("absent", "not_asked"):        ("好的", False, "none"),
+    ("absent", "anchored"):         ("拆柜费 450", False, "none"),
+    ("absent", "mixed"):            ("S2 72箱 2托", False, "none"),
+    ("absent", "two"):              ("REQ-20261008-000141 和 S2", False, "none"),     # request IDs / SKU codes never count
+    ("absent", "with_none"):        ("确认", True, "none"),
+}
+
+
+def test_container_grid_covers_every_combination():
+    statements = {s for s, _ in CONTAINER_GRID}
+    contexts = {c for _, c in CONTAINER_GRID}
+    assert set(CONTAINER_GRID) == {(s, c) for s in statements for c in contexts}
+
+
+@pytest.mark.parametrize("statement, context", sorted(CONTAINER_GRID))
+@pytest.mark.parametrize("ai", ["missing", "matching", "corrected"])
+def test_container_grid(statement, context, ai):
+    message, answering, expected = CONTAINER_GRID[(statement, context)]
+    typed = expected[1] if isinstance(expected, tuple) else "MSCU1234567"
+    ai_value = {"missing": None, "matching": typed, "corrected": "ABCD7654321"}[ai]
+    start = {"container_number": "OLD0000000"}
+    fields, reply = ic.apply_container(dict(start), ai_value, message, answering=answering)
+    if expected == "none":
+        if ai == "missing":
+            assert (fields, reply) == (start, None), message
+        else:
+            assert "container_number" not in fields and reply == ic.ASK_CONTAINER_AGAIN, message
+    elif expected == "ask":
+        assert "container_number" not in fields and reply == ic.ASK_CONTAINER_AGAIN, message
+    elif expected[0] == "set":
+        assert fields.get("container_number") == expected[1] and reply is None, message
+        assert ic.PENDING_KEY not in fields, message
+    else:
+        assert "container_number" not in fields, message
+        assert fields[ic.PENDING_KEY] == {"field": "container_number", "value": expected[1]}, message
+        assert reply == ic.container_check_question(expected[1]), message
+
+
+def test_a_confirmed_non_standard_container_is_not_questioned_again():
+    fields, reply = ic.apply_container({ic.ACCEPTED_KEY: {"container_number": "XYZ123"}}, "XYZ123", "XYZ123", answering=True)
+    assert fields["container_number"] == "XYZ123" and reply is None

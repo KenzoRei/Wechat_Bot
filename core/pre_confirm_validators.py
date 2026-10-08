@@ -10,6 +10,31 @@ from models.role import Role
 from core.uchoice_validation import format_validation_issues, validate_sku_lines
 
 
+def _inbound_unpacking_fee_required(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """
+    confirm_inbound_completion (unpacking-fee plan D4/R3): a receipt whose
+    request has a 柜号 -- the original one, or one the warehouse gave at
+    receipt -- needs the 拆柜费 before it can be confirmed; a rejected fee
+    blocks confirmation on every receipt until a valid one (or 0) is given.
+    Both channels run this, so the rule never depends on the AI.
+    """
+    from core import inbound_container as ic
+    from core.uchoice_context import resolve_completion_target
+
+    if collected_fields.get(ic.INVALID_FEE_KEY):
+        return "请先提供有效的拆柜费金额（美元，最多两位小数；不收请回复 0）。"
+    if collected_fields.get("unpacking_fee") is not None:
+        return None
+    reference_serial = collected_fields.get("reference_serial")
+    if not reference_serial:
+        return None
+    _target, original_fields = resolve_completion_target(db, reference_serial)
+    container = ic.effective_container(collected_fields, original_fields or {})
+    if ic.has_container(container):
+        return f"该入库柜号 {container}，请提供拆柜费金额（美元，可为 0）。"
+    return None
+
+
 def _compose(*validators):
     """Run validators in order and return the first blocking message."""
 
@@ -871,6 +896,7 @@ PRE_CONFIRM_VALIDATORS = {
     "confirm_inbound_completion": _compose(
         _valid_inbound_completion_skus,
         _loose_inbound_restatement_required,
+        _inbound_unpacking_fee_required,
     ),
     "cancel_inbound_request": _valid_cancel_inbound_target_and_owner,
     "cancel_outbound_request": _valid_cancel_outbound_target_and_owner,

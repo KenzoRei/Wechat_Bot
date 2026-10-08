@@ -316,6 +316,12 @@ def ineligibility_reason(target: BatchTarget, direction: str) -> str | None:
     loose = [l for l in lines if "box_count" in l]
     if direction == "inbound" and loose:
         return "含散箱入库，需说明装托方式，请单独确认"
+    if direction == "inbound":
+        # A batch asks nothing per request, so it can't collect the 拆柜费 a
+        # 柜号 requires (unpacking-fee plan D7).
+        from core.inbound_container import has_container
+        if has_container(target.original_fields.get("container_number")):
+            return "含柜号，需填写拆柜费，请单独确认"
     if direction == "outbound" and loose and target.destination_warehouse_code:
         return "含散箱的内部调仓，需说明目的仓装托方式，请单独确认"
     for line in lines:

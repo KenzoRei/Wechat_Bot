@@ -13,7 +13,7 @@ from core.uchoice_storage import (
     apply_storage_delta,
     apply_loose_pick,
 )
-from core.uchoice_rates import UNPACKING_FLAT, PALLETIZATION_PER_PALLET, CHARGE_TYPE_RATES
+from core.uchoice_rates import PALLETIZATION_PER_PALLET, CHARGE_TYPE_RATES
 
 
 def _actor_id(context: dict) -> str:
@@ -97,9 +97,20 @@ class ApplyInboundStorageHandler(BaseHandler):
             )
             applied.append({"sku_code": sku, "boxes_per_pallet": bpp, "pallet_count": qty})
 
-        unpacking_fee = UNPACKING_FLAT if original_fields.get("needs_unpacking") else 0
+        # 拆柜费 is whatever the warehouse gave at receipt (a 柜号 makes it
+        # required -- core/pre_confirm_validators._inbound_unpacking_fee_
+        # required), else $0. The legacy needs_unpacking flag is ignored
+        # (unpacking-fee plan D1).
+        from core import inbound_container
+        fields = context.get("collected_fields") or {}
+        unpacking_fee = fields.get("unpacking_fee") or 0
+        container = inbound_container.effective_container(fields, original_fields)
 
-        return {"received_lines": applied, "unpacking_fee": unpacking_fee}
+        return {
+            "received_lines": applied,
+            "unpacking_fee": unpacking_fee,
+            "container_number": container if inbound_container.has_container(container) else None,
+        }
 
 
 class ApplyOutboundStorageHandler(BaseHandler):

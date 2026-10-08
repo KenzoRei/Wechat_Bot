@@ -137,7 +137,7 @@ def invoice_filename(warehouse_codes, start_month: str, end_month: str | None) -
 _CHARGE_ROWS = (
     ("Transportation fee", "transportation_fee"),
     ("Palletization fee", "palletization_fee"),
-    ("Unpacking fee", "unpacking_fee"),
+    ("Container unpacking fee", "unpacking_fee"),
     ("Storage fee", "storage_fee"),
 )
 
@@ -290,7 +290,9 @@ def build_invoice_report(
 
     # ── Unpacking (inbound completions) ─────────────────────────────────────
     ws3 = wb.create_sheet("Inbound")
-    _write_header(ws3, 1, ["Warehouse", "Serial Number", "Completed At (UTC)", "SKU Lines", "Unpacking Fee"])
+    # Container # sits next to the fee it explains (unpacking-fee plan D8).
+    _write_header(ws3, 1, ["Warehouse", "Serial Number", "Completed At (UTC)", "SKU Lines",
+                           "Container #", "Container Unpacking Fee"])
     for warehouse_code in codes:
         for log in rows_by_warehouse[warehouse_code].inbound:
             result = log.result or {}
@@ -300,6 +302,7 @@ def build_invoice_report(
                 log.serial_number,
                 log.completed_at.strftime("%Y-%m-%d %H:%M") if log.completed_at else "",
                 sku_summary,
+                result.get("container_number") or "",
                 float(Decimal(str(result.get("unpacking_fee", 0)))),
             ])
     _finish_detail_sheet(ws3)

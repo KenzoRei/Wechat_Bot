@@ -72,7 +72,7 @@ def run_uchoice_invoice(db: DBSession, target_month: str | None = None) -> None:
             f"🧾 U-Choice {warehouse_code} {target_month} 月度费用报告\n"
             f"运输费：${invoice['transportation_fee']}\n"
             f"打托费：${invoice['palletization_fee']}\n"
-            f"拆包费：${invoice['unpacking_fee']}\n"
+            f"拆柜费：${invoice['unpacking_fee']}\n"
             f"仓储费：${invoice['storage_fee']}\n"
             f"合计：${invoice['total']}"
         )
