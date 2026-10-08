@@ -216,3 +216,24 @@ def test_other_replies_go_to_the_ai(robot_case):
         assert workflow_engine.pending_value_check_reply(context("MSCU1234567"), db) is None
     finally:
         db.close()
+
+
+def test_failure_after_commits_still_restores_the_check(robot_case, monkeypatch):
+    """Implementation audit P2: the container step and field merge commit
+    before the confirmation is rendered; a failure there must still leave
+    the double-check open for the next message."""
+    from database import SessionLocal
+    context, session_id = robot_case
+
+    def boom(*a, **k):
+        raise RuntimeError("forced at confirmation")
+    monkeypatch.setattr(workflow_engine, "_on_all_fields_collected", boom)
+    db = SessionLocal()
+    try:
+        with pytest.raises(RuntimeError):
+            workflow_engine.pending_value_check_reply(context("是"), db)
+    finally:
+        db.close()
+    row = _fresh_fields(session_id)
+    assert row["collected_fields"][ic.PENDING_KEY]["value"] == "XYZ123"
+    assert "container_number" not in row["collected_fields"] and row["status"] == "active"

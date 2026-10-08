@@ -156,3 +156,20 @@ def test_prompt_drops_needs_unpacking_and_adds_container_rules():
     })
     assert "needs_unpacking" not in prompt and "拆包" not in prompt
     assert "container_number（柜号）按用户原文提取" in prompt and "unpacking_fee（拆柜费）只能是用户写出的阿拉伯数字" in prompt
+
+
+# ── Implementation audit: a typed correction is never ignored ────────────────
+
+@pytest.mark.parametrize("message, fee", [("拆柜费 500", 500), ("$500", 500), ("不收拆柜费", 0)])
+def test_explicit_typed_fee_is_used_when_the_ai_misses_it(message, fee):
+    fields, reply = ic.apply_fee({"unpacking_fee": 450, ic.INVALID_FEE_KEY: True}, None, message)
+    assert fields == {"unpacking_fee": fee} and reply is None
+
+
+def test_bare_number_without_the_ais_reading_changes_nothing():
+    assert ic.apply_fee({"unpacking_fee": 450}, None, "500") == ({"unpacking_fee": 450}, None)
+
+
+def test_two_explicit_fees_without_the_ai_ask_again():
+    fields, reply = ic.apply_fee({"unpacking_fee": 450}, None, "拆柜费 300 和 $400")
+    assert "unpacking_fee" not in fields and reply == ic.ASK_FEE_AGAIN

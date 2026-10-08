@@ -366,3 +366,29 @@ def test_invoice_shows_container_and_fee(receipt, monkeypatch):
     assert row[4:6] == ("MSCU1234567", 450)
     labels = [row[0] for row in wb["Summary"].iter_rows(values_only=True)]
     assert "Container unpacking fee" in labels
+
+
+@pytest.mark.parametrize("message, fee", [("拆柜费 500", 500), ("不收拆柜费", 0)])
+def test_typed_correction_is_used_even_if_the_ai_misses_it(receipt, monkeypatch, message, fee):
+    """Implementation audit P1: $450 entered, then a correction the AI
+    doesn't extract -> the typed amount wins, and 确认 charges it."""
+    r = receipt("MSCU1234567")
+    p = _processor(monkeypatch, _open(r, _ai(unpacking_fee=450), _ai(), _ai("confirm")))
+    asked = _start_receipt(p, r)
+    _turn(p, r["me"], "拆柜费 450", asked.case_number)
+    shown = _turn(p, r["me"], message, asked.case_number)
+    assert f"拆柜费：${fee}" in shown.reply_text
+    _turn(p, r["me"], "确认", asked.case_number)
+    assert _result(r["log_id"])["result"]["unpacking_fee"] == fee
+
+
+def test_no_fee_phrase_clears_a_rejected_fee(receipt, monkeypatch):
+    r = receipt()
+    p = _processor(monkeypatch, _open(r, _ai(unpacking_fee=45.55), _ai(), _ai("confirm")))
+    first = _start_receipt(p, r)
+    _turn(p, r["me"], "拆柜费 45.555", first.case_number)
+    shown = _turn(p, r["me"], "不收拆柜费", first.case_number)
+    assert "拆柜费：$0" in shown.reply_text
+    _turn(p, r["me"], "确认", first.case_number)
+    res = _result(r["log_id"])
+    assert res["status"] == "success" and res["result"]["unpacking_fee"] == 0

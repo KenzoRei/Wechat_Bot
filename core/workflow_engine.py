@@ -1,3 +1,4 @@
+import copy
 from uuid import UUID
 from sqlalchemy.orm import Session as DBSession
 
@@ -265,11 +266,24 @@ def pending_value_check_reply(context: dict, db: DBSession) -> str | None:
         intent="continuation", reply="好的，已记录。请继续补充申请信息。", extracted_fields={},
         all_fields_collected=False, service_type_name=None,
     )
+    # Smart Robot commits as it goes (update_collected_fields, the container
+    # step), so a plain rollback can't undo what already committed if a
+    # later step -- e.g. rendering the confirmation -- fails. Snapshot the
+    # case first and write it back on any error, so the check stays open
+    # for the next message (implementation audit, P2).
+    snapshot = (copy.deepcopy(session.collected_fields or {}), session.status)
     try:
         _handle_continuation(context, ai_response, db)
         db.commit()
     except Exception:
         db.rollback()
+        try:
+            restored = _get_session(context, db)
+            if restored is not None:
+                restored.collected_fields, restored.status = snapshot
+                db.commit()
+        except Exception:
+            db.rollback()
         raise
     return context.get("_reply", "")
 

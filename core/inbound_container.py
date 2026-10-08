@@ -121,17 +121,10 @@ def _to_decimal(text: str) -> Decimal | None:
         return None
 
 
-def amount_candidates(message: str) -> tuple[list[Decimal], list[str]]:
-    """
-    Field-aware scan for the fee (R4/R6). Returns (valid candidates,
-    malformed texts). Numbers touching a letter, inside a request ID, or
-    followed by a quantity unit are never fees. Anchored amounts (currency
-    mark, or after a fee word) are the only candidates when present;
-    otherwise a single remaining number counts.
-    """
-    text = _strip_request_ids(message or "")
-    if any(p in text for p in _NO_FEE_PHRASES) and not re.search(r"\d", text):
-        return [Decimal("0")], []
+def _anchored_and_bare(text: str):
+    """Fee-eligible numbers in `text` (request IDs already stripped), split
+    into anchored (a currency mark, or after a fee word) and bare. Numbers
+    touching a letter or followed by a quantity unit are never fees (R6)."""
     anchored: list[tuple[str, Decimal | None]] = []
     bare: list[tuple[str, Decimal | None]] = []
     for m in _NUMBER.finditer(text):
@@ -153,7 +146,43 @@ def amount_candidates(message: str) -> tuple[list[Decimal], list[str]]:
             or any(re.sub(r"[\s:：]+$", "", head).endswith(w) for w in _FEE_WORDS)
         )
         (anchored if is_anchored else bare).append((raw, value))
-    pool = anchored or (bare if len(bare) == 1 else [])
+    return anchored, bare
+
+
+def _no_fee_stated(text: str) -> bool:
+    return any(p in text for p in _NO_FEE_PHRASES) and not re.search(r"\d", text)
+
+
+def amount_candidates(message: str) -> tuple[list[Decimal], list[str]]:
+    """
+    Field-aware scan for the fee (R4/R6). Returns (valid candidates,
+    malformed texts). Anchored amounts are the only candidates when
+    present; otherwise a single remaining bare number counts. A no-fee
+    phrase (不收拆柜费) is 0.
+    """
+    text = _strip_request_ids(message or "")
+    if _no_fee_stated(text):
+        return [Decimal("0")], []
+    anchored, bare = _anchored_and_bare(text)
+    return _split_malformed(anchored or (bare if len(bare) == 1 else []))
+
+
+def explicit_fee_candidates(message: str) -> tuple[list[Decimal], list[str]]:
+    """
+    Only fees the message states explicitly: anchored amounts and no-fee
+    phrases (不收拆柜费 -> 0). Code takes one of these even when the AI
+    extracted nothing (implementation audit: a typed "拆柜费 500" or
+    "不收拆柜费" must never be ignored). A lone bare number is not explicit:
+    it still needs the AI to have read it as the fee.
+    """
+    text = _strip_request_ids(message or "")
+    if _no_fee_stated(text):
+        return [Decimal("0")], []
+    anchored, _bare = _anchored_and_bare(text)
+    return _split_malformed(anchored)
+
+
+def _split_malformed(pool) -> tuple[list[Decimal], list[str]]:
     valid, malformed = [], []
     for raw, value in pool:
         if value is None or raw.startswith("-") or raw.endswith(".") or value.as_tuple().exponent < -2:
@@ -240,7 +269,14 @@ def apply_fee(fields: dict, ai_value, message: str) -> tuple[dict, str | None]:
         return {**cleared, INVALID_FEE_KEY: True}, fee_invalid_reply(malformed[0])
     ai_amount = _ai_decimal(ai_value)
     if ai_amount is None:
-        return fields, None
+        # The AI missed it, but the message states a fee explicitly: use
+        # that (exactly one), so a typed correction is never ignored.
+        explicit, _ = explicit_fee_candidates(message)
+        if not explicit:
+            return fields, None
+        if len(explicit) > 1:
+            return {k: v for k, v in fields.items() if k != "unpacking_fee"}, ASK_FEE_AGAIN
+        ai_amount = explicit[0]
     if ai_amount not in candidates:
         return {k: v for k, v in fields.items() if k != "unpacking_fee"}, ASK_FEE_AGAIN
     number = fee_number(ai_amount)
