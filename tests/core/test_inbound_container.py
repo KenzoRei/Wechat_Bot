@@ -213,6 +213,7 @@ OTHERS = {
     "request_id": "REQ-20261008-000141",
     "unrelated": "不收货了",
     "second_fee": "拆柜费 300",
+    "zero_fee": "拆柜费 0",                                  # final audit: $0 agrees with "no fee"
 }
 # (outcome with the AI's value missing, outcome with it matching)
 EXPECTED = {
@@ -238,6 +239,15 @@ EXPECTED = {
     **{("chinese", o): ("keep", "ask")
        for o in ("alone", "container", "quantity", "request_id", "unrelated")},
     ("chinese", "second_fee"): (("set", 300), "ask"),
+    # A second amount of $0 (final audit). Consistent with no-fee / zero
+    # statements; otherwise the same rules as any second amount.
+    ("bare", "zero_fee"): (("set", 0), "ask"),
+    ("dollar", "zero_fee"): ("ask", ("set", 450)),
+    ("worded", "zero_fee"): ("ask", ("set", 450)),
+    ("no_fee", "zero_fee"): (("set", 0), ("set", 0)),
+    ("zero", "zero_fee"): (("set", 0), ("set", 0)),
+    ("malformed", "zero_fee"): (("set", 0), "ask"),
+    ("chinese", "zero_fee"): (("set", 0), "ask"),
 }
 
 
@@ -280,3 +290,16 @@ def test_fee_grid(statement, other, ai):
         # rejected out loud, everything else is asked again.
         outcome = "reject" if expected_matching == "reject" else "ask"
     _check(outcome, fields, reply, message)
+
+
+@pytest.mark.parametrize("message", ["不收拆柜费 0", "拆柜费 0，不收费", "不收拆柜费，$0"])
+@pytest.mark.parametrize("ai", [None, 0])
+def test_no_fee_and_a_zero_amount_agree(message, ai):
+    """Final audit: consistent zero-fee wording is not a conflict."""
+    fields, reply = ic.apply_fee({"unpacking_fee": 450, ic.INVALID_FEE_KEY: True}, ai, message)
+    assert fields == {"unpacking_fee": 0} and reply is None
+
+
+def test_no_fee_and_a_non_zero_amount_still_conflict():
+    fields, reply = ic.apply_fee({"unpacking_fee": 450}, 0, "不收拆柜费，不对，450")
+    assert "unpacking_fee" not in fields and reply == ic.ASK_FEE_AGAIN

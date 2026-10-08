@@ -164,10 +164,14 @@ def _fee_scan(message: str):
 
 
 def no_fee_conflict(message: str) -> bool:
-    """A no-fee phrase AND a fee-eligible amount in one message (不收拆柜费，
-    不对，450): contradictory, so the bot asks which one (round 3)."""
+    """A no-fee phrase AND a non-zero fee-eligible amount in one message
+    (不收拆柜费，不对，450): contradictory, so the bot asks which one
+    (round 3). A $0 amount agrees with it (不收拆柜费 0) -- final audit."""
     _text, anchored, bare, no_fee = _fee_scan(message)
-    return no_fee and bool(anchored or bare)
+    if not no_fee:
+        return False
+    valid, _malformed = _split_malformed(anchored + bare)
+    return any(value != 0 for value in valid)
 
 
 def amount_candidates(message: str) -> tuple[list[Decimal], list[str]]:
@@ -196,7 +200,14 @@ def explicit_fee_candidates(message: str) -> tuple[list[Decimal], list[str]]:
     if not anchored and len(bare) == 1 and _AMOUNT_ONLY.match(text):
         anchored = bare
     valid, malformed = _split_malformed(anchored)
-    return ([Decimal("0")] + valid if no_fee else valid), malformed
+    if no_fee:
+        valid = [Decimal("0")] + valid
+    # The same amount stated twice ("不收拆柜费 0") is one fee, not two.
+    unique = []
+    for value in valid:
+        if value not in unique:
+            unique.append(value)
+    return unique, malformed
 
 
 def _split_malformed(pool) -> tuple[list[Decimal], list[str]]:
