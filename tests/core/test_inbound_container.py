@@ -184,3 +184,99 @@ def test_a_reply_that_is_only_an_amount_is_used(message, fee):
 def test_two_explicit_fees_without_the_ai_ask_again():
     fields, reply = ic.apply_fee({"unpacking_fee": 450}, None, "拆柜费 300 和 $400")
     assert "unpacking_fee" not in fields and reply == ic.ASK_FEE_AGAIN
+
+
+# ── Combination grid (round 3) ───────────────────────────────────────────────
+# Every kind of fee statement x every kind of other content, with the AI's
+# value matching, missing, or wrong. The point is the interactions between
+# the rules (anchors, exclusions, no-fee phrases, amount-only replies), which
+# single-example tests kept missing. Outcomes, starting from a $100 fee and a
+# set invalid-fee marker:
+#   ("set", n)  fee becomes n, marker cleared
+#   "keep"      nothing changes
+#   "ask"       fee removed, "请确认拆柜费金额" asked
+#   "reject"    fee removed, "拆柜费金额无效" (malformed typed amount)
+
+STATEMENTS = {           # text, the value an AI reading it correctly returns
+    "bare": ("450", 450),
+    "dollar": ("$450", 450),
+    "worded": ("拆柜费 450", 450),
+    "no_fee": ("不收拆柜费", 0),
+    "zero": ("0", 0),
+    "malformed": ("45.555", 45.55),
+    "chinese": ("四百五", 450),
+}
+OTHERS = {
+    "alone": "",
+    "container": "柜号 MSCU1234567",
+    "quantity": "S2 72箱 2托",
+    "request_id": "REQ-20261008-000141",
+    "unrelated": "不收货了",
+    "second_fee": "拆柜费 300",
+}
+# (outcome with the AI's value missing, outcome with it matching)
+EXPECTED = {
+    ("bare", "alone"): (("set", 450), ("set", 450)),
+    ("bare", "container"): ("keep", ("set", 450)),
+    ("bare", "quantity"): ("keep", ("set", 450)),
+    ("bare", "request_id"): ("keep", ("set", 450)),
+    ("bare", "unrelated"): ("keep", ("set", 450)),
+    ("bare", "second_fee"): (("set", 300), "ask"),          # the anchored amount wins (R6)
+    **{(s, o): (("set", 450), ("set", 450))
+       for s in ("dollar", "worded") for o in ("alone", "container", "quantity", "request_id", "unrelated")},
+    ("dollar", "second_fee"): ("ask", ("set", 450)),        # two typed amounts: only the AI picks
+    ("worded", "second_fee"): ("ask", ("set", 450)),
+    **{("no_fee", o): (("set", 0), ("set", 0))
+       for o in ("alone", "container", "quantity", "request_id", "unrelated")},
+    ("no_fee", "second_fee"): ("ask", "ask"),               # contradictory: always asked
+    ("zero", "alone"): (("set", 0), ("set", 0)),
+    **{("zero", o): ("keep", ("set", 0)) for o in ("container", "quantity", "request_id", "unrelated")},
+    ("zero", "second_fee"): (("set", 300), "ask"),
+    **{("malformed", o): ("reject", "reject")
+       for o in ("alone", "container", "quantity", "request_id", "unrelated")},
+    ("malformed", "second_fee"): (("set", 300), "ask"),     # the anchored 300 is the only candidate
+    **{("chinese", o): ("keep", "ask")
+       for o in ("alone", "container", "quantity", "request_id", "unrelated")},
+    ("chinese", "second_fee"): (("set", 300), "ask"),
+}
+
+
+def _grid_message(statement: str, other: str) -> str:
+    text = STATEMENTS[statement][0]
+    return f"{OTHERS[other]}，{text}" if OTHERS[other] else text
+
+
+def _check(outcome, fields, reply, message):
+    start = {"unpacking_fee": 100, ic.INVALID_FEE_KEY: True}
+    if outcome == "keep":
+        assert (fields, reply) == (start, None), message
+    elif outcome == "ask":
+        assert "unpacking_fee" not in fields and reply == ic.ASK_FEE_AGAIN, message
+    elif outcome == "reject":
+        assert "unpacking_fee" not in fields and fields[ic.INVALID_FEE_KEY] is True, message
+        assert reply.startswith("拆柜费金额无效"), message
+    else:
+        _, value = outcome
+        assert fields == {"unpacking_fee": value} and reply is None, message
+
+
+def test_grid_covers_every_combination():
+    assert set(EXPECTED) == {(s, o) for s in STATEMENTS for o in OTHERS}
+
+
+@pytest.mark.parametrize("statement, other", sorted(EXPECTED))
+@pytest.mark.parametrize("ai", ["missing", "matching", "wrong"])
+def test_fee_grid(statement, other, ai):
+    message = _grid_message(statement, other)
+    ai_value = {"missing": None, "matching": STATEMENTS[statement][1], "wrong": 1234567}[ai]
+    fields, reply = ic.apply_fee({"unpacking_fee": 100, ic.INVALID_FEE_KEY: True}, ai_value, message)
+    expected_missing, expected_matching = EXPECTED[(statement, other)]
+    if ai == "missing":
+        outcome = expected_missing
+    elif ai == "matching":
+        outcome = expected_matching
+    else:
+        # A value nobody typed is never accepted: malformed input is still
+        # rejected out loud, everything else is asked again.
+        outcome = "reject" if expected_matching == "reject" else "ask"
+    _check(outcome, fields, reply, message)

@@ -154,40 +154,49 @@ def _anchored_and_bare(text: str):
     return anchored, bare
 
 
-def _no_fee_stated(text: str) -> bool:
-    return any(p in text for p in _NO_FEE_PHRASES) and not re.search(r"\d", text)
+def _fee_scan(message: str):
+    """One field-aware scan of the message for everything fee-related:
+    (text, anchored, bare, no_fee). Container digits, quantities and request
+    IDs are already excluded, so they never count for or against a fee."""
+    text = _strip_request_ids(message or "")
+    anchored, bare = _anchored_and_bare(text)
+    return text, anchored, bare, any(p in text for p in _NO_FEE_PHRASES)
+
+
+def no_fee_conflict(message: str) -> bool:
+    """A no-fee phrase AND a fee-eligible amount in one message (不收拆柜费，
+    不对，450): contradictory, so the bot asks which one (round 3)."""
+    _text, anchored, bare, no_fee = _fee_scan(message)
+    return no_fee and bool(anchored or bare)
 
 
 def amount_candidates(message: str) -> tuple[list[Decimal], list[str]]:
     """
     Field-aware scan for the fee (R4/R6). Returns (valid candidates,
     malformed texts). Anchored amounts are the only candidates when
-    present; otherwise a single remaining bare number counts. A no-fee
-    phrase (不收拆柜费) is 0.
+    present; otherwise a single remaining bare number counts. A
+    fee-specific no-fee phrase (不收拆柜费) adds 0 -- whatever other,
+    non-fee digits the message has (a 柜号, quantities, a request ID).
     """
-    text = _strip_request_ids(message or "")
-    if _no_fee_stated(text):
-        return [Decimal("0")], []
-    anchored, bare = _anchored_and_bare(text)
-    return _split_malformed(anchored or (bare if len(bare) == 1 else []))
+    _text, anchored, bare, no_fee = _fee_scan(message)
+    valid, malformed = _split_malformed(anchored or (bare if len(bare) == 1 else []))
+    return ([Decimal("0")] + valid if no_fee else valid), malformed
 
 
 def explicit_fee_candidates(message: str) -> tuple[list[Decimal], list[str]]:
     """
-    Only fees the message states explicitly: anchored amounts and no-fee
-    phrases (不收拆柜费 -> 0). Code takes one of these even when the AI
-    extracted nothing (implementation audit: a typed "拆柜费 500" or
-    "不收拆柜费" must never be ignored), and a message that is nothing but
-    one amount ("500", "0", "$500"). A bare number inside other text is not
-    explicit: it still needs the AI to have read it as the fee.
+    Only fees the message states explicitly: anchored amounts, a no-fee
+    phrase (-> 0), and a message that is nothing but one amount ("500",
+    "0", "$500"). Code takes one of these even when the AI extracted
+    nothing (implementation audit: a typed "拆柜费 500" or "不收拆柜费" must
+    never be ignored). A bare number inside other text is not explicit: it
+    still needs the AI to have read it as the fee.
     """
-    text = _strip_request_ids(message or "")
-    if _no_fee_stated(text):
-        return [Decimal("0")], []
-    anchored, bare = _anchored_and_bare(text)
+    text, anchored, bare, no_fee = _fee_scan(message)
     if not anchored and len(bare) == 1 and _AMOUNT_ONLY.match(text):
-        return _split_malformed(bare)
-    return _split_malformed(anchored)
+        anchored = bare
+    valid, malformed = _split_malformed(anchored)
+    return ([Decimal("0")] + valid if no_fee else valid), malformed
 
 
 def _split_malformed(pool) -> tuple[list[Decimal], list[str]]:
@@ -272,6 +281,8 @@ def apply_fee(fields: dict, ai_value, message: str) -> tuple[dict, str | None]:
     earlier amount removed (R3); over the cap opens a double-check (Q1).
     """
     candidates, malformed = amount_candidates(message)
+    if no_fee_conflict(message) and not malformed:
+        return {k: v for k, v in fields.items() if k != "unpacking_fee"}, ASK_FEE_AGAIN
     if malformed:
         cleared = {k: v for k, v in fields.items() if k != "unpacking_fee"}
         return {**cleared, INVALID_FEE_KEY: True}, fee_invalid_reply(malformed[0])
