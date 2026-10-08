@@ -63,6 +63,7 @@ _POSTGRES_TEST_FILES = {
     "tests/core/test_resolve_billing_customer_id.py",
     "tests/core/test_label_confirmation_quote.py",
     "tests/core/test_warehouse_directory.py",
+    "tests/uchoice_lifecycle/test_inbound_container_smart_robot_db.py",
 }
 
 
