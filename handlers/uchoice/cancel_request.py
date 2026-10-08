@@ -10,6 +10,7 @@ _SIDE_EFFECT_STEP_TYPES for why: a notification failure must never roll back
 an already-committed cancellation.
 """
 from datetime import datetime, timezone
+from uuid import UUID
 
 from handlers.base import BaseHandler
 from models.request_log import RequestLog
@@ -25,6 +26,46 @@ _DIRECTION_LABELS = {
     "uchoice_inbound_request":  "入库",
     "uchoice_outbound_request": "出库",
 }
+
+
+def cancellation_rejection(target, target_service_name: str | None, direction: str | None, context: dict) -> str | None:
+    """
+    Why this caller may not cancel `target` (a RequestLog), or None. The one
+    definition of the rules, shared by the single cancel's locked lookup
+    below and the batch cancel's summary-time check
+    (core/completion_batch.prepare_cancel_batch): matches the expected
+    direction (fail closed on an unresolvable service type), belongs to the
+    caller's own group, and is cancellable by the caller (admin, or the
+    request's original creator, channel-aware and fail-closed on
+    inconsistent provenance). Status is checked by each caller.
+    """
+    expected_name = _DIRECTION_SERVICE_NAMES.get(direction)
+    if expected_name and target_service_name != expected_name:
+        actual_label = _DIRECTION_LABELS.get(target_service_name, "未知类型")
+        expected_label = _DIRECTION_LABELS.get(expected_name, expected_name)
+        return (
+            f"申请 {target.serial_number} 是{actual_label}申请，"
+            f"与当前操作（取消{expected_label}）方向不符，无法处理。"
+        )
+
+    if str(target.group_id) != str(context.get("group_id")):
+        return "该申请不属于本群组，无法取消。"
+
+    if context.get("role") != "admin":
+        if context.get("source_channel") == "kefu":
+            is_owner = (
+                target.source_channel == "kefu"
+                and target.submitted_by_staff_id is not None
+                and str(target.submitted_by_staff_id) == context.get("submitted_by_staff_id")
+            )
+        else:
+            is_owner = (
+                target.source_channel == "smart_robot"
+                and target.wechat_openid == context.get("wechat_openid")
+            )
+        if not is_owner:
+            return "您没有权限取消该申请，只有申请人本人或管理员可以取消。"
+    return None
 
 
 class LookupAndValidateCancellationHandler(BaseHandler):
@@ -68,40 +109,10 @@ class LookupAndValidateCancellationHandler(BaseHandler):
         # outbound serial typed into a cancel_inbound_request turn) must
         # never mark that unrelated, perfectly valid target 'failed'.
         direction = config.get("direction")
-        expected_name = _DIRECTION_SERVICE_NAMES.get(direction)
-        if expected_name:
-            target_service = db.query(ServiceType).filter_by(service_type_id=target.service_type_id).first()
-            # Fail closed: a target whose service_type row doesn't resolve
-            # at all must never be treated as direction-matching by
-            # omission.
-            if not target_service or target_service.name != expected_name:
-                actual_label = _DIRECTION_LABELS.get(
-                    target_service.name if target_service else None, "未知类型"
-                )
-                expected_label = _DIRECTION_LABELS.get(expected_name, expected_name)
-                raise TargetValidationError(
-                    f"申请 {target.serial_number} 是{actual_label}申请，"
-                    f"与当前操作（取消{expected_label}）方向不符，无法处理。"
-                )
-
-        if str(target.group_id) != str(context.get("group_id")):
-            raise TargetValidationError("该申请不属于本群组，无法取消。")
-
-        is_admin = context.get("role") == "admin"
-        if not is_admin:
-            if context.get("source_channel") == "kefu":
-                is_owner = (
-                    target.source_channel == "kefu"
-                    and target.submitted_by_staff_id is not None
-                    and str(target.submitted_by_staff_id) == context.get("submitted_by_staff_id")
-                )
-            else:
-                is_owner = (
-                    target.source_channel == "smart_robot"
-                    and target.wechat_openid == context.get("wechat_openid")
-                )
-            if not is_owner:
-                raise TargetValidationError("您没有权限取消该申请，只有申请人本人或管理员可以取消。")
+        target_service = db.query(ServiceType).filter_by(service_type_id=target.service_type_id).first()
+        rejection = cancellation_rejection(target, target_service.name if target_service else None, direction, context)
+        if rejection:
+            raise TargetValidationError(rejection)
 
         original_fields = get_original_fields(db, target)
         context["_uchoice_target"] = {
@@ -170,9 +181,32 @@ class NotifyCancelledRequestHandler(BaseHandler):
     """
 
     def handle(self, context: dict, config: dict, db) -> dict:
+        """
+        Every database read and write here runs in its own SAVEPOINT, and
+        any failure rolls back only that savepoint (cancel-batch plan R1).
+        On Kefu this step runs inside the turn's one outer transaction,
+        before its commit: an exception escaping here, or a caught database
+        error that leaves the transaction aborted, would otherwise block that
+        commit and undo the cancellation itself. A notice that does succeed
+        commits together with its cancellation.
+        """
+        try:
+            savepoint = db.begin_nested()
+        except Exception as e:
+            print(f"[uchoice] cancellation notice skipped, no savepoint (non-fatal): {e}", flush=True)
+            return {}
+        try:
+            self._handle(context, db)
+            savepoint.commit()
+        except Exception as e:
+            savepoint.rollback()
+            print(f"[uchoice] cancellation notice failed, rolled back (non-fatal): {e}", flush=True)
+        return {}
+
+    def _handle(self, context: dict, db) -> None:
         target = context.get("_uchoice_target", {})
         if not target:
-            return {}
+            return
 
         is_self_cancel = (
             (target.get("source_channel") == "smart_robot"
@@ -239,13 +273,16 @@ class NotifyCancelledRequestHandler(BaseHandler):
         if staff is None or not staff.is_active:
             return
 
-        try:
-            enqueue_text(
-                db,
-                recipient_staff_id=staff.staff_id,
-                idempotency_key=f"request-cancelled:{target.get('serial_number')}:{staff.staff_id}",
-                text_content=content,
-                request_log_id=context.get("request_log_id"),
-            )
-        except Exception as e:
-            print(f"[uchoice] cancellation Kefu delivery enqueue failed (non-fatal): {e}", flush=True)
+        # No local try/except: a caught database error here would leave the
+        # transaction aborted while looking handled. Any failure propagates
+        # to handle(), which rolls back this notice's own savepoint.
+        enqueue_text(
+            db,
+            recipient_staff_id=staff.staff_id,
+            idempotency_key=f"request-cancelled:{target.get('serial_number')}:{staff.staff_id}",
+            text_content=content,
+            # A UUID, not the context's string: enqueue_text reads the row
+            # back and compares it with the stored UUID, and a str never
+            # matches -- it raised idempotency_key_collision on every notice.
+            request_log_id=UUID(str(context["request_log_id"])) if context.get("request_log_id") else None,
+        )

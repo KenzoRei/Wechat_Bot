@@ -57,6 +57,8 @@ _DISPLAY_NAMES = {
     "confirm_outbound_completion":"出库完成确认",
     "confirm_inbound_completion_batch":  "批量入库完成确认",
     "confirm_outbound_completion_batch": "批量出库完成确认",
+    "cancel_inbound_request_batch":  "批量取消入库申请",
+    "cancel_outbound_request_batch": "批量取消出库申请",
     "cancel_inbound_request":     "取消入库申请",
     "cancel_outbound_request":    "取消出库申请",
     "adjust_storage":             "库存调整",
@@ -90,6 +92,8 @@ _DISPLAY_NAME_BUILDERS: dict[str, Callable[[str, dict], str]] = {
     "fedex_label": _fedex_display_name,
     "confirm_inbound_completion_batch": _batch_display_name,
     "confirm_outbound_completion_batch": _batch_display_name,
+    "cancel_inbound_request_batch": _batch_display_name,
+    "cancel_outbound_request_batch": _batch_display_name,
 }
 
 
@@ -532,6 +536,16 @@ def _completion_destination_items(db: DBSession, original_fields: dict) -> list[
 
 
 BATCH_CONFIRMATION_FOOTER = "回复 **确认** 提交全部，**取消** 放弃，或 部分确认（请回复编号，如：①③）。"
+# A cancel batch can't offer "取消 放弃": "取消" there reads as "yes, cancel
+# them". 放弃 abandons; only 确认 or a number reply cancels anything.
+CANCEL_BATCH_CONFIRMATION_FOOTER = (
+    "取消后无法恢复。回复 **确认** 取消以上全部申请，回复 **放弃** 不做任何操作，"
+    "或只取消其中几笔（请回复编号，如：①③）。"
+)
+
+
+def batch_confirmation_footer(action: str) -> str:
+    return CANCEL_BATCH_CONFIRMATION_FOOTER if action == "cancel" else BATCH_CONFIRMATION_FOOTER
 
 
 def _format_picks(picks: list[dict]) -> str:
@@ -600,6 +614,47 @@ def _completion_batch_sections_builder(collected_fields: dict, db: DBSession) ->
 
     verb = "收货" if collected_fields.get("_batch_direction") == "inbound" else "发货"
     sections.append({"label": None, "type": "list", "items": [f"（按原申请数量{verb}，如实际数量有出入请单独确认该申请）"]})
+    return sections
+
+
+def _cancel_batch_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
+    """
+    cancel_inbound_request_batch / cancel_outbound_request_batch -- one
+    numbered section per request (①..⑨, the numbers a partial reply refers
+    to): goods, destination for outbound, and who created it when. The same
+    facts the cancel list shows, so the user recognizes each request.
+    """
+    from zoneinfo import ZoneInfo
+    from core import completion_batch
+    from core.uchoice_context import _creator_names, _sku_display_lines, format_address_label
+    from models.uchoice import UchoiceAddress
+
+    sku_labels = _sku_label_map(db)
+    serials = collected_fields.get("reference_serials") or []
+    sections: list[dict] = []
+    notes = collected_fields.get("_batch_notes") or []
+    if notes:
+        sections.append({"label": "以下申请未纳入本次批量取消", "type": "list", "items": list(notes)})
+
+    for index, serial in enumerate(serials, start=1):
+        target = completion_batch.load_target(db, serial)
+        if target is None:
+            sections.append({"label": f"{completion_batch.circled(index)} {serial}", "type": "list", "items": ["⚠️ 未找到该申请"]})
+            continue
+        items = list(_sku_display_lines(target.sku_lines(), sku_labels))
+        destination_address_id = target.original_fields.get("destination_address_id")
+        if destination_address_id:
+            addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
+            items.append(f"目的地：{format_address_label(addr)}")
+        creator = _creator_names(db, [target.log]).get(target.log.log_id)
+        created = ""
+        if target.log.created_at:
+            local = target.log.created_at.astimezone(ZoneInfo("America/New_York"))
+            created = f"{local.month}/{local.day} {local:%H:%M}"
+        if creator or created:
+            items.append("创建：" + " · ".join(p for p in (creator, created) if p))
+        header = f"{completion_batch.circled(index)} {serial}（{target.warehouse_code or '?'} 仓）"
+        sections.append({"label": header, "type": "list", "items": items})
     return sections
 
 
@@ -770,6 +825,8 @@ CONFIRMATION_BUILDERS: dict[str, Callable[[dict, DBSession], list[dict]]] = {
     "confirm_outbound_completion": _outbound_completion_sections_builder,
     "confirm_inbound_completion_batch":  _completion_batch_sections_builder,
     "confirm_outbound_completion_batch": _completion_batch_sections_builder,
+    "cancel_inbound_request_batch":  _cancel_batch_sections_builder,
+    "cancel_outbound_request_batch": _cancel_batch_sections_builder,
     "adjust_storage":           _adjust_sections_builder,
     "recount_storage":          _recount_sections_builder,
     "move_storage":             _move_sections_builder,

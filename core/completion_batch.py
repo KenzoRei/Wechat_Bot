@@ -31,21 +31,47 @@ from sqlalchemy.orm import Session as DBSession
 MAX_BATCH_SIZE = 9
 _CIRCLED = "①②③④⑤⑥⑦⑧⑨"
 
-BATCH_SERVICE_BY_SINGLE = {
-    "confirm_inbound_completion": "confirm_inbound_completion_batch",
-    "confirm_outbound_completion": "confirm_outbound_completion_batch",
-}
-SINGLE_SERVICE_BY_BATCH = {v: k for k, v in BATCH_SERVICE_BY_SINGLE.items()}
-DIRECTION_BY_SERVICE = {
-    "confirm_inbound_completion": "inbound",
-    "confirm_outbound_completion": "outbound",
-    "confirm_inbound_completion_batch": "inbound",
-    "confirm_outbound_completion_batch": "outbound",
-}
-CANDIDATE_KEY_BY_DIRECTION = {
-    "inbound": "pending_inbound_requests",
-    "outbound": "pending_outbound_requests",
-}
+@dataclass(frozen=True)
+class BatchFamily:
+    """A single-request service and its batch counterpart. Two actions share
+    the batch machinery (selection, numbered snapshot, partial confirm,
+    re-render on block): completing requests (V33) and cancelling them
+    (V40, docs/ai-collaboration/2026-10-cancel-batch/plan.md). Only
+    completion simulates picks and refuses quantity restatements."""
+    single: str
+    batch: str
+    action: str            # "complete" | "cancel"
+    direction: str         # "inbound" | "outbound"
+    candidate_key: str     # the uchoice_candidates list the numbers refer to
+
+    @property
+    def verb(self) -> str:
+        return ACTION_VERBS[self.action]
+
+
+ACTION_VERBS = {"complete": "确认", "cancel": "取消"}
+
+FAMILIES = (
+    BatchFamily("confirm_inbound_completion", "confirm_inbound_completion_batch",
+                "complete", "inbound", "pending_inbound_requests"),
+    BatchFamily("confirm_outbound_completion", "confirm_outbound_completion_batch",
+                "complete", "outbound", "pending_outbound_requests"),
+    BatchFamily("cancel_inbound_request", "cancel_inbound_request_batch",
+                "cancel", "inbound", "cancelable_inbound_requests"),
+    BatchFamily("cancel_outbound_request", "cancel_outbound_request_batch",
+                "cancel", "outbound", "cancelable_outbound_requests"),
+)
+FAMILY_BY_SERVICE = {name: f for f in FAMILIES for name in (f.single, f.batch)}
+
+BATCH_SERVICE_BY_SINGLE = {f.single: f.batch for f in FAMILIES}
+SINGLE_SERVICE_BY_BATCH = {f.batch: f.single for f in FAMILIES}
+DIRECTION_BY_SERVICE = {name: f.direction for name, f in FAMILY_BY_SERVICE.items()}
+
+
+def family(service_name: str | None) -> BatchFamily | None:
+    return FAMILY_BY_SERVICE.get(service_name)
+
+
 DIRECTION_LABELS = {"inbound": "入库", "outbound": "出库"}
 
 AMBIGUOUS = "ambiguous"
@@ -65,8 +91,15 @@ def is_affirmative(text: str) -> bool:
     return (text or "").strip().rstrip(_TRAILING_PUNCTUATION).strip().lower() in AFFIRMATIVE_REPLIES
 
 
-# Exact replies to a batch's "请问要确认哪几笔" list that mean every listed item.
-SELECT_ALL_REPLIES = frozenset({"全部", "全部确认", "都确认", "全部都确认", "所有", "所有都确认", "都要"})
+# Exact replies to a batch's "请问要确认/取消哪几笔" list that mean every
+# listed item. Per action: "全部取消" selects everything in a cancel batch,
+# but must never select anything in a completion batch.
+_SELECT_ALL_COMMON = {"全部", "所有", "都要"}
+SELECT_ALL_REPLIES = frozenset(_SELECT_ALL_COMMON | {"全部确认", "都确认", "全部都确认", "所有都确认"})
+SELECT_ALL_REPLIES_BY_ACTION = {
+    "complete": SELECT_ALL_REPLIES,
+    "cancel": frozenset(_SELECT_ALL_COMMON | {"全部取消", "都取消", "全部都取消", "所有都取消"}),
+}
 
 # Quantity-restating fields the batch deliberately never accepts -- a
 # batch always completes every request at its original quantities.
@@ -169,7 +202,7 @@ def _as_int_list(value) -> list[int]:
     return [v for v in value if isinstance(v, int) and not isinstance(v, bool)]
 
 
-def resolve_selection(selection, snapshot: list[str], eligible: list[str]) -> tuple[list[str], list[str]]:
+def resolve_selection(selection, snapshot: list[str], eligible: list[str], verb: str = "确认") -> tuple[list[str], list[str]]:
     """
     Turns the AI's (or the number parser's) selection into serials, never
     trusting it: indices resolve against the stored snapshot the user saw,
@@ -195,7 +228,7 @@ def resolve_selection(selection, snapshot: list[str], eligible: list[str]) -> tu
         if matched:
             chosen.append(matched)
         else:
-            notes.append(f"{token} 不在可确认的待处理申请中")
+            notes.append(f"{token} 不在可{verb}的待处理申请中")
 
     excluded = set()
     for i in _as_int_list(selection.get("exclude_indices")):
@@ -208,10 +241,10 @@ def resolve_selection(selection, snapshot: list[str], eligible: list[str]) -> tu
 
     wanted = {s for s in chosen if s not in excluded}
     for s in sorted(wanted - set(eligible)):
-        notes.append(f"{s} 已不在可确认的待处理申请中")
+        notes.append(f"{s} 已不在可{verb}的待处理申请中")
     ordered = [s for s in eligible if s in wanted]
     if len(ordered) > MAX_BATCH_SIZE:
-        notes.append(f"一次最多确认 {MAX_BATCH_SIZE} 笔，其余 {len(ordered) - MAX_BATCH_SIZE} 笔请稍后再次确认")
+        notes.append(f"一次最多{verb} {MAX_BATCH_SIZE} 笔，其余 {len(ordered) - MAX_BATCH_SIZE} 笔请稍后再次{verb}")
         ordered = ordered[:MAX_BATCH_SIZE]
     return ordered, notes
 
@@ -467,6 +500,46 @@ def prepare_batch(db: DBSession, serials: list[str], direction: str, notes: list
             if not kept:
                 break
     return PreparedBatch(serials=kept, targets=targets, preview_picks=preview, notes=notes)
+
+
+def prepare_cancel_batch(db: DBSession, serials: list[str], direction: str, context: dict,
+                         notes: list[str] | None = None) -> PreparedBatch:
+    """
+    Cancel counterpart of prepare_batch: drops every request this caller
+    can't cancel right now, with the same rules the single cancel's locked
+    lookup applies (handlers/uchoice/cancel_request.cancellation_rejection),
+    unlocked here -- execution re-checks under lock. No picks to simulate.
+    """
+    from handlers.uchoice.cancel_request import cancellation_rejection
+    from models.service import ServiceType
+
+    notes = list(notes or [])
+    targets: dict[str, BatchTarget] = {}
+    kept: list[str] = []
+    for serial in serials:
+        target = load_target(db, serial)
+        if target is None:
+            notes.append(f"{serial}：未找到该申请")
+            continue
+        if target.log.status != "processing":
+            notes.append(f"{serial}：当前状态为「{target.log.status}」，无法取消")
+            continue
+        service = db.query(ServiceType).filter_by(service_type_id=target.log.service_type_id).first()
+        reason = cancellation_rejection(target.log, service.name if service else None, direction, context)
+        if reason:
+            notes.append(f"{serial}：{reason}")
+            continue
+        targets[serial] = target
+        kept.append(serial)
+    return PreparedBatch(serials=kept, targets=targets, preview_picks={}, notes=notes)
+
+
+def prepare(db: DBSession, fam: BatchFamily, serials: list[str], context: dict,
+            notes: list[str] | None = None) -> PreparedBatch:
+    """The family's own prepare step."""
+    if fam.action == "cancel":
+        return prepare_cancel_batch(db, serials, fam.direction, context, notes)
+    return prepare_batch(db, serials, fam.direction, notes)
 
 
 def picks_match(expected: dict | None, actual: dict | None) -> bool:

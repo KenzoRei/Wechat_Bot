@@ -106,6 +106,8 @@ _KEFU_ENABLED_SERVICES = frozenset({
     # 2026-09-batch-completion-confirmation/plan.md).
     "confirm_inbound_completion_batch", "confirm_outbound_completion_batch",
     "cancel_inbound_request", "cancel_outbound_request",
+    # Batch cancellation -- Kefu only (docs/ai-collaboration/2026-10-cancel-batch/plan.md).
+    "cancel_inbound_request_batch", "cancel_outbound_request_batch",
     "adjust_storage", "recount_storage", "move_storage",
     # Label creation via YiDiDa -- previously Smart-Bot-only despite being
     # grantable through role_service_permission here too; the gap had no
@@ -323,15 +325,14 @@ def _with_voice_echo(voice: bool, transcript: str, reply_text: str) -> str:
 
 
 def _same_completion_family(a: str | None, b: str | None) -> bool:
-    """confirm_X_completion and confirm_X_completion_batch are one flow: a
-    single case pivots into a batch (and back) within the same case, so
-    moving between them is never a session conflict."""
+    """A single service and its batch counterpart are one flow (confirm_X_
+    completion / _batch, cancel_X_request / _batch): a single case pivots
+    into a batch (and back) within the same case, so moving between them is
+    never a session conflict. Families are distinct per action AND
+    direction -- confirm outbound and cancel outbound are not one flow."""
     from core import completion_batch
-    family = {
-        name: completion_batch.DIRECTION_BY_SERVICE[name]
-        for name in completion_batch.DIRECTION_BY_SERVICE
-    }
-    return a in family and b in family and family[a] == family[b]
+    fa, fb = completion_batch.family(a), completion_batch.family(b)
+    return fa is not None and fa is fb
 
 
 def _batch_confirm_with_selection_as_continuation(context: dict, session, ai_response):

@@ -95,6 +95,31 @@ def _drive_time_instructions(is_kefu: bool) -> str:
     )
 
 
+def _cancel_batch_instructions(service_names: set) -> str:
+    """
+    Batch cancellation (Kefu only, docs/ai-collaboration/2026-10-cancel-batch/
+    plan.md) -- the same selection-only contract as batch completion: the AI
+    proposes a `selection`, code resolves it against the numbered list the
+    user saw. Shown only to callers granted a cancel batch service.
+    """
+    if not service_names & {"cancel_inbound_request_batch", "cancel_outbound_request_batch"}:
+        return ""
+    return (
+        "  · 【批量取消】用户一次要取消两笔及以上申请（如\"全部取消\"\"1和3都取消\"\"取消 086 和 091\"\"除了第二个都取消\"）时："
+        "新会话用 service_type_name=cancel_outbound_request_batch（入库用 cancel_inbound_request_batch），"
+        "只取消一笔时仍用 cancel_outbound_request / cancel_inbound_request。"
+        "不论哪种，都只在 extracted_fields.selection 中给出用户的选择，不要填 reference_serial、reference_serials：\n"
+        "    - 全部/所有：{\"select_all\": true}\n"
+        "    - 按刚才列出的编号：{\"indices\": [1, 3]}（编号即列表中的序号，不要换算成申请编号）\n"
+        "    - 按申请编号：{\"serials\": [\"REQ-20260922-000086\"]}（可只写尾号如 \"086\"，但不能编造列表外的编号）\n"
+        "    - 除了某几条：{\"select_all\": true, \"exclude_indices\": [2]}\n"
+        "    若用户在一个取消申请会话中回复选择多条，同样返回 intent=continuation 并给出 selection，系统会自动转为批量取消。"
+        "表达不明确时不要猜测，selection 留空。\n"
+        "    批量取消摘要待确认时：用户回复\"放弃\"\"算了\"\"不取消了\"表示放弃本次批量取消，intent=cancel；"
+        "只有明确同意执行（如\"确认\"）才是 intent=confirm。\n"
+    )
+
+
 def _batch_selection_instructions(service_names: set) -> str:
     """
     Batch completion (Kefu only) -- the AI only ever proposes a `selection`;
@@ -247,6 +272,7 @@ def build_system_prompt(context: dict) -> str:
         "0/1/多条时提取 reference_serial 到 extracted_fields、如何询问用户等规则与上面 pending_inbound_requests / pending_outbound_requests 完全相同，"
         "不再重复——唯一区别是这里的候选范围是\"我自己可以取消的申请\"（或管理员可取消本群组内任意一条），而不是仓库待处理列表，"
         "取消操作不涉及 fulfillment_lines/received_lines 等实际出入库明细字段。\n"
+        + _cancel_batch_instructions(service_names) +
         "- members：将用户提到的人名与此列表的 display_name 匹配，提取 wechat_openid 填入 target_openid。\n"
         "- company_warehouses：办理 FedEx/UPS 快递标签（fedex_label/ups_label）时使用。"
         "【重要】客户如果只说了一个裸词仓库简称（如 LAX、DE、JFK、ORD、NJ，不带公司名、不带门牌号街道），"
