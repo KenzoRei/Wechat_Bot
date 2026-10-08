@@ -447,3 +447,38 @@ def test_single_cancel_by_admin_queues_the_creators_notice(world, monkeypatch):
     finally:
         db.close()
     assert _statuses(reqs) == ["cancelled"] and queued == 1
+
+
+def test_partial_result_reports_left_out_requests_real_status(world, monkeypatch):
+    """Audit: a request left out of a partial reply was never locked, so it
+    may have changed meanwhile -- the result shows its real status, never an
+    assumed "仍在处理中"."""
+    staff_id, me = _owner(world)
+    reqs = _requests(world, staff_id, 3)
+    processor = _ai(monkeypatch, [_ask("cancel_outbound_request_batch", {"select_all": True})])
+    summary = _turn(processor, me, "全部取消出库")
+    db = SessionLocal()
+    db.execute(text("update request_log set status='success' where log_id=:id"), {"id": reqs[1][0]})
+    db.commit()
+    db.close()
+    done = _turn(processor, me, "①③", summary.case_number)
+    assert "未纳入本次取消" in done.reply_text
+    assert f"{reqs[1][1]}（已完成）" in done.reply_text and "仍在处理中" not in done.reply_text
+    assert _statuses(reqs) == ["cancelled", "success", "cancelled"]
+
+
+def test_completion_partial_result_reports_real_status_too(world):
+    from core.result_message import _completion_batch_result_sections_builder
+    staff_id, _ = _owner(world)
+    reqs = _requests(world, staff_id, 2)
+    db = SessionLocal()
+    try:
+        db.execute(text("update request_log set status='cancelled' where log_id=:id"), {"id": reqs[1][0]})
+        db.commit()
+        context = {"result": {"batch_completed": []},
+                   "collected_fields": {"reference_serials": [reqs[0][1], reqs[1][1]]}}
+        sections = _completion_batch_result_sections_builder(context, db)
+    finally:
+        db.close()
+    left = next(s for s in sections if s["label"] == "未纳入本次确认")
+    assert left["items"] == [f"{reqs[0][1]}（仍在处理中）", f"{reqs[1][1]}（已取消）"]

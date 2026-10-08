@@ -490,11 +490,36 @@ def _completion_batch_result_sections_builder(context: dict, db: DBSession) -> l
     done = {e["serial_number"] for e in completed}
     left = [s for s in serials if s not in done]
     if left:
-        sections.append({"label": "未处理（仍在处理中）", "type": "list", "items": left})
+        sections.append({"label": "未纳入本次确认", "type": "list", "items": _current_status_items(db, left)})
 
     for code in warehouses:
         sections += _warehouse_storage_summary_sections(db, code, "仓当前库存")
     return sections
+
+
+_REQUEST_STATUS_LABELS = {
+    "processing": "仍在处理中",
+    "success": "已完成",
+    "cancelled": "已取消",
+    "failed": "已失败",
+    "timed_out": "已超时",
+    "stale": "已过期",
+}
+
+
+def _current_status_items(db: DBSession, serials: list[str]) -> list[str]:
+    """Requests a partial batch reply left out, each with its status as it
+    is now. They were never locked by the batch, so any of them may have
+    been completed or cancelled meanwhile -- never assume "仍在处理中"."""
+    from models.request_log import RequestLog
+
+    rows = {r.serial_number: r.status for r in db.query(RequestLog).filter(RequestLog.serial_number.in_(serials)).all()}
+    items = []
+    for serial in serials:
+        state = rows.get(serial)
+        label = _REQUEST_STATUS_LABELS.get(state, state) if state else "未找到"
+        items.append(f"{serial}（{label}）")
+    return items
 
 
 def _cancel_batch_result_sections_builder(context: dict, db: DBSession) -> list[dict]:
@@ -521,7 +546,7 @@ def _cancel_batch_result_sections_builder(context: dict, db: DBSession) -> list[
     done = {e["serial_number"] for e in cancelled}
     left = [s for s in serials if s not in done]
     if left:
-        sections.append({"label": "未取消（仍在处理中）", "type": "list", "items": left})
+        sections.append({"label": "未纳入本次取消", "type": "list", "items": _current_status_items(db, left)})
     return sections
 
 
