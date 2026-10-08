@@ -303,3 +303,102 @@ def test_no_fee_and_a_zero_amount_agree(message, ai):
 def test_no_fee_and_a_non_zero_amount_still_conflict():
     fields, reply = ic.apply_fee({"unpacking_fee": 450}, 0, "不收拆柜费，不对，450")
     assert "unpacking_fee" not in fields and reply == ic.ASK_FEE_AGAIN
+
+
+# ── 柜号 combination grid ─────────────────────────────────────────────────────
+# Every kind of typed 柜号 x every context it can appear in, with the AI's
+# value matching, missing, or "corrected". Each case states what the scan
+# of the typed message should find:
+#   ("set", v)    exactly one candidate, standard or 无 -> stored as v
+#   ("check", v)  exactly one non-standard candidate -> the double-check
+#   "none"        nothing recognized as a 柜号
+#   "ask"         several candidates -> asked again
+# The AI's value never decides (R8): it only matters when nothing was typed,
+# where a value from the AI means the bot asks rather than trusting it.
+
+CONTAINER_GRID = {
+    # statement      context            message                                answering  expected
+    ("standard", "reply"):          ("MSCU1234567", True, ("set", "MSCU1234567")),
+    ("standard", "not_asked"):      ("MSCU1234567", False, ("set", "MSCU1234567")),
+    ("standard", "anchored"):       ("柜号 MSCU1234567，拆柜费 450", False, ("set", "MSCU1234567")),
+    ("standard", "mixed"):          ("S2 72箱，MSCU1234567", False, ("set", "MSCU1234567")),
+    ("standard", "two"):            ("MSCU1234567 和 TGHU7654321", False, "ask"),
+    ("standard", "with_none"):      ("没有柜号，MSCU1234567", False, "ask"),
+
+    ("spaced", "reply"):            ("mscu 123-4567", True, ("set", "MSCU1234567")),
+    ("spaced", "not_asked"):        ("mscu 123-4567", False, ("set", "MSCU1234567")),
+    ("spaced", "anchored"):         ("柜号 mscu 123-4567，拆柜费 450", False, ("set", "MSCU1234567")),
+    ("spaced", "mixed"):            ("S2 72箱，mscu 123-4567", False, ("set", "MSCU1234567")),
+    ("spaced", "two"):              ("mscu 123-4567 和 TGHU7654321", False, "ask"),
+    ("spaced", "with_none"):        ("没有柜号，mscu 123-4567", False, "ask"),
+
+    ("non_standard", "reply"):      ("XYZ123", True, ("check", "XYZ123")),            # R9
+    ("non_standard", "not_asked"):  ("XYZ123", False, "none"),                        # unanchored, not container-shaped
+    ("non_standard", "anchored"):   ("柜号 XYZ123，拆柜费 450", False, ("check", "XYZ123")),
+    ("non_standard", "mixed"):      ("S2 72箱，XYZ123", False, "none"),
+    ("non_standard", "two"):        ("XYZ123 和 TGHU7654321", False, ("set", "TGHU7654321")),  # only the shaped one counts
+    ("non_standard", "with_none"):  ("没有柜号，柜号 XYZ123", False, "ask"),
+
+    ("short", "reply"):             ("MSCU123456", True, ("check", "MSCU123456")),
+    ("short", "not_asked"):         ("MSCU123456", False, ("check", "MSCU123456")),
+    ("short", "anchored"):          ("柜号 MSCU123456，拆柜费 450", False, ("check", "MSCU123456")),
+    ("short", "mixed"):             ("S2 72箱，MSCU123456", False, ("check", "MSCU123456")),
+    ("short", "two"):               ("MSCU123456 和 TGHU7654321", False, "ask"),
+    ("short", "with_none"):         ("没有柜号，MSCU123456", False, "ask"),
+
+    ("none_word", "reply"):         ("无", True, ("set", "无")),
+    ("none_word", "not_asked"):     ("无", False, ("set", "无")),
+    ("none_word", "anchored"):      ("柜号：无，拆柜费 450", False, ("set", "无")),
+    ("none_word", "mixed"):         ("S2 72箱，无", False, "none"),                    # a bare 无 inside text is not about the 柜号
+    ("none_word", "two"):           ("柜号：无，TGHU7654321", False, "ask"),
+    ("none_word", "with_none"):     ("柜号：无，没有柜号", False, ("set", "无")),       # the same answer twice
+
+    ("none_phrase", "reply"):       ("没有柜号", True, ("set", "无")),
+    ("none_phrase", "not_asked"):   ("没有柜号", False, ("set", "无")),
+    ("none_phrase", "anchored"):    ("入库 2托，没有柜号", False, ("set", "无")),
+    ("none_phrase", "mixed"):       ("S2 72箱，no container", False, ("set", "无")),
+    ("none_phrase", "two"):         ("没有柜号 和 TGHU7654321", False, "ask"),
+    ("none_phrase", "with_none"):   ("无柜号，没有柜号", False, ("set", "无")),
+
+    ("absent", "reply"):            ("好的", True, "none"),
+    ("absent", "not_asked"):        ("好的", False, "none"),
+    ("absent", "anchored"):         ("拆柜费 450", False, "none"),
+    ("absent", "mixed"):            ("S2 72箱 2托", False, "none"),
+    ("absent", "two"):              ("REQ-20261008-000141 和 S2", False, "none"),     # request IDs / SKU codes never count
+    ("absent", "with_none"):        ("确认", True, "none"),
+}
+
+
+def test_container_grid_covers_every_combination():
+    statements = {s for s, _ in CONTAINER_GRID}
+    contexts = {c for _, c in CONTAINER_GRID}
+    assert set(CONTAINER_GRID) == {(s, c) for s in statements for c in contexts}
+
+
+@pytest.mark.parametrize("statement, context", sorted(CONTAINER_GRID))
+@pytest.mark.parametrize("ai", ["missing", "matching", "corrected"])
+def test_container_grid(statement, context, ai):
+    message, answering, expected = CONTAINER_GRID[(statement, context)]
+    typed = expected[1] if isinstance(expected, tuple) else "MSCU1234567"
+    ai_value = {"missing": None, "matching": typed, "corrected": "ABCD7654321"}[ai]
+    start = {"container_number": "OLD0000000"}
+    fields, reply = ic.apply_container(dict(start), ai_value, message, answering=answering)
+    if expected == "none":
+        if ai == "missing":
+            assert (fields, reply) == (start, None), message
+        else:
+            assert "container_number" not in fields and reply == ic.ASK_CONTAINER_AGAIN, message
+    elif expected == "ask":
+        assert "container_number" not in fields and reply == ic.ASK_CONTAINER_AGAIN, message
+    elif expected[0] == "set":
+        assert fields.get("container_number") == expected[1] and reply is None, message
+        assert ic.PENDING_KEY not in fields, message
+    else:
+        assert "container_number" not in fields, message
+        assert fields[ic.PENDING_KEY] == {"field": "container_number", "value": expected[1]}, message
+        assert reply == ic.container_check_question(expected[1]), message
+
+
+def test_a_confirmed_non_standard_container_is_not_questioned_again():
+    fields, reply = ic.apply_container({ic.ACCEPTED_KEY: {"container_number": "XYZ123"}}, "XYZ123", "XYZ123", answering=True)
+    assert fields["container_number"] == "XYZ123" and reply is None

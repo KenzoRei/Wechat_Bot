@@ -99,8 +99,6 @@ def container_candidates(message: str, *, answering: bool) -> list[str]:
     if text.lower() in _NONE_WORDS:
         return [NONE_VALUE]
     found: list[str] = []
-    if _NONE_PHRASE.search(text):
-        found.append(NONE_VALUE)
     if answering and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9\s-]*", text):
         found.append(normalize_container(text))
     for m in _CONTAINER_ANCHOR.finditer(text):
@@ -110,6 +108,10 @@ def container_candidates(message: str, *, answering: bool) -> list[str]:
         found.append(normalize_container(token))
     if not found:
         found += [normalize_container(m.group(0)) for m in _CONTAINER_SHAPED.finditer(text)]
+    # A "no container" phrase never hides a container number in the same
+    # message: both together are contradictory and asked (柜号 grid).
+    if _NONE_PHRASE.search(text):
+        found.insert(0, NONE_VALUE)
     unique = []
     for value in found:
         if value and value not in unique:
