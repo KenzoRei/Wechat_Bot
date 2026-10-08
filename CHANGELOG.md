@@ -7,6 +7,16 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.8.1] - 2026-10-08
+
+### Fixed
+- **CI's offline test job.** Five Smart Robot 柜号 tests that need a real
+  PostgreSQL database weren't classified as database tests, so the offline
+  job (`pytest -m "not postgres and not live"`) ran them without one and
+  failed on v1.8.0. They now live in their own file, registered in
+  `tests/conftest.py`. Tests only; no change to the bot's behaviour and no
+  migration.
+
 ## [1.8.0] - 2026-10-08
 
 **Apply migration V41 immediately before this deploy, in the same window.**
