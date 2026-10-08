@@ -62,6 +62,8 @@ _SERVICE_LABELS = {
     "cancel_outbound_request": "取消出库申请",
     "confirm_outbound_completion_batch": "批量出库完成确认",
     "confirm_inbound_completion_batch": "批量入库完成确认",
+    "cancel_outbound_request_batch": "批量取消出库申请",
+    "cancel_inbound_request_batch": "批量取消入库申请",
 }
 
 
@@ -224,9 +226,9 @@ def _resolve_reference_serial(context: dict, session, service: dict) -> tuple[st
     footer = []
     if len(listed) > len(options):
         footer.append(f"还有 {len(listed) - len(options)} 笔未列出，可直接回复申请编号，或处理完后再次发起。")
-    batch_name = completion_batch.BATCH_SERVICE_BY_SINGLE.get(service.get("name"))
-    if batch_name and any(s.get("name") == batch_name for s in context.get("allowed_services") or []):
-        footer.append("回复编号确认，可多选（如「1 3」或「全部」）。")
+    fam = completion_batch.family(service.get("name"))
+    if fam and any(s.get("name") == fam.batch for s in context.get("allowed_services") or []):
+        footer.append(f"回复编号{fam.verb}，可多选（如「1 3」或「全部」）。")
     return render_kefu_outcome(CandidateAmbiguousOutcome(
         prompt=f"当前有 {len(listed)} 笔待处理的{label}，请问是哪一条？",
         options=options,
@@ -944,6 +946,13 @@ def cancel_kefu_turn(db: DBSession, context: dict, service: dict | None, session
     # naming it would read as if some real request had been cancelled.
     from core import completion_batch
     is_batch = service is not None and completion_batch.is_batch_service(service.get("name"))
+    fam = completion_batch.family(service.get("name")) if service is not None else None
+    if is_batch and fam is not None and fam.action == "cancel":
+        # "取消" said to a cancel batch abandons it; the wording must not
+        # suggest the selected requests were cancelled.
+        reply = "已放弃批量取消，未取消任何申请。"
+        _append(session, "assistant", reply)
+        return reply
     serial_number = log.serial_number if (owns_log and log is not None and not is_batch) else ""
     reply = render_kefu_outcome(ConfirmationCancelledOutcome(
         service_label=_service_label(service), serial_number=serial_number,
@@ -1012,7 +1021,8 @@ def deterministic_selection_response(context: dict, session, content: str):
         and fields.get("_candidate_snapshot")
     ):
         # Answering the batch's own "请问要确认哪几笔" list.
-        if (content or "").strip() in completion_batch.SELECT_ALL_REPLIES:
+        select_all = completion_batch.SELECT_ALL_REPLIES_BY_ACTION[completion_batch.family(service["name"]).action]
+        if (content or "").strip() in select_all:
             return continuation({"selection": {"select_all": True}})
         parsed = completion_batch.parse_partial_reply(content, len(fields["_candidate_snapshot"]))
         if parsed == completion_batch.AMBIGUOUS:
@@ -1068,11 +1078,11 @@ def _apply_completion_selection(db: DBSession, context: dict, service: dict, ses
     fields = session.collected_fields or {}
     if fields.get("reference_serial"):
         return None
-    direction = completion_batch.DIRECTION_BY_SERVICE[service["name"]]
-    candidates = (context.get("uchoice_candidates") or {}).get(completion_batch.CANDIDATE_KEY_BY_DIRECTION[direction]) or []
+    fam = completion_batch.family(service["name"])
+    candidates = (context.get("uchoice_candidates") or {}).get(fam.candidate_key) or []
     eligible = [c["serial_number"] for c in candidates if c.get("serial_number")]
     snapshot = fields.get("_candidate_snapshot") or completion_batch.snapshot_serials(candidates)
-    serials, notes = completion_batch.resolve_selection(selection, snapshot, eligible)
+    serials, notes = completion_batch.resolve_selection(selection, snapshot, eligible, fam.verb)
     if not serials:
         return None
     if len(serials) == 1:
@@ -1080,16 +1090,16 @@ def _apply_completion_selection(db: DBSession, context: dict, service: dict, ses
         context["collected_fields"] = session.collected_fields
         return None
 
-    batch_service = _allowed_service(context, completion_batch.BATCH_SERVICE_BY_SINGLE[service["name"]])
+    batch_service = _allowed_service(context, fam.batch)
     if batch_service is None:
-        reply = "当前仅支持逐条确认，请回复一个编号。"
+        reply = f"当前仅支持逐条{fam.verb}，请回复一个编号。"
         context["_reply"] = reply
         _append(session, "assistant", reply)
         return reply
 
     _switch_case_service(context, session, log, batch_service)
     session.collected_fields = {"_candidate_snapshot": snapshot}
-    prepared = completion_batch.prepare_batch(db, serials, direction, notes)
+    prepared = completion_batch.prepare(db, fam, serials, context, notes)
     return _render_batch(db, context, batch_service, session, log, prepared, snapshot=snapshot, allow_single_pivot=True)
 
 
@@ -1104,28 +1114,28 @@ def _apply_batch_turn(db: DBSession, context: dict, ai_response, service: dict, 
     from core import completion_batch
 
     fields = session.collected_fields or {}
-    direction = completion_batch.DIRECTION_BY_SERVICE[service["name"]]
+    fam = completion_batch.family(service["name"])
     current = fields.get("reference_serials") or []
     extracted = ai_response.extracted_fields or {}
 
     if context.get("_batch_reply_ambiguous"):
         n = len(current) or len(fields.get("_candidate_snapshot") or []) or completion_batch.MAX_BATCH_SIZE
-        prefix = "回复 **确认** 提交全部，或" if current else "请"
+        prefix = ("回复 **确认** 提交全部，或" if fam.action == "complete" else "回复 **确认** 取消全部，或") if current else "请"
         reply = (
-            f"未执行任何操作。{prefix}只回复要确认的编号（{completion_batch.circled(1)}–{completion_batch.circled(n)}），如：①③；"
-            "如某笔实际数量有出入，请先确认其他申请，再单独确认该笔。"
+            f"未执行任何操作。{prefix}只回复要{fam.verb}的编号（{completion_batch.circled(1)}–{completion_batch.circled(n)}），如：①③"
+            + ("；如某笔实际数量有出入，请先确认其他申请，再单独确认该笔。" if fam.action == "complete" else "。")
         )
         context["_reply"] = reply
         _append(session, "assistant", reply)
         return reply
 
-    if any(extracted.get(k) for k in completion_batch.QUANTITY_FIELDS):
+    if fam.action == "complete" and any(extracted.get(k) for k in completion_batch.QUANTITY_FIELDS):
         reply = "批量确认只按原申请数量处理。如某笔实际数量有出入，请先确认其他申请（回复编号），再单独确认该笔。"
         context["_reply"] = reply
         _append(session, "assistant", reply)
         return reply
 
-    candidates = (context.get("uchoice_candidates") or {}).get(completion_batch.CANDIDATE_KEY_BY_DIRECTION[direction]) or []
+    candidates = (context.get("uchoice_candidates") or {}).get(fam.candidate_key) or []
     eligible = [c["serial_number"] for c in candidates if c.get("serial_number")]
     # A fresh batch (no summary shown yet) creates its numbered snapshot now,
     # before resolution -- "全部" means exactly this capped, ordered list
@@ -1146,11 +1156,11 @@ def _apply_batch_turn(db: DBSession, context: dict, ai_response, service: dict, 
     if selection is None:
         serials, notes = [s for s in current if s in eligible], []
     else:
-        serials, notes = completion_batch.resolve_selection(selection, snapshot, eligible)
+        serials, notes = completion_batch.resolve_selection(selection, snapshot, eligible, fam.verb)
         if not current and isinstance(selection, dict) and selection.get("select_all") and len(eligible) > len(snapshot):
-            notes.append(f"还有 {len(eligible) - len(snapshot)} 笔未列出，完成本批后可再次确认")
+            notes.append(f"还有 {len(eligible) - len(snapshot)} 笔未列出，完成本批后可再次{fam.verb}")
 
-    prepared = completion_batch.prepare_batch(db, serials, direction, notes)
+    prepared = completion_batch.prepare(db, fam, serials, context, notes)
     return _render_batch(db, context, service, session, log, prepared, snapshot=snapshot, allow_single_pivot=not current)
 
 
@@ -1161,19 +1171,20 @@ def _render_batch_candidate_question(context: dict, service: dict, session, cand
     from core.kefu_outcomes import CandidateAmbiguousOutcome
     from core.kefu_response_renderer import render_kefu_outcome
 
-    label = completion_batch.DIRECTION_LABELS[completion_batch.DIRECTION_BY_SERVICE[service["name"]]]
+    fam = completion_batch.family(service["name"])
+    label = completion_batch.DIRECTION_LABELS[fam.direction]
     listed = [c for c in candidates if c.get("serial_number")]
     options = _pending_candidate_options(listed, completion_batch.MAX_BATCH_SIZE)
     footer = []
     if len(listed) > len(options):
         footer.append(f"还有 {len(listed) - len(options)} 笔未列出，可直接回复申请编号，或处理完后再次发起。")
-    footer.append("请回复要确认的编号（如「1 3」），或回复「全部」。")
+    footer.append(f"请回复要{fam.verb}的编号（如「1 3」），或回复「全部」。")
     session.collected_fields = {
         **(session.collected_fields or {}), "_candidate_snapshot": [o.candidate_key for o in options],
     }
     context["collected_fields"] = session.collected_fields
     reply = render_kefu_outcome(CandidateAmbiguousOutcome(
-        prompt=f"请问要确认哪几笔{label}申请？", options=options, footer=tuple(footer),
+        prompt=f"请问要{fam.verb}哪几笔{label}申请？", options=options, footer=tuple(footer),
     ))
     context["_reply"] = reply
     _append(session, "assistant", reply)
@@ -1185,14 +1196,15 @@ def _render_batch(
     snapshot: list[str], notice: str | None = None, allow_single_pivot: bool,
 ) -> str:
     from core import completion_batch
-    from core.confirmation import BATCH_CONFIRMATION_FOOTER
+    from core.confirmation import batch_confirmation_footer
 
-    direction = completion_batch.DIRECTION_BY_SERVICE[service["name"]]
+    fam = completion_batch.family(service["name"])
+    direction = fam.direction
     label = completion_batch.DIRECTION_LABELS[direction]
 
     if not prepared.serials:
         lines = [notice] if notice else []
-        lines.append(f"当前没有可批量确认的{label}申请。")
+        lines.append(f"当前没有可批量{fam.verb}的{label}申请。")
         lines += prepared.notes
         reply = "\n".join(lines)
         if _owns_log(session, log) and log.status in ("pending", "processing"):
@@ -1233,7 +1245,7 @@ def _render_batch(
         serial_number=None,
         service_display_name=build_display_name(service["name"], fields),
         sections=build_confirmation_sections(service["name"], fields, db),
-        footer=BATCH_CONFIRMATION_FOOTER,
+        footer=batch_confirmation_footer(fam.action),
     )
     if notice:
         reply = f"{notice}\n\n{reply}"
@@ -1244,6 +1256,10 @@ def _render_batch(
     _append(session, "assistant", reply)
     return reply
 
+
+# A request leaving 'processing' while a cancel batch waits was usually
+# completed by the warehouse, not by another canceller.
+_CANCEL_BLOCKED_STATUS_LABELS = {"success": "已被仓库确认完成"}
 
 _BLOCKED_STATUS_LABELS = {
     "cancelled": "已被取消",
@@ -1263,6 +1279,7 @@ def _finish_batch_stop(db: DBSession, context: dict, service: dict, session, log
     """
     from core import completion_batch
 
+    fam = completion_batch.family(service["name"])
     now = datetime.now(timezone.utc)
     if stop == "batch_failed":
         if log is not None:
@@ -1271,7 +1288,7 @@ def _finish_batch_stop(db: DBSession, context: dict, service: dict, session, log
             log.completed_at = now
         session.status = "failed"
         session.updated_at = now
-        reply = "批量确认处理失败，所有申请均未变动。请稍后重试，或逐条确认。"
+        reply = f"批量{fam.verb}处理失败，所有申请均未变动。请稍后重试，或逐条{fam.verb}。"
         context["_reply"] = reply
         _append(session, "assistant", reply)
         return reply
@@ -1295,7 +1312,8 @@ def _finish_batch_stop(db: DBSession, context: dict, service: dict, session, log
         if kind == "stock":
             why = "库存已变动，现有库存不足"
         elif info.get("target_status") in _BLOCKED_STATUS_LABELS:
-            why = _BLOCKED_STATUS_LABELS[info["target_status"]]
+            why = (_CANCEL_BLOCKED_STATUS_LABELS if fam.action == "cancel" else {}).get(
+                info["target_status"], _BLOCKED_STATUS_LABELS[info["target_status"]])
         else:
             # A validation rejection (direction/scope) already names the serial.
             who, why = "", info.get("message") or "无法处理"
@@ -1304,8 +1322,7 @@ def _finish_batch_stop(db: DBSession, context: dict, service: dict, session, log
             notice += "以下为剩余申请："
     session.status = "active"
     session.updated_at = now
-    direction = completion_batch.DIRECTION_BY_SERVICE[service["name"]]
-    prepared = completion_batch.prepare_batch(db, remaining, direction)
+    prepared = completion_batch.prepare(db, fam, remaining, context)
     return _render_batch(
         db, context, service, session, log, prepared,
         snapshot=fields.get("_candidate_snapshot") or [], notice=notice, allow_single_pivot=False,

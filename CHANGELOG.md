@@ -7,6 +7,37 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.7.0] - 2026-10-08
+
+**Migration V40 must be applied to production before this deploy.**
+
+### Added
+- **Cancel several outbound or inbound requests at once (Kefu).** `取消出库`
+  / `取消入库` shows the usual numbered list, now ending with
+  `回复编号取消，可多选（如「1 3」或「全部」）`.
+  - Picking two or more shows a summary of exactly those requests (goods,
+    destination, creator) with `取消后无法恢复`. `确认` cancels them all; a
+    number reply such as `①③` cancels only those; `放弃` does nothing.
+  - All-or-nothing: if a selected request can no longer be cancelled when
+    you confirm (e.g. the warehouse just completed it), nothing is
+    cancelled and the summary is shown again without it.
+  - The result lists each request with its creator, e.g. `REQ-…108（Harry）`.
+  - Picking just one keeps the single-cancel flow. Each original requester
+    is notified as before when someone else cancels their request.
+  - New services `cancel_inbound_request_batch` / `cancel_outbound_request_batch`
+    (V40), granted to the same roles as the single cancel services. Kefu
+    only; Smart Robot is unchanged.
+
+### Fixed
+- **Cancellation notices.** The "your request was cancelled" notice to a
+  Kefu requester raised `idempotency_key_collision` on every send (the
+  request ID was passed as text, not a UUID). The row was still saved, so
+  notices arrived, but every cancel logged a false error. Fixed.
+- **A failed cancellation notice can no longer undo the cancellation.**
+  Each notice now runs in its own savepoint; before, a database error while
+  preparing a notice could block the whole Kefu turn's commit. Applies to
+  single and batch cancels.
+
 ## [1.6.1] - 2026-10-07
 
 ### Added

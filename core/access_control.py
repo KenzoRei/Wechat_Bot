@@ -9,6 +9,8 @@ from models.role import Role, RoleServicePermission
 KEFU_ONLY_SERVICE_NAMES = frozenset({
     "confirm_inbound_completion_batch",
     "confirm_outbound_completion_batch",
+    "cancel_inbound_request_batch",
+    "cancel_outbound_request_batch",
 })
 
 

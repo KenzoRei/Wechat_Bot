@@ -63,6 +63,13 @@ def _completion_batch_result_title(service_type_name: str, context: dict) -> str
     return f"已完成 {count} 笔{label}确认，仓库最新库存如下"
 
 
+def _cancel_batch_result_title(service_type_name: str, context: dict) -> str:
+    result = context.get("result", {})
+    label = "入库" if result.get("batch_direction") == "inbound" else "出库"
+    count = len(result.get("batch_cancelled") or [])
+    return f"已取消 {count} 笔{label}申请"
+
+
 def _address_result_title(service_type_name: str, context: dict) -> str:
     mode = context.get("result", {}).get("mode", "更新")
     return f"地址已{mode}"
@@ -103,6 +110,8 @@ _RESULT_TITLE_BUILDERS: dict[str, Callable[[str, dict], str]] = {
     "confirm_outbound_completion": _outbound_completion_result_title,
     "confirm_inbound_completion_batch":  _completion_batch_result_title,
     "confirm_outbound_completion_batch": _completion_batch_result_title,
+    "cancel_inbound_request_batch":  _cancel_batch_result_title,
+    "cancel_outbound_request_batch": _cancel_batch_result_title,
     "upsert_address":              _address_result_title,
     "explain_service":             _explain_service_result_title,
     "cancel_inbound_request":      _cancel_inbound_result_title,
@@ -481,10 +490,63 @@ def _completion_batch_result_sections_builder(context: dict, db: DBSession) -> l
     done = {e["serial_number"] for e in completed}
     left = [s for s in serials if s not in done]
     if left:
-        sections.append({"label": "未处理（仍在处理中）", "type": "list", "items": left})
+        sections.append({"label": "未纳入本次确认", "type": "list", "items": _current_status_items(db, left)})
 
     for code in warehouses:
         sections += _warehouse_storage_summary_sections(db, code, "仓当前库存")
+    return sections
+
+
+_REQUEST_STATUS_LABELS = {
+    "processing": "仍在处理中",
+    "success": "已完成",
+    "cancelled": "已取消",
+    "failed": "已失败",
+    "timed_out": "已超时",
+    "stale": "已过期",
+}
+
+
+def _current_status_items(db: DBSession, serials: list[str]) -> list[str]:
+    """Requests a partial batch reply left out, each with its status as it
+    is now. They were never locked by the batch, so any of them may have
+    been completed or cancelled meanwhile -- never assume "仍在处理中"."""
+    from models.request_log import RequestLog
+
+    rows = {r.serial_number: r.status for r in db.query(RequestLog).filter(RequestLog.serial_number.in_(serials)).all()}
+    items = []
+    for serial in serials:
+        state = rows.get(serial)
+        label = _REQUEST_STATUS_LABELS.get(state, state) if state else "未找到"
+        items.append(f"{serial}（{label}）")
+    return items
+
+
+def _cancel_batch_result_sections_builder(context: dict, db: DBSession) -> list[dict]:
+    """
+    cancel_*_request_batch -- one line per cancelled request with its
+    creator (decision Q2: an admin cancelling several people's requests sees
+    whom they affected) and goods, then anything a partial reply left out.
+    """
+    from core.uchoice_context import get_original_fields, sku_label_map, _summarize_sku_lines
+    from models.request_log import RequestLog
+
+    result = context.get("result", {})
+    cancelled = result.get("batch_cancelled") or []
+    labels = sku_label_map(db)
+    items = []
+    for entry in cancelled:
+        log = db.query(RequestLog).filter_by(serial_number=entry["serial_number"]).first()
+        summary = _summarize_sku_lines((get_original_fields(db, log) or {}).get("sku_lines", []), labels) if log else ""
+        who = f'（{entry["created_by_name"]}）' if entry.get("created_by_name") else ""
+        items.append(f'{entry["serial_number"]}{who}：{summary}' if summary else f'{entry["serial_number"]}{who}')
+    sections = [{"label": None, "type": "list", "items": items}]
+
+    serials = (context.get("collected_fields") or {}).get("reference_serials") or []
+    done = {e["serial_number"] for e in cancelled}
+    left = [s for s in serials if s not in done]
+    if left:
+        sections.append({"label": "未纳入本次取消", "type": "list", "items": _current_status_items(db, left)})
     return sections
 
 
@@ -594,6 +656,8 @@ RESULT_BUILDERS: dict[str, Callable[[dict, DBSession], list[dict]]] = {
     "confirm_outbound_completion": _completion_result_sections_builder,
     "confirm_inbound_completion_batch":  _completion_batch_result_sections_builder,
     "confirm_outbound_completion_batch": _completion_batch_result_sections_builder,
+    "cancel_inbound_request_batch":  _cancel_batch_result_sections_builder,
+    "cancel_outbound_request_batch": _cancel_batch_result_sections_builder,
     "adjust_storage":              _adjust_result_sections_builder,
     "recount_storage":             _recount_result_sections_builder,
     "move_storage":                _move_result_sections_builder,

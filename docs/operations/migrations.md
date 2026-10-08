@@ -4,7 +4,7 @@
 **Owner:** Engineering and operations
 **Last verified against commit:** `3def0eb` (2026-09-25)
 
-Migrations are sequential SQL files under `db/migrations/`, currently V1-V39.
+Migrations are sequential SQL files under `db/migrations/`, currently V1-V40.
 The project does not use Alembic or Flyway. `scripts/apply_migrations.py`
 applies migrations numerically and records completed versions in
 `public.schema_migrations`.
@@ -27,6 +27,13 @@ Recording a version does not execute or validate its SQL.
 6. Verify schema constraints and seeded workflow rows after application.
 7. Test V1 through latest against an empty isolated PostgreSQL database before
    relying on bootstrap reproducibility.
+8. A migration that grants a new service must not restore revocations on a
+   rerun. `ON CONFLICT DO NOTHING` only skips grants that still exist; a grant
+   an admin deleted is inserted again. Grant only for service types the run
+   itself creates (see V40's temporary table). V33's comment claims its
+   `DO NOTHING` grant prevents re-adding a revoked grant; it does not, and a
+   V33 rerun would restore revoked batch-completion grants. V33 is applied
+   and is not edited (rule 1).
 
 Inspect pending migrations without applying them:
 

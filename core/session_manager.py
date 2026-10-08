@@ -467,14 +467,16 @@ def _build_uchoice_candidates(
                 db, access.group_id, pending_allowed_warehouses, [outbound_id]
             )
 
-    if "cancel_inbound_request" in names:
+    # Single OR batch (cancel-batch plan R3), as completion does above: a
+    # batch-only grant must still see the list its numbers refer to.
+    if names & {"cancel_inbound_request", "cancel_inbound_request_batch"}:
         inbound_id = _service_type_id_by_name(db, "uchoice_inbound_request")
         if inbound_id:
             candidates["cancelable_inbound_requests"] = uchoice_context.cancelable_request_candidates(
                 db, access.group_id, [inbound_id], access
             )
 
-    if "cancel_outbound_request" in names:
+    if names & {"cancel_outbound_request", "cancel_outbound_request_batch"}:
         outbound_id = _service_type_id_by_name(db, "uchoice_outbound_request")
         if outbound_id:
             candidates["cancelable_outbound_requests"] = uchoice_context.cancelable_request_candidates(
