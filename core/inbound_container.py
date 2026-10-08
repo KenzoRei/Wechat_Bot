@@ -49,7 +49,12 @@ _NUMBER = re.compile(r"-?(?:\d{1,3}(?:,\d{3})+|\d+)?(?:\.\d*)?")
 _QUANTITY_UNITS = ("箱", "托", "板", "件", "pcs", "ctn", "plt", "pallet", "box")
 _CURRENCY_AFTER = ("usd", "美元", "美金", "元", "块")
 _FEE_WORDS = ("拆柜费", "拆箱费", "拆柜", "费用", "收费", "收")
-_NO_FEE_PHRASES = ("不收拆柜费", "不收费", "免拆柜费", "不收")
+# Fee-specific only: a bare 不收 also appears in unrelated text (不收货了),
+# and code acts on these without the AI (implementation audit round 2).
+_NO_FEE_PHRASES = ("不收拆柜费", "不收费", "免拆柜费", "拆柜费免", "免收拆柜费", "无拆柜费", "没有拆柜费", "不需要拆柜费")
+# A message that is nothing but one amount -- the usual reply to the fee
+# question -- states the fee explicitly.
+_AMOUNT_ONLY = re.compile(r"^\s*(?:\$|usd)?\s*-?[\d,]*\.?\d*\s*(?:usd|美元|美金|元|块)?\s*$", re.I)
 
 
 # ── 柜号 ─────────────────────────────────────────────────────────────────────
@@ -172,13 +177,16 @@ def explicit_fee_candidates(message: str) -> tuple[list[Decimal], list[str]]:
     Only fees the message states explicitly: anchored amounts and no-fee
     phrases (不收拆柜费 -> 0). Code takes one of these even when the AI
     extracted nothing (implementation audit: a typed "拆柜费 500" or
-    "不收拆柜费" must never be ignored). A lone bare number is not explicit:
-    it still needs the AI to have read it as the fee.
+    "不收拆柜费" must never be ignored), and a message that is nothing but
+    one amount ("500", "0", "$500"). A bare number inside other text is not
+    explicit: it still needs the AI to have read it as the fee.
     """
     text = _strip_request_ids(message or "")
     if _no_fee_stated(text):
         return [Decimal("0")], []
-    anchored, _bare = _anchored_and_bare(text)
+    anchored, bare = _anchored_and_bare(text)
+    if not anchored and len(bare) == 1 and _AMOUNT_ONLY.match(text):
+        return _split_malformed(bare)
     return _split_malformed(anchored)
 
 

@@ -166,8 +166,19 @@ def test_explicit_typed_fee_is_used_when_the_ai_misses_it(message, fee):
     assert fields == {"unpacking_fee": fee} and reply is None
 
 
-def test_bare_number_without_the_ais_reading_changes_nothing():
-    assert ic.apply_fee({"unpacking_fee": 450}, None, "500") == ({"unpacking_fee": 450}, None)
+@pytest.mark.parametrize("message", ["第2个", "先收500箱再说", "不收货了", "好的，不收货"])
+def test_unrelated_text_without_the_ais_reading_changes_nothing(message):
+    """Round 2: a number inside other text, or 不收 not about the fee, never
+    changes the fee without the AI."""
+    assert ic.apply_fee({"unpacking_fee": 450}, None, message) == ({"unpacking_fee": 450}, None)
+
+
+@pytest.mark.parametrize("message, fee", [("500", 500), ("0", 0), ("$500", 500), ("500元", 500), ("不收费", 0)])
+def test_a_reply_that_is_only_an_amount_is_used(message, fee):
+    """Round 2: the plan's "a valid amount, or 0" -- the usual reply to the
+    fee question -- applies and clears a rejected fee even if the AI missed it."""
+    fields, reply = ic.apply_fee({"unpacking_fee": 450, ic.INVALID_FEE_KEY: True}, None, message)
+    assert fields == {"unpacking_fee": fee} and reply is None
 
 
 def test_two_explicit_fees_without_the_ai_ask_again():

@@ -392,3 +392,20 @@ def test_no_fee_phrase_clears_a_rejected_fee(receipt, monkeypatch):
     _turn(p, r["me"], "确认", first.case_number)
     res = _result(r["log_id"])
     assert res["status"] == "success" and res["result"]["unpacking_fee"] == 0
+
+
+def test_amount_only_reply_clears_a_rejected_fee_and_unrelated_text_keeps_it(receipt, monkeypatch):
+    """Implementation audit round 2: `0` alone (AI missed it) clears a
+    rejected fee; `不收货了` never touches the fee."""
+    r = receipt("MSCU1234567")
+    p = _processor(monkeypatch, _open(r, _ai(unpacking_fee=450), _ai(), _ai(unpacking_fee=45.55), _ai(), _ai("confirm")))
+    first = _start_receipt(p, r)
+    _turn(p, r["me"], "拆柜费 450", first.case_number)
+    kept = _turn(p, r["me"], "不收货了", first.case_number)
+    assert "拆柜费：$450" in kept.reply_text
+    _turn(p, r["me"], "拆柜费 45.555", first.case_number)
+    shown = _turn(p, r["me"], "0", first.case_number)
+    assert "拆柜费：$0" in shown.reply_text
+    _turn(p, r["me"], "确认", first.case_number)
+    res = _result(r["log_id"])
+    assert res["status"] == "success" and res["result"]["unpacking_fee"] == 0
