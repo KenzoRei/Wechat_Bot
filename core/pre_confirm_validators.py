@@ -854,6 +854,31 @@ def _valid_label_phone_numbers(context: dict, collected_fields: dict, db: DBSess
     return None
 
 
+def _valid_label_states(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """
+    fedex_label/ups_label: a US shipper/recipient state must be a real
+    two-letter code once normalized (core.us_state), so a misspelling or a
+    made-up state is asked about now instead of rejected by the carrier
+    after the fact. Non-US addresses (country given and not US) are skipped.
+    """
+    del context
+    from core.us_state import US_STATE_CODES, is_us_country, to_state_abbr
+
+    for side, label in (("shipper", "寄件人"), ("recipient", "收件人")):
+        value = collected_fields.get(f"{side}_state")
+        if value is None or value == "" or not is_us_country(collected_fields.get(f"{side}_country")):
+            continue
+        # A non-string (list/dict from a malformed extraction) is never a code.
+        if not isinstance(value, str) or to_state_abbr(value) not in US_STATE_CODES:
+            return f"{label}州「{value}」无法识别，请提供美国州名或两位字母缩写（如 CA、NY）。"
+    return None
+
+
+def _valid_label(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    return (_valid_label_phone_numbers(context, collected_fields, db)
+            or _valid_label_states(context, collected_fields, db))
+
+
 PRE_CONFIRM_VALIDATORS = {
     "role_change": _compose(
         _valid_role_change_target_and_role,
@@ -887,8 +912,8 @@ PRE_CONFIRM_VALIDATORS = {
     "view_storage_history": _valid_caller_warehouse_scope,
     "view_invoice": _valid_invoice_warehouses,
     "upsert_address": _valid_upsert_address_warehouse_scope,
-    "fedex_label": _valid_label_phone_numbers,
-    "ups_label": _valid_label_phone_numbers,
+    "fedex_label": _valid_label,
+    "ups_label": _valid_label,
     "confirm_outbound_completion": _compose(
         _valid_outbound_completion_skus,
         _loose_outbound_pick_required,

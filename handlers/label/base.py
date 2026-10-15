@@ -103,9 +103,12 @@ class YDDLabelBaseHandler(BaseHandler):
         # apply defaults for optional fields not provided by customer
         default_service_level = "FEDEX_GROUND" if carrier == "fedex" else "UPS_GROUND"
 
+        # Safety net: warehouse presets and older sessions may still hold a
+        # full state name; the carrier API wants the two-letter code.
+        from core.us_state import normalize_label_states
         api_fields = {
             "service_level": default_service_level,   # overridden if customer provided it
-            **fields,
+            **normalize_label_states(fields),
             "ydd_cust_id":      username,
             "ydd_channel_id":   channel_id,
             "ke_hu_dan_hao":    _generate_ke_hu_dan_hao(context, billing_customer_id),

@@ -233,7 +233,8 @@ def _label_quote_section(carrier: str, collected_fields: dict, db: DBSession) ->
         return None
 
     try:
-        quote_fields = {**collected_fields, "ydd_cust_id": username, "ydd_channel_id": channel_id}
+        from core.us_state import normalize_label_states
+        quote_fields = {**normalize_label_states(collected_fields), "ydd_cust_id": username, "ydd_channel_id": channel_id}
         sales_amount = get_price_quote(fields=quote_fields, api_key=password)["sales_amount"]
     except Exception as exc:
         logger.warning(
@@ -278,6 +279,10 @@ def _label_sections_builder(carrier: str) -> Callable[[dict, DBSession], list[di
 
     def builder(collected_fields: dict, db: DBSession) -> list[dict]:
         """FedEx/UPS — preserves the original shipper/recipient/package grouping."""
+        # States are stored as the user said them (the country may arrive in a
+        # later turn); abbreviate only here, on the complete merged fields.
+        from core.us_state import normalize_label_states
+        collected_fields = normalize_label_states(collected_fields)
         oms_order_no = collected_fields.get("oms_outbound_order_no")
         shipper   = {_field_label(k): _display_value(v) for k, v in collected_fields.items() if k.startswith("shipper_")}
         recipient = {_field_label(k): _display_value(v) for k, v in collected_fields.items() if k.startswith("recipient_")}
