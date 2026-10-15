@@ -862,14 +862,14 @@ def _valid_label_states(context: dict, collected_fields: dict, db: DBSession) ->
     after the fact. Non-US addresses (country given and not US) are skipped.
     """
     del context
-    from core.us_state import US_STATE_CODES, to_state_abbr
+    from core.us_state import US_STATE_CODES, is_us_country, to_state_abbr
 
     for side, label in (("shipper", "寄件人"), ("recipient", "收件人")):
         value = collected_fields.get(f"{side}_state")
-        country = str(collected_fields.get(f"{side}_country") or "US").strip().upper()
-        if value is None or country not in ("US", "USA", "UNITED STATES"):
+        if value is None or value == "" or not is_us_country(collected_fields.get(f"{side}_country")):
             continue
-        if to_state_abbr(value) not in US_STATE_CODES:
+        # A non-string (list/dict from a malformed extraction) is never a code.
+        if not isinstance(value, str) or to_state_abbr(value) not in US_STATE_CODES:
             return f"{label}州「{value}」无法识别，请提供美国州名或两位字母缩写（如 CA、NY）。"
     return None
 

@@ -19,6 +19,18 @@ def test_normalize_label_states_only_touches_state_fields():
     assert out == {"shipper_state": "FL", "recipient_state": "NJ", "recipient_city": "Newark"}
 
 
+def test_normalize_is_country_aware_per_side():
+    out = normalize_label_states({
+        "shipper_state": "Florida", "recipient_state": "Maryland", "recipient_country": "LR",
+    })
+    assert out == {"shipper_state": "FL", "recipient_state": "Maryland", "recipient_country": "LR"}
+
+
+@pytest.mark.parametrize("bad", [["CA"], {"a": 1}, 5])
+def test_validator_rejects_non_string_state_without_crashing(bad):
+    assert _valid_label_states({}, {"recipient_state": bad}, None)
+
+
 @pytest.mark.parametrize("service", ["fedex_label", "ups_label"])
 def test_sanitizer_abbreviates_label_states(service):
     out = sanitize_extracted_fields_before_persistence(

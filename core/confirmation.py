@@ -233,7 +233,8 @@ def _label_quote_section(carrier: str, collected_fields: dict, db: DBSession) ->
         return None
 
     try:
-        quote_fields = {**collected_fields, "ydd_cust_id": username, "ydd_channel_id": channel_id}
+        from core.us_state import normalize_label_states
+        quote_fields = {**normalize_label_states(collected_fields), "ydd_cust_id": username, "ydd_channel_id": channel_id}
         sales_amount = get_price_quote(fields=quote_fields, api_key=password)["sales_amount"]
     except Exception as exc:
         logger.warning(

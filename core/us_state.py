@@ -36,10 +36,19 @@ def to_state_abbr(value):
     return _NAME_TO_ABBR.get(key, value)
 
 
+def is_us_country(value) -> bool:
+    """True for a missing country (labels default to US) or a US spelling."""
+    if value is None or value == "":
+        return True
+    return isinstance(value, str) and value.strip().upper() in ("US", "USA", "UNITED STATES")
+
+
 def normalize_label_states(fields: dict) -> dict:
-    """A copy of `fields` with shipper_state / recipient_state abbreviated."""
+    """A copy of `fields` with shipper_state / recipient_state abbreviated,
+    side by side only where that side's country is the US."""
     out = dict(fields)
     for name in LABEL_STATE_FIELDS:
-        if name in out:
+        side = name.split("_", 1)[0]
+        if name in out and is_us_country(out.get(f"{side}_country")):
             out[name] = to_state_abbr(out[name])
     return out
