@@ -64,10 +64,6 @@ def sanitize_extracted_fields_before_persistence(service_name: str, extracted_fi
     if service_name == "role_change":
         return _sanitize_role_change_fields_before_persistence(extracted_fields, db, group_id)
 
-    if service_name in ("fedex_label", "ups_label"):
-        from core.us_state import normalize_label_states
-        return normalize_label_states(extracted_fields)
-
     field_name = _SKU_LINES_FIELD_BY_SERVICE.get(service_name)
     if not field_name or field_name not in (extracted_fields or {}):
         return extracted_fields

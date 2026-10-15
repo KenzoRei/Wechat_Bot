@@ -32,10 +32,18 @@ def test_validator_rejects_non_string_state_without_crashing(bad):
 
 
 @pytest.mark.parametrize("service", ["fedex_label", "ups_label"])
-def test_sanitizer_abbreviates_label_states(service):
-    out = sanitize_extracted_fields_before_persistence(
-        service, {"shipper_state": "Delaware", "recipient_state": "Texas"}, db=None)
-    assert out == {"shipper_state": "DE", "recipient_state": "TX"}
+def test_sanitizer_keeps_state_as_said_so_a_later_country_still_applies(service):
+    stored = sanitize_extracted_fields_before_persistence(service, {"recipient_state": "Maryland"}, db=None)
+    assert stored == {"recipient_state": "Maryland"}
+    merged = {**stored, "recipient_country": "LR"}   # country arrives next turn
+    assert normalize_label_states(merged)["recipient_state"] == "Maryland"
+
+
+def test_confirmation_shows_abbreviated_state():
+    from core.confirmation import _label_sections_builder
+    sections = _label_sections_builder("fedex")({"recipient_state": "California"}, None)
+    recipient = next(s for s in sections if s["label"] == "收件人")
+    assert list(recipient["items"].values()) == ["CA"]
 
 
 def test_validator_rejects_unknown_us_state_but_skips_non_us():
