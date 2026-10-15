@@ -440,6 +440,7 @@ def build_system_prompt(context: dict) -> str:
    - country   → shipper_country   或 recipient_country
 3. 将这些字段直接写入 extracted_fields，无需向客户询问
 4. 仅询问预设未覆盖的剩余必填字段（通常只剩 weight_lbs）
+5. shipper_state / recipient_state 一律填美国州的两位大写字母缩写（如 California → CA，new york → NY）。
 """
 
 
