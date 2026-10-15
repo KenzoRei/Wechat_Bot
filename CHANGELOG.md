@@ -7,6 +7,20 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.9.0] - 2026-10-15
+
+No migration.
+
+### Changed
+- **FedEx/UPS label states are two capital letters.** `shipper_state` and
+  `recipient_state` are sent to the carrier, shown on the confirmation and
+  used for the price quote as the USPS code ("California" / "ny" -> `CA` /
+  `NY`). The value is stored as the user said it and abbreviated only on the
+  merged fields, so a country that arrives in a later turn still applies;
+  non-US addresses are left unchanged. An unrecognized US state is asked
+  about again before confirmation instead of being rejected by the carrier.
+  The extraction prompt now keeps the stated or preset state as-is.
+
 ## [1.8.1] - 2026-10-08
 
 ### Fixed
