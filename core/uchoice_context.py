@@ -46,7 +46,17 @@ def sku_catalog(db: DBSession, warehouse_code: str | None = None) -> list[dict]:
         return [{"sku_code": s.sku_code, "description": s.description} for s in rows]
 
     buckets = db.query(UchoiceStorage).filter_by(warehouse_code=warehouse_code).all()
-    stocked_skus = {b.sku_code for b in buckets if b.pallet_count > 0}
+    physical: dict[str, int] = {}
+    for b in buckets:
+        physical[b.sku_code] = physical.get(b.sku_code, 0) + max(0, b.pallet_count) * b.boxes_per_pallet
+    # in_stock means available to schedule: stock fully held by confirmed,
+    # uncompleted outbounds is not a usable disambiguating signal.
+    try:
+        from core.outbound_reservation import scheduled_boxes
+        held = scheduled_boxes(db, warehouse_code)
+    except Exception:
+        held = {}
+    stocked_skus = {sku for sku, boxes in physical.items() if boxes - held.get(sku, 0) > 0}
     return [
         {"sku_code": s.sku_code, "description": s.description, "in_stock": s.sku_code in stocked_skus}
         for s in rows

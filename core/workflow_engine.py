@@ -865,6 +865,19 @@ def _resolve_outbound_pallet_defaults(context: dict, session, db: DBSession) -> 
     return None
 
 
+def _shortage_lines(sku_labels: dict[str, str], shortages: list, skip: set | None = None) -> list[str]:
+    from core.outbound_reservation import shortage_text
+
+    return [shortage_text(sku_labels.get(s.sku_code, s.sku_code), s) for s in shortages if s.sku_code not in (skip or ())]
+
+
+def _outbound_shortage_message(db: DBSession, warehouse_code: str | None, shortages: list) -> str:
+    from core.uchoice_context import sku_label_map
+
+    lines_text = "；".join(_shortage_lines(sku_label_map(db), shortages))
+    return f"申请已取消：{warehouse_code} 仓库没有足够库存可满足此次出库——{lines_text}。请核实商品规格或数量后重新提交。"
+
+
 def _reject_invalid_outbound_stock(context: dict, session, db: DBSession) -> bool:
     """
     A palletized outbound line's boxes_per_pallet — whether stated by the
@@ -925,13 +938,22 @@ def _reject_invalid_outbound_stock(context: dict, session, db: DBSession) -> boo
         if available < pallet_count:
             problems.append((line.get("sku_code"), bpp, available, pallet_count))
 
-    if not problems:
+    # The bucket check above only covers palletized lines against physical
+    # buckets. Every line, loose or palletized, must also fit within the
+    # SKU's available boxes (physical minus confirmed, uncompleted outbounds).
+    from core.outbound_reservation import stock_shortages
+    shortages = stock_shortages(db, fields, session.request_log_id)
+
+    if not problems and not shortages:
         return False
 
     sku_labels = sku_label_map(db)
     lines_text = "；".join(
-        f"{sku_labels.get(sku, sku)}@{bpp}/托 现有 {available} 托，申请 {requested} 托"
-        for sku, bpp, available, requested in problems
+        [
+            f"{sku_labels.get(sku, sku)}@{bpp}/托 现有 {available} 托，申请 {requested} 托"
+            for sku, bpp, available, requested in problems
+        ]
+        + _shortage_lines(sku_labels, shortages, skip={sku for sku, *_ in problems})
     )
     message = f"申请已取消：{warehouse_code} 仓库没有足够库存可满足此次出库——{lines_text}。请核实商品规格或数量后重新提交。"
 
@@ -1197,6 +1219,24 @@ def _execute_workflow_and_finish(context: dict, session, db: DBSession) -> None:
     targets_existing_request = bool(
         service_for_split_check.get("targets_existing_request", False)
     ) if service_for_split_check else False
+    if (
+        service_name_for_split_check == "uchoice_outbound_request"
+        and session.request_log_id
+        and not targets_existing_request
+    ):
+        # Reservations only count once a log is 'processing', and stock was
+        # last checked while collecting fields: re-check under the storage
+        # lock. mark_processing's commit below is what releases that lock,
+        # so a concurrent confirm of the same SKU sees this reservation.
+        from core.outbound_reservation import locked_stock_shortages
+
+        shortages = locked_stock_shortages(db, session.collected_fields or {}, session.request_log_id)
+        if shortages:
+            warehouse_code = (session.collected_fields or {}).get("warehouse_code")
+            request_logger.mark_cancelled(db, session.request_log_id)
+            session_manager.close_session(db, session, status="cancelled")
+            send_message(context, _outbound_shortage_message(db, warehouse_code, shortages))
+            return
     if session.request_log_id and not targets_existing_request:
         request_logger.mark_processing(db, session.request_log_id)
 

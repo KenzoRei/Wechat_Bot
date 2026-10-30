@@ -4,6 +4,7 @@ from core import kefu_turn_apply
 def test_pallet_request_compares_total_boxes_across_source_buckets(monkeypatch):
     monkeypatch.setattr("core.uchoice_context.sku_label_map", lambda db: {"s2": "S2 Stretch Wrap"})
     monkeypatch.setattr("core.uchoice_storage.available_box_count", lambda db, wh, sku: 144)
+    monkeypatch.setattr("core.outbound_reservation.scheduled_boxes", lambda db, wh, exclude_log_id=None: {})
 
     error = kefu_turn_apply._outbound_stock_error(object(), {
         "warehouse_code": "JFK",
@@ -16,6 +17,7 @@ def test_pallet_request_compares_total_boxes_across_source_buckets(monkeypatch):
 def test_pallet_request_rejects_by_requested_and_available_box_counts(monkeypatch):
     monkeypatch.setattr("core.uchoice_context.sku_label_map", lambda db: {"s2": "S2 Stretch Wrap"})
     monkeypatch.setattr("core.uchoice_storage.available_box_count", lambda db, wh, sku: 143)
+    monkeypatch.setattr("core.outbound_reservation.scheduled_boxes", lambda db, wh, exclude_log_id=None: {})
 
     error = kefu_turn_apply._outbound_stock_error(object(), {
         "warehouse_code": "JFK",
@@ -29,6 +31,7 @@ def test_pallet_request_rejects_by_requested_and_available_box_counts(monkeypatc
 def test_repeated_sku_lines_are_aggregated_before_feasibility(monkeypatch):
     monkeypatch.setattr("core.uchoice_context.sku_label_map", lambda db: {"s2": "S2 Stretch Wrap"})
     monkeypatch.setattr("core.uchoice_storage.available_box_count", lambda db, wh, sku: 143)
+    monkeypatch.setattr("core.outbound_reservation.scheduled_boxes", lambda db, wh, exclude_log_id=None: {})
 
     error = kefu_turn_apply._outbound_stock_error(object(), {
         "warehouse_code": "JFK",

@@ -266,10 +266,15 @@ def _render_parked_outbound_expired(o: ParkedOutboundExpiredOutcome) -> str:
 
 
 def _render_insufficient_stock(o: InsufficientStockOutcome) -> str:
-    lines = "\n".join(
-        f"- {s.sku_label}：申请 {s.requested_boxes} 箱，{o.warehouse_label}仓现有 {s.available_boxes} 箱"
-        for s in o.shortages
-    )
+    def line(s) -> str:
+        if not s.held_boxes:
+            return f"- {s.sku_label}：申请 {s.requested_boxes} 箱，{o.warehouse_label}仓现有 {s.available_boxes} 箱"
+        return (
+            f"- {s.sku_label}：申请 {s.requested_boxes} 箱，{o.warehouse_label}仓可用 {s.available_boxes} 箱"
+            f"（现有 {s.available_boxes + s.held_boxes} 箱，其中 {s.held_boxes} 箱已被其他待出库申请占用）"
+        )
+
+    lines = "\n".join(line(s) for s in o.shortages)
     return f"申请已取消：{o.warehouse_label} 仓库库存不足——\n{lines}\n请核实商品规格或数量后重新提交。"
 
 
