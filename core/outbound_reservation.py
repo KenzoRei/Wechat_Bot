@@ -129,6 +129,11 @@ def locked_stock_shortages(db: DBSession, fields: dict, exclude_log_id=None) -> 
     if not warehouse or not required:
         return []
     rows = acquire_storage_scopes(db, [(warehouse, sku) for sku in required])
+    # acquire_storage_scopes' query returns identity-mapped objects as they
+    # were loaded earlier in this session. Refresh the now-locked rows so the
+    # check sees what other transactions committed while we waited.
+    for row in rows:
+        db.refresh(row)
     physical_by_sku: dict[str, int] = {}
     for row in rows:
         physical_by_sku[row.sku_code] = physical_by_sku.get(row.sku_code, 0) + max(0, row.pallet_count) * row.boxes_per_pallet

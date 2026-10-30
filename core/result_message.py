@@ -213,6 +213,13 @@ def _sku_bucket_sections(rows: list[dict], sku_labels: dict[str, str], notes: di
             if notes and sku_code in notes:
                 items.append(notes[sku_code])
             sections.append({"label": f"{label}（合计 {total} 托）", "type": "list", "items": items})
+    # A SKU can be scheduled out while having no physical pallets left (a
+    # recount or adjustment took them); its shortfall line must still show.
+    for sku_code in sorted(set(notes or {}) - set(by_sku)):
+        sections.append({
+            "label": None, "type": "list",
+            "items": [f"{sku_labels.get(sku_code, sku_code)}：0 托", notes[sku_code]],
+        })
     return sections
 
 
@@ -235,13 +242,20 @@ def _storage_sections_builder(context: dict, db: DBSession) -> list[dict]:
 
     result = context.get("result", {})
     rows = result.get("storage_rows") or []
-    if not rows:
-        return [{"label": None, "type": "list", "items": ["（无匹配记录）"]}]
-
     sku_labels = sku_label_map(db)
     by_warehouse: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         by_warehouse[r["warehouse_code"]].append(r)
+    if not rows:
+        # No physical stock in scope, but scheduled outbounds may still
+        # exceed it -- keep that visible instead of "no records".
+        fields = context.get("collected_fields") or {}
+        scope = [fields["warehouse_code"]] if fields.get("warehouse_code") else (context.get("warehouse_codes") or [])
+        for warehouse_code in sorted(scope):
+            if _schedule_notes(db, warehouse_code):
+                by_warehouse[warehouse_code] = []
+        if not by_warehouse:
+            return [{"label": None, "type": "list", "items": ["（无匹配记录）"]}]
 
     sections = []
     any_scheduled = False
@@ -439,7 +453,7 @@ def _warehouse_storage_summary_sections(db: DBSession, warehouse_code: str | Non
     )
     rows = [{"sku_code": r.sku_code, "boxes_per_pallet": r.boxes_per_pallet, "pallet_count": r.pallet_count} for r in orm_rows]
     sku_labels = sku_label_map(db)
-    if not rows:
+    if not rows and not _schedule_notes(db, warehouse_code):
         return [{"label": f"{warehouse_code} {label_prefix}", "type": "list", "items": ["（无库存记录）"]}]
     warehouse_total = sum(r["pallet_count"] for r in rows)
     sections = [{"label": f"{warehouse_code} {label_prefix}（共 {warehouse_total} 托）", "type": "list", "items": []}]

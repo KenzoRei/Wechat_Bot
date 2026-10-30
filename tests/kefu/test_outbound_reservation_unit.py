@@ -119,9 +119,13 @@ def test_locked_check_uses_locked_rows_and_other_reservations(monkeypatch):
     locked = {}
     monkeypatch.setattr("core.uchoice_storage.acquire_storage_scopes", lambda db, scopes: locked.setdefault("scopes", scopes) and rows)
 
-    [short] = res.locked_stock_shortages(None, {"warehouse_code": "JFK", "sku_lines": [{"sku_code": "t1", "box_count": 50}]})
+    refreshed = []
+    db = SimpleNamespace(refresh=refreshed.append)
+    [short] = res.locked_stock_shortages(db, {"warehouse_code": "JFK", "sku_lines": [{"sku_code": "t1", "box_count": 50}]})
 
     assert locked["scopes"] == [("JFK", "t1")]
+    # Locked rows are refreshed so a value cached before the wait can't be used.
+    assert refreshed == rows
     assert (short.physical_boxes, short.scheduled_boxes, short.available_boxes) == (100, 60, 40)
 
 
@@ -129,7 +133,8 @@ def test_locked_check_passes_when_it_still_fits(monkeypatch):
     _stub_world(monkeypatch, {}, [_target("A", [{"sku_code": "t1", "box_count": 60}])])
     rows = [SimpleNamespace(sku_code="t1", pallet_count=10, boxes_per_pallet=10)]
     monkeypatch.setattr("core.uchoice_storage.acquire_storage_scopes", lambda db, scopes: rows)
-    assert res.locked_stock_shortages(None, {"warehouse_code": "JFK", "sku_lines": [{"sku_code": "t1", "box_count": 40}]}) == []
+    db = SimpleNamespace(refresh=lambda row: None)
+    assert res.locked_stock_shortages(db, {"warehouse_code": "JFK", "sku_lines": [{"sku_code": "t1", "box_count": 40}]}) == []
 
 
 # ── display ──────────────────────────────────────────────────────────────────
@@ -310,3 +315,47 @@ def test_schedule_note_is_added_only_to_skus_that_have_one():
     assert sections[1]["items"] == ["T1：10 托 @ 36/托", "待出库 3 托，出库后剩 7 托"]
     assert sections[2]["items"] == ["W1：1 托 @ 5/托"]
     assert _sku_bucket_sections(rows, labels)[1]["items"] == ["T1：10 托 @ 36/托"]
+
+
+def test_scheduled_sku_with_no_physical_pallets_still_shows_its_shortfall():
+    from core.result_message import _sku_bucket_sections
+
+    rows = [{"sku_code": "s2", "boxes_per_pallet": 20, "pallet_count": 2}]
+    notes = {"t1": "⚠ 现有 0 箱，待出库 120 箱，缺口 120 箱"}
+    sections = _sku_bucket_sections(rows, {"s2": "S2", "t1": "T1"}, notes)
+
+    assert sections[0]["items"] == ["S2：2 托 @ 20/托"]
+    assert sections[1]["items"] == ["T1：0 托", "⚠ 现有 0 箱，待出库 120 箱，缺口 120 箱"]
+
+
+def test_summary_with_no_stock_but_scheduled_outbound_keeps_the_shortfall(monkeypatch):
+    from core import result_message
+
+    class Query:
+        def filter_by(self, **kw): return self
+        def filter(self, *a): return self
+        def all(self): return []
+
+    db = SimpleNamespace(query=lambda model: Query())
+    monkeypatch.setattr("core.uchoice_context.sku_label_map", lambda db: {"t1": "T1"})
+    monkeypatch.setattr(result_message, "_schedule_notes", lambda db, wh: {"t1": "⚠ 现有 0 箱，待出库 120 箱，缺口 120 箱"})
+
+    sections = result_message._warehouse_storage_summary_sections(db, "JFK", "仓当前库存")
+
+    assert sections[1]["items"][-1] == "⚠ 现有 0 箱，待出库 120 箱，缺口 120 箱"
+    monkeypatch.setattr(result_message, "_schedule_notes", lambda db, wh: {})
+    assert result_message._warehouse_storage_summary_sections(db, "JFK", "仓当前库存")[0]["items"] == ["（无库存记录）"]
+
+
+def test_view_storage_with_no_stock_but_scheduled_outbound_is_not_no_records(monkeypatch):
+    from core import result_message
+
+    monkeypatch.setattr("core.uchoice_context.sku_label_map", lambda db: {"t1": "T1"})
+    monkeypatch.setattr(result_message, "_schedule_notes", lambda db, wh: {"t1": "⚠ 缺口"})
+    context = {"result": {"storage_rows": []}, "collected_fields": {"warehouse_code": "JFK"}, "role": "customer"}
+
+    sections = result_message._storage_sections_builder(context, None)
+
+    assert sections[0]["label"].startswith("JFK 仓") and sections[1]["items"] == ["T1：0 托", "⚠ 缺口"]
+    monkeypatch.setattr(result_message, "_schedule_notes", lambda db, wh: {})
+    assert result_message._storage_sections_builder(context, None)[0]["items"] == ["（无匹配记录）"]
