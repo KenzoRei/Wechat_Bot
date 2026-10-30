@@ -178,7 +178,7 @@ _TXN_TYPE_LABELS = {
 }
 
 
-def _sku_bucket_sections(rows: list[dict], sku_labels: dict[str, str]) -> list[dict]:
+def _sku_bucket_sections(rows: list[dict], sku_labels: dict[str, str], notes: dict[str, str] | None = None) -> list[dict]:
     """
     Shared by view_storage and the completion-response full-storage builder.
     rows are already scoped to one warehouse: {sku_code, boxes_per_pallet,
@@ -203,15 +203,29 @@ def _sku_bucket_sections(rows: list[dict], sku_labels: dict[str, str]) -> list[d
         label = sku_labels.get(sku_code, sku_code)
         if len(buckets) == 1:
             b = buckets[0]
-            sections.append({
-                "label": None, "type": "list",
-                "items": [f'{label}：{b["pallet_count"]} 托 @ {b["boxes_per_pallet"]}/托'],
-            })
+            items = [f'{label}：{b["pallet_count"]} 托 @ {b["boxes_per_pallet"]}/托']
+            if notes and sku_code in notes:
+                items.append(notes[sku_code])
+            sections.append({"label": None, "type": "list", "items": items})
         else:
             total = sum(b["pallet_count"] for b in buckets)
             items = [f'{b["pallet_count"]} 托 @ {b["boxes_per_pallet"]}/托' for b in buckets]
+            if notes and sku_code in notes:
+                items.append(notes[sku_code])
             sections.append({"label": f"{label}（合计 {total} 托）", "type": "list", "items": items})
     return sections
+
+
+def _schedule_notes(db: DBSession, warehouse_code: str) -> dict[str, str]:
+    """SKU -> the one 待出库 line for SKUs with scheduled outbound; {} when nothing is scheduled."""
+    from core.outbound_reservation import schedule_line, schedule_positions
+
+    return {sku: schedule_line(pos) for sku, pos in schedule_positions(db, warehouse_code).items()}
+
+
+# Roles that can run the outbound-completion service the hint points to.
+_OUTBOUND_CONFIRM_HINT_ROLES = frozenset({"admin", "warehouseman", "warehouse_admin"})
+_OUTBOUND_CONFIRM_HINT = "查询“出库确认”获取待出库明细"
 
 
 def _storage_sections_builder(context: dict, db: DBSession) -> list[dict]:
@@ -230,11 +244,16 @@ def _storage_sections_builder(context: dict, db: DBSession) -> list[dict]:
         by_warehouse[r["warehouse_code"]].append(r)
 
     sections = []
+    any_scheduled = False
     for warehouse_code in sorted(by_warehouse):
         warehouse_rows = by_warehouse[warehouse_code]
         warehouse_total = sum(r["pallet_count"] for r in warehouse_rows)
+        notes = _schedule_notes(db, warehouse_code)
+        any_scheduled = any_scheduled or bool(notes)
         sections.append({"label": f"{warehouse_code} 仓（共 {warehouse_total} 托）", "type": "list", "items": []})
-        sections += _sku_bucket_sections(warehouse_rows, sku_labels)
+        sections += _sku_bucket_sections(warehouse_rows, sku_labels, notes)
+    if any_scheduled and context.get("role") in _OUTBOUND_CONFIRM_HINT_ROLES:
+        sections.append({"label": None, "type": "raw", "items": [_OUTBOUND_CONFIRM_HINT]})
     return sections
 
 
@@ -424,7 +443,7 @@ def _warehouse_storage_summary_sections(db: DBSession, warehouse_code: str | Non
         return [{"label": f"{warehouse_code} {label_prefix}", "type": "list", "items": ["（无库存记录）"]}]
     warehouse_total = sum(r["pallet_count"] for r in rows)
     sections = [{"label": f"{warehouse_code} {label_prefix}（共 {warehouse_total} 托）", "type": "list", "items": []}]
-    sections += _sku_bucket_sections(rows, sku_labels)
+    sections += _sku_bucket_sections(rows, sku_labels, _schedule_notes(db, warehouse_code))
     return sections
 
 

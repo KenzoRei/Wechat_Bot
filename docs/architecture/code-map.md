@@ -15,6 +15,7 @@
 | `core/kefu_*` | Kefu sync, durable turn application, rendering and delivery; `kefu_unsupported.py` (fixed reply for non-text messages) and `kefu_voice.py` (voice → persisted transcript, retry/backoff, before the AI) |
 | `core/voice_transcription.py` | AMR validation/duration, AMR→WAV (pip `imageio-ffmpeg`), OpenAI transcription, retryable/terminal error classes |
 | `core/completion_batch.py` | Batch completion confirmation: number-reply parsing, selection resolution, and pick-allocation simulation (executed by `handlers/uchoice/complete_batch.py`) |
+| `core/outbound_reservation.py` | Derived reservation of confirmed, uncompleted outbounds: available stock = physical minus scheduled boxes per warehouse/SKU, the locked confirm-time check, and the `待出库` display line. Nothing is stored; completion still checks physical stock |
 | `core/uchoice_*` | Shared U-Choice domain behavior |
 | `core/customer_directory.py` | Customer master data + encrypted OMS/YDD credentials, `billing_customer_id` resolution |
 | `core/warehouse_directory.py` | Company shipping-origin directory (distinct from U-Choice's own warehouse codes) |

@@ -7,6 +7,33 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.10.0] - 2026-10-30
+
+No migration.
+
+### Changed
+- **Scheduled outbounds now hold stock.** A confirmed outbound (status
+  `processing`) used to leave storage untouched until delivery, and nothing
+  counted it, so any number of outbounds could be scheduled against the same
+  stock and the conflict only surfaced at completion. Available stock is now
+  physical minus the boxes in confirmed, uncompleted outbounds, derived per
+  warehouse and SKU (`core/outbound_reservation.py`); nothing is stored, so
+  cancelling or completing a request releases it. Storage itself is still
+  deducted only at completion, and completion still checks physical stock.
+  Drafts and outbounds parked for a new address hold nothing.
+- **Both channels check available stock, loose and palletized.** Smart Robot
+  previously skipped `box_count` lines entirely at request time. A final
+  check now also runs under the storage lock in the transaction that makes
+  the request `processing`, so two drafts that each fit can't both confirm.
+- **Storage replies show what is scheduled.** A SKU with scheduled outbound
+  gets one extra line, e.g. `待出库 3 托 + 5 箱（散），出库后剩 7 托` (the
+  pallet figure is an estimate from the default pick order); SKUs with
+  nothing scheduled are unchanged. Warehouse staff and admins also get a
+  pointer to 出库确认 in `view_storage`. If a correction drops physical stock
+  below what is scheduled, the line flags the shortfall instead of blocking.
+  The insufficient-stock rejection names stock held by other outbounds, and
+  the SKU `in_stock` hint used for disambiguation counts available stock.
+
 ## [1.9.0] - 2026-10-15
 
 No migration.

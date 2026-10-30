@@ -578,40 +578,28 @@ def _resolve_outbound_completion_loose_picks(db: DBSession, session, context: di
 
 
 def _outbound_stock_error(db: DBSession, fields: dict) -> str | None:
-    from core.uchoice_context import sku_label_map
-    from core.uchoice_storage import available_box_count
+    from core.outbound_reservation import stock_shortages
 
-    warehouse = fields.get("warehouse_code")
-    required_by_sku: dict[str, int] = {}
-    for line in fields.get("sku_lines") or []:
-        if not isinstance(line, dict) or not line.get("sku_code"):
-            continue
-        if line.get("box_count") is not None:
-            boxes = line.get("box_count")
-        else:
-            bpp, pallets = line.get("boxes_per_pallet"), line.get("pallet_count")
-            if bpp is None or pallets is None:
-                continue
-            boxes = bpp * pallets
-        required_by_sku[line["sku_code"]] = required_by_sku.get(line["sku_code"], 0) + boxes
+    return _insufficient_stock_reply(db, fields.get("warehouse_code"), stock_shortages(db, fields))
 
-    problems = []
-    for sku, requested_boxes in sorted(required_by_sku.items()):
-        available_boxes = available_box_count(db, warehouse, sku)
-        if available_boxes < requested_boxes:
-            problems.append((sku, available_boxes, requested_boxes))
-    if not problems:
+
+def _insufficient_stock_reply(db: DBSession, warehouse: str, shortages: list) -> str | None:
+    """The shared rejection text for outbound shortages (request time and confirm time)."""
+    if not shortages:
         return None
-    labels = sku_label_map(db)
+    from core.uchoice_context import sku_label_map
     from core.kefu_outcomes import InsufficientStockOutcome, StockShortage
     from core.kefu_response_renderer import render_kefu_outcome
+
+    labels = sku_label_map(db)
     return render_kefu_outcome(InsufficientStockOutcome(
         warehouse_label=warehouse,
         shortages=tuple(StockShortage(
-            sku_label=labels.get(sku, sku),
-            requested_boxes=requested,
-            available_boxes=available,
-        ) for sku, available, requested in problems),
+            sku_label=labels.get(s.sku_code, s.sku_code),
+            requested_boxes=s.requested_boxes,
+            available_boxes=s.available_boxes,
+            held_boxes=min(s.scheduled_boxes, s.physical_boxes),
+        ) for s in shortages),
     ))
 
 
@@ -781,6 +769,24 @@ def confirm_kefu_turn(db: DBSession, context: dict, service: dict, session) -> s
         reply = "该申请已处理或已关闭，不能重复确认。"
         _append(session, "assistant", reply)
         return reply
+    if service["name"] == "uchoice_outbound_request":
+        # Reservations only count once a log is 'processing', and stock was
+        # last checked while collecting fields: re-check under the storage
+        # lock, in the transaction that makes this request 'processing'.
+        from core.outbound_reservation import locked_stock_shortages
+
+        fields = session.collected_fields or {}
+        stock_error = _insufficient_stock_reply(
+            db, fields.get("warehouse_code"),
+            locked_stock_shortages(db, fields, log.log_id if log is not None else None),
+        )
+        if stock_error:
+            if log is not None:
+                log.status = "cancelled"
+            session.status = "cancelled"
+            context["_reply"] = stock_error
+            _append(session, "assistant", stock_error)
+            return stock_error
     # RequestLog supports ``processing``; ConversationSession deliberately
     # does not.  The surrounding CaseExecution claim/advisory lock owns this
     # confirmation attempt until the transaction reaches its terminal state.
