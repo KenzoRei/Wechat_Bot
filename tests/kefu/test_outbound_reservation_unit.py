@@ -154,7 +154,7 @@ def test_position_reports_scheduled_as_requested_and_pallets_left(monkeypatch):
     pos = res.schedule_positions(None, "JFK")["t1"]
 
     assert (pos.scheduled_pallets, pos.scheduled_loose_boxes, pos.remaining_pallets) == (3, 5, 7)
-    assert res.schedule_line(pos) == "待出库 3 托 + 5 箱（散），出库后剩 7 托"
+    assert res.schedule_line(pos) == "待出库 3 托 + 5 箱（散），出库后剩 7 托（247 箱）"
 
 
 def test_only_palletized_or_only_loose_lines_read_naturally(monkeypatch):
@@ -162,7 +162,7 @@ def test_only_palletized_or_only_loose_lines_read_naturally(monkeypatch):
     assert res.schedule_line(res.schedule_positions(None, "JFK")["t1"]) == "待出库 3 托，出库后剩 7 托"
 
     _stub_world(monkeypatch, {"t1": {36: 10}}, [_target("A", [{"sku_code": "t1", "box_count": 5}])])
-    assert res.schedule_line(res.schedule_positions(None, "JFK")["t1"]) == "待出库 5 箱（散），出库后剩 10 托"
+    assert res.schedule_line(res.schedule_positions(None, "JFK")["t1"]) == "待出库 5 箱（散），出库后剩 10 托（355 箱）"
 
 
 def test_transfer_destination_credit_does_not_inflate_the_source(monkeypatch):

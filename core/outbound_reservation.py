@@ -181,7 +181,12 @@ def schedule_line(pos: SchedulePosition) -> str:
         parts.append(f"{pos.scheduled_pallets} 托")
     if pos.scheduled_loose_boxes:
         parts.append(f"{pos.scheduled_loose_boxes} 箱（散）")
-    return f"待出库 {' + '.join(parts)}，出库后剩 {pos.remaining_pallets} 托"
+    left = f"出库后剩 {pos.remaining_pallets} 托"
+    if pos.scheduled_loose_boxes:
+        # A loose pick leaves the pallet count unchanged while boxes fall, so
+        # the pallet figure alone would hide it.
+        left += f"（{max(0, pos.physical_boxes - pos.scheduled_boxes)} 箱）"
+    return f"待出库 {' + '.join(parts)}，{left}"
 
 
 def schedule_positions(db: DBSession, warehouse_code: str) -> dict[str, SchedulePosition]:

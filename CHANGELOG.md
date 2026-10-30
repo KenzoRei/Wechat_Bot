@@ -26,7 +26,7 @@ No migration.
   check now also runs under the storage lock in the transaction that makes
   the request `processing`, so two drafts that each fit can't both confirm.
 - **Storage replies show what is scheduled.** A SKU with scheduled outbound
-  gets one extra line, e.g. `待出库 3 托 + 5 箱（散），出库后剩 7 托` (the
+  gets one extra line, e.g. `待出库 3 托 + 5 箱（散），出库后剩 7 托（247 箱）` (the
   pallet figure is an estimate from the default pick order); SKUs with
   nothing scheduled are unchanged. Warehouse staff and admins also get a
   pointer to 出库确认 in `view_storage`. If a correction drops physical stock
