@@ -178,7 +178,7 @@ def _build_shipment_body(fields: dict, shou_huo_qu_dao: str) -> dict:
 
     # Optional: recipient company name
     if fields.get("recipient_corp_name"):
-        body["shouJianRenGongSiMingCheng"] = fields["recipient_corp_name"]
+        body["shouJianRenGongSi"] = fields["recipient_corp_name"]
 
     # Optional: dimensions. Verified against the real /yundans Swagger
     # schema (twc.itdida.com/itdida-api/swagger-ui.html#/.../importYundanUsingPOST):

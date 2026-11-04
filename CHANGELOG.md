@@ -7,6 +7,19 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.10.2] - 2026-11-03
+
+No migration.
+
+### Fixed
+- **Recipient company now reaches YiDiDa.** The label request sent it as
+  `shouJianRenGongSiMingCheng`, a key that does not exist on `YunDanModel`
+  (checked against the `/yundans` Swagger schema), so YiDiDa silently
+  dropped it and no label ever carried a recipient company. The correct key
+  is `shouJianRenGongSi` (收件公司); `clients/yidida_client.py` and
+  `scripts/manual_ydd_smoke.py` now use it. The shipper-side key
+  `jiJianGongSiMingCheng` was already correct.
+
 ## [1.10.1] - 2026-11-03
 
 No migration.

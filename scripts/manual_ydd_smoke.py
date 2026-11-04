@@ -70,7 +70,7 @@ def create_shipment(token: str):
 
         # Recipient -- DE warehouse
         "shouJianRenXingMing":   "Zorro Zhang",
-        "shouJianRenGongSiMingCheng": "TRANS WORLD DE",
+        "shouJianRenGongSi": "TRANS WORLD DE",
         "shouJianRenDianHua":    "347-204-0602",
         "shouJianRenDiZhi1":     "201 GABOR DR",
         "shouJianRenChengShi":   "NEWARK",
