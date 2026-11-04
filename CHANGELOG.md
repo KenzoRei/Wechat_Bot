@@ -7,6 +7,20 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.10.1] - 2026-11-03
+
+No migration.
+
+### Changed
+- **Shipper company falls back to the shipper name.** `shipper_corp_name`
+  stays optional on `fedex_label` / `ups_label`; when the customer gave no
+  company (missing, empty or whitespace-only), YiDiDa's
+  `jiJianGongSiMingCheng` is now filled with `shipper_name` instead of being
+  sent empty (`clients/yidida_client.py`). A stated company or a warehouse
+  preset's `company_name` still wins. The prompt tells the AI not to ask for
+  or invent a shipper company. The confirmation summary is unchanged: it
+  shows only what the customer provided.
+
 ## [1.10.0] - 2026-10-30
 
 No migration.

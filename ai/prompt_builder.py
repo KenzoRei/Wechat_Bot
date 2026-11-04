@@ -430,7 +430,7 @@ def build_system_prompt(context: dict) -> str:
 群组知识库中的 location_presets 包含预设地址。当用户提到别名（如”LAX”、”DE”）时：
 1. 判断该地点是发件地还是收件地（根据”从X寄到Y”等表达）
 2. 将预设字段映射到对应的 shipper_* 或 recipient_* 字段：
-   - corp_name → shipper_corp_name 或 recipient_corp_name
+   - corp_name → shipper_corp_name 或 recipient_corp_name（寄件公司为可选项：客户没提公司名时不要追问，也不要自行编造，留空即可，出单时系统会自动用寄件人姓名作为寄件公司）
    - name      → shipper_name      或 recipient_name
    - phone     → shipper_phone     或 recipient_phone
    - street    → shipper_street    或 recipient_street
