@@ -7,6 +7,32 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.11.0] - 2026-11-05
+
+**Apply migration V42 immediately before this deploy, in the same window.**
+(The new code reads `uchoice_address.contact` / `phone`; with the old
+schema every address lookup would fail.) V42 is additive: two nullable
+columns plus an `upsert_address` schema update. Nothing is backfilled.
+
+### Added
+- **Receiver contact person and phone on addresses.** `uchoice_address` gains
+  optional `contact` (max 100 characters) and `phone` (max 50).
+  - Both are collected by `upsert_address`, including when a new address is
+    created from an outbound request to an unknown destination, and shown in
+    the address confirmation and the AI's address list.
+  - Over-long values are rejected before confirmation with a request to
+    shorten; both are trimmed before storing.
+  - Printed on the delivery order "to" card as `Contact: … Tel: …` (either
+    part optional; nothing extra when both are empty).
+- The card now uses the Chinese-capable font when the company, address or
+  contact needs it, shrinks the text (down to a floor) before cutting
+  anything, and if it still overflows the company/address is ellipsized so
+  the contact/phone line is never lost.
+
+### Notes
+- Existing addresses that carry a contact/phone inside `addr` or `note` are
+  not migrated automatically; move them by hand after review.
+
 ## [1.10.3] - 2026-11-05
 
 No migration.
