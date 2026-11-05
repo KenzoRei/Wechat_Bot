@@ -54,6 +54,9 @@ class UchoiceAddress(Base):
     addr:           Mapped[str]            = mapped_column(Text, nullable=False)
     warehouse_code: Mapped[str | None]     = mapped_column(String(20))
     note:           Mapped[str | None]     = mapped_column(Text)
+    # Optional receiver contact person / phone (V42); printed on the delivery order "to" card.
+    contact:        Mapped[str | None]     = mapped_column(String(100))
+    phone:          Mapped[str | None]     = mapped_column(String(50))
     created_by:     Mapped[str]            = mapped_column(String(128), nullable=False)
     created_at:     Mapped[datetime]       = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     # Set only on the two seeded inter-warehouse addresses — marks this

@@ -102,12 +102,13 @@ class GeneratePdfStubHandler(BaseHandler):
                 return None
             delivery_date = delivery_date.date()
 
-            consignee_company, consignee_addr = "", ""
+            consignee_company, consignee_addr, consignee_contact, consignee_phone = "", "", "", ""
             destination_address_id = fields.get("destination_address_id")
             if destination_address_id:
                 addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
                 if addr:
                     consignee_company, consignee_addr = addr.company_name or "", addr.addr
+                    consignee_contact, consignee_phone = addr.contact or "", addr.phone or ""
 
             sku_labels = sku_label_map(db)
             product_lines = []
@@ -128,6 +129,8 @@ class GeneratePdfStubHandler(BaseHandler):
             pdf_bytes = build_delivery_order_pdf(
                 consignee_company=consignee_company,
                 consignee_addr=consignee_addr,
+                consignee_contact=consignee_contact,
+                consignee_phone=consignee_phone,
                 delivery_date=delivery_date,
                 product_lines=product_lines,
                 outbound_order_no=serial_number,
@@ -156,12 +159,13 @@ class GeneratePdfStubHandler(BaseHandler):
             request_log_id = context.get("request_log_id")
             fulfillment_lines = context.get("result", {}).get("fulfillment_lines", [])
 
-            consignee_company, consignee_addr = "", ""
+            consignee_company, consignee_addr, consignee_contact, consignee_phone = "", "", "", ""
             destination_address_id = original_fields.get("destination_address_id")
             if destination_address_id:
                 addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
                 if addr:
                     consignee_company, consignee_addr = addr.company_name or "", addr.addr
+                    consignee_contact, consignee_phone = addr.contact or "", addr.phone or ""
 
             sku_labels = sku_label_map(db)
             product_lines = []
@@ -185,6 +189,8 @@ class GeneratePdfStubHandler(BaseHandler):
             pdf_bytes = build_delivery_order_pdf(
                 consignee_company=consignee_company,
                 consignee_addr=consignee_addr,
+                consignee_contact=consignee_contact,
+                consignee_phone=consignee_phone,
                 delivery_date=datetime.now(timezone.utc).date(),
                 product_lines=product_lines,
                 outbound_order_no=serial_number,

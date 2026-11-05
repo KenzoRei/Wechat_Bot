@@ -137,6 +137,8 @@ def address_candidates(
             "addr":           a.addr,
             "warehouse_code": a.warehouse_code,
             "note":           a.note,
+            "contact":        a.contact,
+            "phone":          a.phone,
         }
         for a in rows
     ]

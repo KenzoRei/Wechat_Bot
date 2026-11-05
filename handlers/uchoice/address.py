@@ -56,6 +56,8 @@ class UpsertAddressHandler(BaseHandler):
             addr.addr           = fields.get("addr", addr.addr)
             addr.warehouse_code = fields.get("warehouse_code", addr.warehouse_code)
             addr.note           = fields.get("note", addr.note)
+            addr.contact        = fields.get("contact", addr.contact)
+            addr.phone          = fields.get("phone", addr.phone)
             # customer_id is deliberately never reassigned here -- editing an
             # existing address's details must never silently move it to a
             # different customer.
@@ -89,6 +91,8 @@ class UpsertAddressHandler(BaseHandler):
             addr=fields.get("addr"),
             warehouse_code=fields.get("warehouse_code"),
             note=fields.get("note"),
+            contact=fields.get("contact"),
+            phone=fields.get("phone"),
             created_by=created_by,
             customer_id=customer_id,
         )

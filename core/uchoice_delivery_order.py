@@ -176,6 +176,8 @@ def build_delivery_order_pdf(
     delivery_date: date,
     product_lines: list[dict],
     outbound_order_no: str,
+    consignee_contact: str = "",
+    consignee_phone: str = "",
 ) -> bytes:
     """
     product_lines: [{"description": str, "quantity_text": str}, ...] — already
@@ -193,6 +195,14 @@ def build_delivery_order_pdf(
     consignee_text = consignee_company.strip()
     if consignee_addr.strip():
         consignee_text += f"\n{consignee_addr.strip()}"
+    # Optional receiver contact line (both parts optional; omitted entirely when empty).
+    contact_parts = []
+    if (consignee_contact or "").strip():
+        contact_parts.append(f"Contact: {consignee_contact.strip()}")
+    if (consignee_phone or "").strip():
+        contact_parts.append(f"Tel: {consignee_phone.strip()}")
+    if contact_parts:
+        consignee_text += "\n" + "  ".join(contact_parts)
     date_str = delivery_date.strftime("%m/%d/%Y")
     remark_text = f"Outbound Order #: {outbound_order_no}"
 

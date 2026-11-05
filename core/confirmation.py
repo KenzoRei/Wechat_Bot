@@ -122,7 +122,7 @@ _FIELD_LABELS = {
     "reference_serial": "关联申请编号", "received_lines": "实收明细",
     "fulfillment_lines": "实发明细", "adjustment_lines": "调整明细",
     "inventory_lines": "盘点明细", "move_lines": "调拨明细", "company_name": "公司名称",
-    "charge_type": "计费类型", "addr": "地址", "note": "备注",
+    "charge_type": "计费类型", "addr": "地址", "note": "备注", "contact": "联系人", "phone": "电话",
     "target_openid": "目标用户", "new_role": "新角色", "target_month": "月份",
     "sku_code": "商品编码",
 }
