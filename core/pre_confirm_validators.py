@@ -794,7 +794,7 @@ def _valid_update_address_target_and_changes(context: dict, collected_fields: di
     row = address_update.load_target(db, collected_fields)
     if row is None:
         return "未找到要更新的地址，请说明要更新哪一个地址（可提供公司名或地址）。"
-    blank = address_update.blank_required_field(collected_fields)
+    blank = address_update.blank_required_field(collected_fields) or address_update.validate_values(collected_fields)
     if blank:
         return blank
     if address_update.stale_against_baseline(row, collected_fields):

@@ -1,3 +1,4 @@
+from core.workflow_errors import AddressOperationRejected
 from handlers.base import BaseHandler
 
 
@@ -21,7 +22,7 @@ class AddAddressHandler(BaseHandler):
 
         fields = context.get("collected_fields", {})
         if fields.get("matched_address_id"):
-            raise RuntimeError(
+            raise AddressOperationRejected(
                 "新增地址不支持修改已有地址。请重新发起：新增请直接提供新地址；修改已有地址请使用「更新地址」。"
             )
         # customer_id is authoritative context: the case's locked customer,
@@ -45,14 +46,14 @@ class AddAddressHandler(BaseHandler):
         # B7AMS7ixMesqF5r4f4DWZ6DAa3).
         created_by = context.get("wechat_openid") or context.get("submitted_by_staff_id")
         if not created_by:
-            raise RuntimeError("无法确定操作人身份，无法新增地址。")
+            raise AddressOperationRejected("无法确定操作人身份，无法新增地址。")
 
         # Matches core.pre_confirm_validators._valid_add_address_
         # warehouse_scope's final check -- the execution-time backstop
         # (2026-09-15 audit finding 2).
         message = role_policy.check_warehouse_scope(role_name, allowed, fields.get("warehouse_code"))
         if message:
-            raise RuntimeError(message)
+            raise AddressOperationRejected(message)
 
         # Authoritative duplicate guard. The pre-confirm check can be raced
         # (two sessions, or a row created after the card was shown), so
@@ -66,7 +67,7 @@ class AddAddressHandler(BaseHandler):
             db, customer_id, fields.get("addr"), fields.get("warehouse_code"), fields.get("charge_type")
         )
         if existing is not None:
-            raise RuntimeError(address_dedupe.duplicate_message(existing))
+            raise AddressOperationRejected(address_dedupe.duplicate_message(existing))
 
         addr = UchoiceAddress(
             company_name=fields.get("company_name"),
@@ -108,21 +109,21 @@ class UpdateAddressHandler(BaseHandler):
         allowed = context.get("warehouse_codes")
 
         if "customer_id" in fields:
-            raise RuntimeError("地址所属客户不可修改。")
+            raise AddressOperationRejected("地址所属客户不可修改。")
         row = address_update.load_target(db, fields, lock=True)
         if row is None:
-            raise RuntimeError("待更新的地址不存在。")
-        blank = address_update.blank_required_field(fields)
+            raise AddressOperationRejected("待更新的地址不存在。")
+        blank = address_update.blank_required_field(fields) or address_update.validate_values(fields)
         if blank:
-            raise RuntimeError(blank)
+            raise AddressOperationRejected(blank)
         if address_update.stale_against_baseline(row, fields):
-            raise RuntimeError(address_update.STALE_MESSAGE)
+            raise AddressOperationRejected(address_update.STALE_MESSAGE)
 
         changes = address_update.effective_changes(address_update.snapshot(row), fields)
         if not changes:
-            raise RuntimeError("没有检测到任何需要修改的内容。")
+            raise AddressOperationRejected("没有检测到任何需要修改的内容。")
         if set(changes) & set(address_update.ADMIN_ONLY_FIELDS) and role_name != "admin":
-            raise RuntimeError("只有管理员可以修改计费类型或所属仓库。")
+            raise AddressOperationRejected("只有管理员可以修改计费类型或所属仓库。")
 
         after = address_update.post_update_values(row, changes)
         message = (
@@ -130,7 +131,7 @@ class UpdateAddressHandler(BaseHandler):
             or role_policy.check_warehouse_scope(role_name, allowed, after["warehouse_code"])
         )
         if message:
-            raise RuntimeError(message)
+            raise AddressOperationRejected(message)
 
         key = address_dedupe.duplicate_key(row.customer_id, after["addr"], after["warehouse_code"], after["charge_type"])
         address_dedupe.lock_for_key(db, key)
@@ -138,7 +139,7 @@ class UpdateAddressHandler(BaseHandler):
             db, row.customer_id, after["addr"], after["warehouse_code"], after["charge_type"], exclude_id=row.address_id
         )
         if duplicate is not None:
-            raise RuntimeError(address_dedupe.duplicate_message(duplicate))
+            raise AddressOperationRejected(address_dedupe.duplicate_message(duplicate))
 
         for field, (_old, new) in changes.items():
             setattr(row, field, new)

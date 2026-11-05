@@ -38,6 +38,7 @@ _WAREHOUSE_CODE_LIST = "、".join(sorted(VALID_WAREHOUSE_CODES))
 _FIELD_PROMPTS = {
     "sku_lines": ("商品及数量", "请提供商品、托盘/箱数及每托箱数。"),
     "destination_address_id": ("送货地址", "请提供或确认送货目的地。"),
+    "matched_address_id": ("要更新的地址", "请告知要更新哪一个地址（可提供公司名或地址的一部分）。"),
     "charge_type": ("计费类型", _CHARGE_TYPE_QUESTION),
     "warehouse_code": ("所属仓库", f"请选择所属仓库：{_WAREHOUSE_CODE_LIST}。"),
     "warehouse_codes": ("负责仓库", f"请选择负责的仓库（可多个，用顿号或逗号分隔）：{_WAREHOUSE_CODE_LIST}。"),
@@ -238,9 +239,9 @@ def _resolve_reference_serial(context: dict, session, service: dict) -> tuple[st
     )), True
 
 
-def _address_decision(db: DBSession, context: dict, ai_response):
+def _address_decision(db: DBSession, context: dict, ai_response, candidates_key: str = "addresses"):
     from core.kefu_response_renderer import validate_address_match
-    candidates = (context.get("uchoice_candidates") or {}).get("addresses") or []
+    candidates = (context.get("uchoice_candidates") or {}).get(candidates_key) or []
     return validate_address_match(ai_response, candidates), candidates
 
 
@@ -761,7 +762,7 @@ def _finish_execution(db: DBSession, context: dict, service: dict, session, log)
 
 def confirm_kefu_turn(db: DBSession, context: dict, service: dict, session) -> str:
     """Apply one confirmed mutation; caller owns the guarded execution claim."""
-    from core.workflow_errors import TargetOperationRejected, LabelCreationRejected
+    from core.workflow_errors import TargetOperationRejected, LabelCreationRejected, AddressOperationRejected
 
     log = _load_log(db, session)
     _set_context_for_session(context, session, log)
@@ -830,6 +831,20 @@ def confirm_kefu_turn(db: DBSession, context: dict, service: dict, session) -> s
         # caller exactly as if this were any other outcome; the
         # surrounding turn (case_turn/execution-ledger state) finalizes
         # normally in the same transaction.
+        session.status = "cancelled"
+        reply = e.user_message
+        _append(session, "assistant", reply)
+        return reply
+    except AddressOperationRejected as e:
+        # Expected business rejection (stale confirmation, duplicate, edit
+        # draft from before the split, admin-only field...). Nothing was
+        # written (every check runs before the first write), so no explicit
+        # rollback: this transaction still holds the CaseExecution claim and
+        # replay bookkeeping, finalised by the caller's single outer commit.
+        if log is not None:
+            log.status = "failed"
+            log.error_detail = e.user_message
+            log.completed_at = datetime.now(timezone.utc)
         session.status = "cancelled"
         reply = e.user_message
         _append(session, "assistant", reply)
@@ -1450,6 +1465,10 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
     previous_fields = dict(session.collected_fields or {})
     extracted_fields = dict(ai_response.extracted_fields or {})
     selection = extracted_fields.pop("selection", None)
+    if service["name"] == "update_address":
+        # Kefu: the edit target is set ONLY from the structured, candidate-
+        # validated address_match below, never from a model-written id.
+        extracted_fields.pop("matched_address_id", None)
     extracted = {}
     if extracted_fields:
         extracted = sanitize_extracted_fields_before_persistence(
@@ -1528,6 +1547,23 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
                 context["_reply"] = reply
                 _append(session, "assistant", reply)
                 return reply
+
+    if service["name"] == "update_address" and not (session.collected_fields or {}).get("matched_address_id"):
+        decision, address_candidates = _address_decision(db, context, ai_response, "address_book")
+        if decision.status == "matched":
+            session.collected_fields = {**(session.collected_fields or {}), "matched_address_id": decision.matched_address_id}
+            context["collected_fields"] = session.collected_fields
+        elif decision.status == "ambiguous":
+            reply = _render_address_ambiguity(decision, address_candidates)
+            context["_reply"] = reply
+            _append(session, "assistant", reply)
+            return reply
+        elif decision.status == "unmatched":
+            # Edit never pivots to add: say so and let the user retry.
+            reply = "地址簿中没有找到您说的地址，请核对公司名或地址后重新告知；如果是新地址，请说「新增地址」。"
+            context["_reply"] = reply
+            _append(session, "assistant", reply)
+            return reply
 
     if service["name"] in ("fedex_label", "ups_label"):
         # context["requester_billing_customer_id"] comes from KefuStaff.

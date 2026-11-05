@@ -384,9 +384,18 @@ def _build_uchoice_candidates(
         # for warehouse-scoped roles) so an edit can pick ANY row, regardless
         # of the outbound source-warehouse scoping applied to `addresses`
         # below. Kept as a separate key so outbound matching is unchanged.
-        candidates["address_book"] = uchoice_context.address_candidates(
-            db, allowed_warehouse_codes=allowed_warehouse_codes
-        )
+        # Scope comes from the caller's AUTHORITATIVE assignment
+        # (`caller_warehouses`), not from the outbound request scope below:
+        # `allowed_warehouse_codes` is None for a single-warehouse caller (it
+        # is folded into scope_warehouse) and would mean "no filter" here.
+        # A warehouse-scoped role with no assignment gets nothing (fail closed).
+        from core import role_policy
+        if role_policy.requires_warehouse_scope(access.role) and not caller_warehouses:
+            candidates["address_book"] = []
+        else:
+            candidates["address_book"] = uchoice_context.address_candidates(
+                db, allowed_warehouse_codes=caller_warehouses
+            )
     if names & {"uchoice_outbound_request", "add_address"}:
         # Scoped to the request's own source warehouse by default. Originally
         # this only filtered when uchoice_outbound_request was the *sole*

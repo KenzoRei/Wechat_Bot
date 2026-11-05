@@ -49,8 +49,14 @@ def load_target(db, fields: dict, *, lock: bool = False):
     if address_id is None:
         return None
     query = db.query(UchoiceAddress).filter_by(address_id=address_id)
-    if lock and hasattr(query, "with_for_update"):
-        query = query.with_for_update()
+    if lock:
+        # populate_existing: with_for_update() locks the row but does NOT
+        # refresh an already identity-mapped instance, so the stale/no-op/
+        # admin-only checks could otherwise run on cached old values.
+        if hasattr(query, "populate_existing"):
+            query = query.populate_existing()
+        if hasattr(query, "with_for_update"):
+            query = query.with_for_update()
     return query.first()
 
 
@@ -96,6 +102,39 @@ def effective_changes(current: dict, fields: dict) -> dict:
         if (old or None) != (new or None):
             changes[field] = (old, new)
     return changes
+
+
+_MAX_LENGTHS = {"company_name": 200, "contact": 100, "phone": 50, "note": 2000, "addr": 500}
+
+
+def validate_values(fields: dict) -> str | None:
+    """Domain checks on the SUPPLIED editable values (before confirmation and
+    again at execution): types, lengths, charge_type and warehouse_code
+    membership. An explicit empty string (clearing) is allowed where
+    clearing is allowed; None means "not supplied"."""
+    from core.address_suggestion import valid_charge_type
+    from core.uchoice_constants import VALID_WAREHOUSE_CODES
+
+    for field in EDITABLE_FIELDS:
+        if field not in fields or fields[field] is None:
+            continue
+        value = fields[field]
+        if not isinstance(value, str):
+            return f"{FIELD_LABELS[field]}格式不正确，请重新提供。"
+        limit = _MAX_LENGTHS.get(field)
+        if limit and len(value.strip()) > limit:
+            return f"{FIELD_LABELS[field]}过长（最多 {limit} 个字符），请缩短后重新提供。"
+    charge_type = fields.get("charge_type")
+    if charge_type not in (None, "") and valid_charge_type(charge_type) is None:
+        return "计费类型无效，请选择：短途配送、配送、卡车转仓或自提。"
+    if charge_type == "":
+        return "计费类型不能清空。"
+    warehouse = fields.get("warehouse_code")
+    if warehouse not in (None, "") and warehouse not in VALID_WAREHOUSE_CODES:
+        return f"未知仓库：{warehouse}。请提供有效的仓库代码（{'、'.join(sorted(VALID_WAREHOUSE_CODES))}）。"
+    if warehouse == "":
+        return "所属仓库不能清空。"
+    return None
 
 
 def blank_required_field(fields: dict) -> str | None:
