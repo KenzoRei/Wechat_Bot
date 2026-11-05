@@ -124,7 +124,7 @@ def sanitize_new_address(raw) -> dict | None:
     if not isinstance(raw, dict):
         return None
     sanitized = {}
-    for key in ("company_name", "addr"):
+    for key in ("company_name", "addr", "contact", "phone"):
         value = raw.get(key)
         if isinstance(value, str) and value.strip():
             sanitized[key] = value.strip()
@@ -140,7 +140,7 @@ def sanitize_new_address(raw) -> dict | None:
 
 def seed_fields(new_address: dict) -> dict:
     """The address fields a handoff seeds from a sanitized new address."""
-    return {k: v for k, v in (new_address or {}).items() if k in ("company_name", "addr", VERIFIED_KEY) and v}
+    return {k: v for k, v in (new_address or {}).items() if k in ("company_name", "addr", "contact", "phone", VERIFIED_KEY) and v}
 
 
 def _suggest(fields: dict, minutes: int) -> dict:

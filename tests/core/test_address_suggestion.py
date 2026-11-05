@@ -230,3 +230,12 @@ def test_forged_verified_marker_cannot_earn_a_suggestion():
     extracted = strip_internal_keys({"addr": FORGED, s.VERIFIED_KEY: FORGED})
     merged = {"warehouse_code": "JFK", **extracted}
     assert "charge_type" not in s.apply_address_turn({"warehouse_code": "JFK"}, merged, extracted, 12)
+
+
+def test_sanitize_and_seed_keep_contact_and_phone():
+    from core import address_suggestion as s
+    out = s.sanitize_new_address({"company_name": "A", "addr": "1 Main St", "contact": " Vivek ", "phone": "516-305-9127", "junk": "x"})
+    assert out["contact"] == "Vivek" and out["phone"] == "516-305-9127" and "junk" not in out
+    seeded = s.seed_fields(out)
+    assert seeded["contact"] == "Vivek" and seeded["phone"] == "516-305-9127"
+    assert "contact" not in (s.sanitize_new_address({"addr": "1 Main St", "contact": "  "}) or {})

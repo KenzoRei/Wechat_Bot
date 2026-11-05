@@ -38,7 +38,7 @@ class _FakeDB:
 def _addr(address_id, customer_id, company_name="Co"):
     return SimpleNamespace(
         address_id=address_id, company_name=company_name, charge_type="delivery",
-        addr="1 Main St", warehouse_code="JFK", note=None, customer_id=customer_id,
+        addr="1 Main St", warehouse_code="JFK", note=None, contact=None, phone=None, customer_id=customer_id,
     )
 
 
@@ -60,4 +60,4 @@ def test_returned_shape_omits_customer_id_field():
     """Candidate payloads sent to the AI contain display fields, not customer_id."""
     db = _FakeDB([_addr("a1", "cust-1")])
     result = address_candidates(db)
-    assert set(result[0].keys()) == {"address_id", "company_name", "charge_type", "addr", "warehouse_code", "note"}
+    assert set(result[0].keys()) == {"address_id", "company_name", "charge_type", "addr", "warehouse_code", "note", "contact", "phone"}

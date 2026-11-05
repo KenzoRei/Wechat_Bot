@@ -25,7 +25,7 @@ class SemanticIssue:
 class AddressMatch:
     status: str                       # "matched" | "ambiguous" | "unmatched" | "not_provided"
     candidate_ids: tuple[str, ...] = ()  # matched: exactly one; ambiguous: two or more
-    new_address: dict | None = None   # unmatched only: best-effort sanitized {"company_name": ..., "addr": ...}
+    new_address: dict | None = None   # unmatched only: best-effort sanitized {"company_name": ..., "addr": ..., "contact": ..., "phone": ...}
 
 
 @dataclass
