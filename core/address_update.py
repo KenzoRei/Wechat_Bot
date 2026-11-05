@@ -60,6 +60,18 @@ def load_target(db, fields: dict, *, lock: bool = False):
     return query.first()
 
 
+def retarget_fields(extracted: dict, new_address_id: str) -> dict:
+    """Collected fields after the user switches to a DIFFERENT address.
+
+    Starts clean: only the editable values said THIS turn survive (edits
+    collected for the previous address must not apply to the new one), and
+    `_baseline` / `_baseline_id` are gone so baseline_patch re-freezes them
+    for the new row.
+    """
+    kept = {k: v for k, v in (extracted or {}).items() if k in EDITABLE_FIELDS}
+    return {**kept, "matched_address_id": new_address_id}
+
+
 def baseline_patch(db, fields: dict) -> dict:
     """Fields to merge into the session so `_baseline` matches the chosen row.
 

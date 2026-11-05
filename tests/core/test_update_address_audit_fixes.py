@@ -198,3 +198,20 @@ def test_kefu_ambiguous_update_renders_candidates_and_unmatched_does_not_pivot()
     assert "ACME" in text and "1 Main" in text and "2 Side" in text
     forged = SimpleNamespace(address_match=SimpleNamespace(status="matched", candidate_ids=("not-offered",), new_address=None))
     assert r.validate_address_match(forged, candidates).status == "invalid"
+
+
+def test_switching_target_starts_clean_and_refreezes_baseline():
+    a, b = TARGET_ID, str(uuid.uuid4())
+    previous = {"matched_address_id": a, "phone": "111", "contact": "Old", "_baseline": {"phone": None}, "_baseline_id": a}
+    switched = au.retarget_fields({"phone": "777", "junk": "x"}, b)
+    assert switched == {"phone": "777", "matched_address_id": b}   # A's edits and baseline are gone
+    row_b = _row(address_id=uuid.UUID(b), addr="2 Side St")
+    patch = au.baseline_patch(_DB(row_b), switched)
+    assert patch["_baseline_id"] == b and patch["_baseline"]["addr"] == "2 Side St"
+    assert "contact" not in switched and "_baseline" not in switched and previous["phone"] == "111"
+
+
+def test_kefu_evaluates_target_on_every_update_turn():
+    kefu = (ROOT / "core" / "kefu_turn_apply.py").read_text(encoding="utf-8")
+    assert 'if service["name"] == "update_address":\n        # Evaluated on EVERY update turn' in kefu.replace("\r\n", "\n")
+    assert "retarget_fields(extracted, decision.matched_address_id)" in kefu

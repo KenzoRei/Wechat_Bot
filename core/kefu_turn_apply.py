@@ -1548,18 +1548,33 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
                 _append(session, "assistant", reply)
                 return reply
 
-    if service["name"] == "update_address" and not (session.collected_fields or {}).get("matched_address_id"):
+    if service["name"] == "update_address":
+        # Evaluated on EVERY update turn, so naming a different address later
+        # corrects the target instead of being ignored.
         decision, address_candidates = _address_decision(db, context, ai_response, "address_book")
-        if decision.status == "matched":
-            session.collected_fields = {**(session.collected_fields or {}), "matched_address_id": decision.matched_address_id}
+        current_target = (session.collected_fields or {}).get("matched_address_id")
+        if decision.status == "matched" and decision.matched_address_id != current_target:
+            from core.address_update import retarget_fields
+            # A new target starts clean: edits collected for the previous
+            # address must not carry over to this one, only what was said
+            # this turn. The baseline is dropped here (baseline_patch also
+            # re-freezes it because the id changed) and an already-shown
+            # confirmation goes back to collecting, so the user must
+            # confirm the new target's card.
+            session.collected_fields = retarget_fields(extracted, decision.matched_address_id)
             context["collected_fields"] = session.collected_fields
+            if session.status == "pending_confirmation":
+                session.status = "active"
+        elif decision.status == "matched":
+            pass  # same target as before
         elif decision.status == "ambiguous":
             reply = _render_address_ambiguity(decision, address_candidates)
             context["_reply"] = reply
             _append(session, "assistant", reply)
             return reply
         elif decision.status == "unmatched":
-            # Edit never pivots to add: say so and let the user retry.
+            # Edit never pivots to add (and never keeps editing the previous
+            # target when the user named an address that doesn't exist).
             reply = "地址簿中没有找到您说的地址，请核对公司名或地址后重新告知；如果是新地址，请说「新增地址」。"
             context["_reply"] = reply
             _append(session, "assistant", reply)
