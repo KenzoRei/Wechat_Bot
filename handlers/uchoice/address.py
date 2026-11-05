@@ -1,6 +1,11 @@
 from handlers.base import BaseHandler
 
 
+def _clean(value):
+    """Trim contact/phone before storing (the length validator checks the trimmed value); blank -> None."""
+    return value.strip() or None if isinstance(value, str) else value
+
+
 class UpsertAddressHandler(BaseHandler):
     """
     upsert_address — create-vs-update resolved by matched_address_id, which
@@ -56,8 +61,8 @@ class UpsertAddressHandler(BaseHandler):
             addr.addr           = fields.get("addr", addr.addr)
             addr.warehouse_code = fields.get("warehouse_code", addr.warehouse_code)
             addr.note           = fields.get("note", addr.note)
-            addr.contact        = fields.get("contact", addr.contact)
-            addr.phone          = fields.get("phone", addr.phone)
+            addr.contact        = _clean(fields["contact"]) if "contact" in fields else addr.contact
+            addr.phone          = _clean(fields["phone"]) if "phone" in fields else addr.phone
             # customer_id is deliberately never reassigned here -- editing an
             # existing address's details must never silently move it to a
             # different customer.
@@ -91,8 +96,8 @@ class UpsertAddressHandler(BaseHandler):
             addr=fields.get("addr"),
             warehouse_code=fields.get("warehouse_code"),
             note=fields.get("note"),
-            contact=fields.get("contact"),
-            phone=fields.get("phone"),
+            contact=_clean(fields.get("contact")),
+            phone=_clean(fields.get("phone")),
             created_by=created_by,
             customer_id=customer_id,
         )

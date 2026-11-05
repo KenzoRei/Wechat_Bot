@@ -246,3 +246,9 @@ def test_upsert_address_rejects_overlong_contact_and_phone():
     assert v.run("upsert_address", {"role": "admin"}, {"contact": "x" * 101}, None) is not None
     assert v.run("upsert_address", {"role": "admin"}, {"phone": "1" * 51}, None) is not None
     assert v.run("upsert_address", {"role": "admin"}, {"contact": "x" * 100, "phone": "1" * 50}, None) is None
+
+
+def test_upsert_address_handler_trims_contact_and_phone():
+    from handlers.uchoice.address import _clean
+    assert _clean("  " + "x" * 100 + " ") == "x" * 100
+    assert _clean("   ") is None and _clean(None) is None

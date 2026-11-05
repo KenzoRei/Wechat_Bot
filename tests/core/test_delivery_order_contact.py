@@ -6,7 +6,7 @@ from core import uchoice_delivery_order as d
 
 def _capture(monkeypatch):
     seen = []
-    monkeypatch.setattr(d, "_draw_wrapped_top", lambda c, text, *a, **k: seen.append(text))
+    monkeypatch.setattr(d, "_draw_wrapped_top", lambda c, text, *a, tail="", **k: seen.append(text + ("\n" + tail if tail else "")))
     return seen
 
 
@@ -74,3 +74,17 @@ def test_chinese_text_uses_cjk_font_and_keeps_phone():
 def test_latin_text_keeps_helvetica_and_full_size():
     c = _draw("ACME\n1 Main St\nContact: Vivek  Tel: 516-305-9127")
     assert c.fonts[-1] == (d._FONT, d._px(27))
+
+
+def test_overflow_at_floor_keeps_phone_and_ellipsizes_address():
+    huge = "Receiving instructions " * 60
+    c = _draw_tail("ACME", huge, "Contact: Vivek  Tel: 516-305-9127")
+    assert c.drawn[-1].endswith("516-305-9127")
+    assert any(line.endswith("...") for line in c.drawn)
+    assert c.fonts[-1][1] == d._px(d.MIN_WRAPPED_FONT_PX)
+
+
+def _draw_tail(company, addr, tail):
+    c = _FakeCanvas()
+    d._draw_wrapped_top(c, f"{company}\n{addr}", 205, 620, 600, 245, 27, tail=tail)
+    return c

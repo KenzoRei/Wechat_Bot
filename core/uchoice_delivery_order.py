@@ -97,23 +97,38 @@ def _is_latin1(text: str) -> bool:
         return False
 
 
-def _draw_wrapped_top(c, text, x_px, y_px, w_px, h_px, font_px):
+def _draw_wrapped_top(c, text, x_px, y_px, w_px, h_px, font_px, tail=""):
     """Left-aligned, top-anchored, word-wrapped — matches the spec's TO/consignee alignment."""
     x_pt, top_pt, w_pt, h_pt = _rect_to_pt(x_px, y_px, w_px, h_px)
     text = text.strip()
+    tail = (tail or "").strip()
+    # ``tail`` (the contact/phone line) is always kept: if the text still
+    # overflows at the smallest font, the company/address part is cut with
+    # an ellipsis instead of losing the tail.
+    full = f"{text}\n{tail}" if tail else text
     # Helvetica has no CJK glyphs: fall back to the CJK font when the text
     # needs it (company / address / contact may be Chinese).
-    font = _FONT if _is_latin1(text) else _FONT_CJK
+    font = _FONT if _is_latin1(full) else _FONT_CJK
     # Shrink the font (down to a legible floor) until every line fits, so a
     # long company+address+contact never silently loses its trailing lines
     # (the phone number is the last line).
     font_pt = _px(font_px)
     min_pt = _px(MIN_WRAPPED_FONT_PX)
     while True:
-        lines = _wrap_text(text, font, font_pt, w_pt)
+        lines = _wrap_text(full, font, font_pt, w_pt)
         if len(lines) * font_pt * 1.3 - (font_pt * 0.3) <= h_pt or font_pt <= min_pt:
             break
         font_pt = max(min_pt, font_pt - _px(1))
+    capacity = int((h_pt - font_pt) // (font_pt * 1.3)) + 1
+    if len(lines) > capacity and tail:
+        tail_lines = _wrap_text(tail, font, font_pt, w_pt)
+        keep = max(capacity - len(tail_lines), 1)
+        head = _wrap_text(text, font, font_pt, w_pt)[:keep]
+        last = head[-1].rstrip()
+        while last and stringWidth(last + "...", font, font_pt) > w_pt:
+            last = last[:-1]
+        head[-1] = last + "..."
+        lines = head + tail_lines
     c.setFont(font, font_pt)
     line_height = font_pt * 1.3
     y = top_pt - font_pt
@@ -223,6 +238,7 @@ def build_delivery_order_pdf(
     # therefore must be byte-identical, not merely visually identical.
     c = pdf_canvas.Canvas(buf, pagesize=letter, invariant=1)
 
+    consignee_tail = ""
     consignee_text = consignee_company.strip()
     if consignee_addr.strip():
         consignee_text += f"\n{consignee_addr.strip()}"
@@ -233,7 +249,7 @@ def build_delivery_order_pdf(
     if (consignee_phone or "").strip():
         contact_parts.append(f"Tel: {consignee_phone.strip()}")
     if contact_parts:
-        consignee_text += "\n" + "  ".join(contact_parts)
+        consignee_tail = "  ".join(contact_parts)
     date_str = delivery_date.strftime("%m/%d/%Y")
     remark_text = f"Outbound Order #: {outbound_order_no}"
 
@@ -242,7 +258,7 @@ def build_delivery_order_pdf(
     for page_lines in pages:
         _draw_static_background(c, outbound_order_no)
         _draw_vcentered(c, date_str, 1090, 465, 300, 45, 27)
-        _draw_wrapped_top(c, consignee_text, 205, 620, 600, 245, 27)
+        _draw_wrapped_top(c, consignee_text, 205, 620, 600, 245, 27, tail=consignee_tail)
         for row_y, line in zip(_ROW_Y_PX, page_lines):
             _draw_vcentered(c, line["description"], 165, row_y, 545, 47, 25)
             _draw_vcentered(c, line["quantity_text"], 880, row_y, 535, 47, 25)
