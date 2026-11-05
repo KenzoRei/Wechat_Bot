@@ -54,7 +54,7 @@ def _address_matching_instructions(is_kefu: bool) -> str:
         "destination_address_id 直接填入——如果此列表中没有任何一项能匹配客户描述的目的地（注意：客户压根还没提到目的地，属于正常的"
         "缺失字段等待，不算这种情况；这里特指客户已经明确说了一个目的地，但列表里找不到对应项），不要设置 all_fields_collected=true，"
         "也不要在 extracted_fields 里填 destination_address_id。此时改为在顶层字段 unmatched_new_address 中尽力提取一个"
-        "{{\"company_name\": \"<公司名，提取不到则省略此键>\", \"addr\": \"<地址，按上面 upsert_address 的地址整理规则处理，"
+        "{{\"company_name\": \"<公司名，提取不到则省略此键>\", \"addr\": \"<地址，按上面 add_address 的地址整理规则处理，"
         "要素不全就只填齐全的部分，不要瞎猜补全，提取不到则省略此键>\", "
         "\"contact\": \"<收货联系人姓名，仅当客户明确提供时填写，否则省略此键>\", "
         "\"phone\": \"<收货联系电话，仅当客户明确提供时填写，否则省略此键>\"}}，供系统据此转为新增地址流程使用。"
@@ -80,17 +80,17 @@ def _drive_time_instructions(is_kefu: bool) -> str:
     )
     return (
         "- origin_warehouses：我们自己仓库（出发地）的地址，用于估算车程。\n"
-        "  · 新增地址时（upsert_address 会话，或出库目的地未收录、转为新增地址时），若收件地址要素齐全"
+        "  · 新增地址时（add_address 会话，或出库目的地未收录、转为新增地址时），若收件地址要素齐全"
         "（门牌号+街道、城市、州、邮编）且已知所属仓库，估算从该仓库到收件地址的驾车时间：取整数分钟，按普通白天路况，"
         "填入顶层字段 estimated_drive_minutes（出库转新增地址的那一轮，改为填入 "
         f"{handoff_key} 的 estimated_drive_minutes 键）。地址不全或无法判断时省略，不要瞎猜。\n"
         "  · 【重要】只给分钟数，绝不能自己给出或推断计费类型——计费类型由系统根据分钟数决定。"
         f"只有当用户自己明确说出计费类型（短途配送/配送/卡车转仓/自提）时，才填 charge_type（出库转新增地址的那一轮填入 {handoff_key} "
         "的 charge_type 键，取值 short_delivery / delivery / truck_transfer / self_pickup），不能根据车程自行填写。"
-        "upsert_address 会话中，用户在本条消息里明确说出计费类型时，除在 extracted_fields 填 charge_type 外，"
+        "add_address 会话中，用户在本条消息里明确说出计费类型时，除在 extracted_fields 填 charge_type 外，"
         "还必须把顶层字段 charge_type_stated 设为 true（即使与当前已收集的计费类型相同）；"
         "仅仅沿用已收集的计费类型时保持 false。\n"
-        "  · 【重要】只要本条消息给出或修改了收件地址（upsert_address 会话，或出库转新增地址的那一轮），"
+        "  · 【重要】只要本条消息给出或修改了收件地址（add_address 会话，或出库转新增地址的那一轮），"
         "就把你对该地址的理解拆成各部分，填入顶层字段 addr_parts（出库转新增地址的那一轮填入 "
         f"{handoff_key} 的 addr_parts 键）："
         "{\"street\": \"门牌号+街道，如 182-08 149th Avenue\", \"unit\": \"单元/套房，没有则省略\", "
@@ -188,12 +188,12 @@ def build_system_prompt(context: dict) -> str:
     )
 
     # Only relevant to callers who can actually reach a service involving
-    # charge_type (upsert_address sets it directly; outbound requests resolve
+    # charge_type (add_address sets it directly; outbound requests resolve
     # it via the matched destination address) — no point showing fee
     # explanations to a caller who can never encounter the concept.
     service_names = {s["name"] for s in context.get("allowed_services", [])}
     charge_type_block = ""
-    if service_names & {"upsert_address", "uchoice_outbound_request"}:
+    if service_names & {"add_address", "uchoice_outbound_request"}:
         from core.uchoice_rates import CHARGE_TYPE_DESCRIPTIONS
         charge_type_lines = "\n".join(f"- {desc}" for desc in CHARGE_TYPE_DESCRIPTIONS.values())
         charge_type_block = (
@@ -427,7 +427,7 @@ def build_system_prompt(context: dict) -> str:
 - 【重要】check_services 仅适用于用户明确、泛泛地询问"有什么服务"、"能做什么"、"服务列表"等——不确定该选哪个服务时的兜底，不是默认选项。如果用户的消息（哪怕只是一个简短的关键词，如"库存"、"入库"、"查一下地址"）在语义上明显对应某一具体服务的 name 或 description，必须优先判定为 new_request 并将 service_type_name 设为该服务，而不是退回 check_services。只有在消息真的无法关联到任何具体服务时，才使用 check_services 或 unrecognized。
 - 【重要】用户经常用陈述事实的口吻而非明确指令来触发确认类服务（confirm_inbound_completion / confirm_outbound_completion），例如"货已经送到了""东西送过去了""收到货了""货到仓库了"——这些不是在闲聊，而是在报告一个已完成的物流动作，必须按语义匹配到对应服务的 new_request，不能因为没有"确认"这类明确指令词就归为 unrecognized 或 check_services。判断方向：陈述"送出去/送到目的地"→ confirm_outbound_completion；陈述"收到/到仓库了"→ confirm_inbound_completion。\n"
   示例：用户说"货已经送到了"（无关键词"确认"，纯陈述） → 正确输出：intent=new_request，service_type_name="confirm_outbound_completion"（陈述的是送达，即出库完成）。错误输出（禁止）：intent=unrecognized 或 check_services——这类陈述句和"确认出库"表达的是同一个意图，只是措辞更口语化。
-- 【重要】收集 upsert_address 的 addr 字段时，必须检查用户提供的内容是否至少包含一个真实地址应有的基本要素（门牌号+街道名、城市、州、邮编），并整理成规范格式（如"123 Main St, City, ST 12345"，逗号分隔、州用两位缩写、邮编独立成段）。如果用户原话缺少这些要素中的关键部分（如只给了街道没给城市/州/邮编），不要直接照抄或瞎猜补全，必须在 reply 中指出缺了什么并请用户补充；如果用户原话包含全部要素但格式凌乱（如缺逗号、大小写混乱、单位缩写不一致），可以直接整理规范后填入 extracted_fields，不需要用户重新提供。
+- 【重要】收集 add_address 的 addr 字段时，必须检查用户提供的内容是否至少包含一个真实地址应有的基本要素（门牌号+街道名、城市、州、邮编），并整理成规范格式（如"123 Main St, City, ST 12345"，逗号分隔、州用两位缩写、邮编独立成段）。如果用户原话缺少这些要素中的关键部分（如只给了街道没给城市/州/邮编），不要直接照抄或瞎猜补全，必须在 reply 中指出缺了什么并请用户补充；如果用户原话包含全部要素但格式凌乱（如缺逗号、大小写混乱、单位缩写不一致），可以直接整理规范后填入 extracted_fields，不需要用户重新提供。
   示例：用户说"201 Gabor drive Newark De19711" → 要素齐全（门牌+街道、城市、州、邮编），只是格式凌乱 → 正确输出：extracted_fields 中 addr 填"201 Gabor Dr, Newark, DE 19711"。
   示例：用户说"发到Newark那个仓库" → 缺门牌号和街道名，只有城市 → 正确输出：all_fields_collected 不设为 true（addr 未满足），reply 询问具体门牌号和街道名。
 - 【重要】每个服务的 keywords 只是辅助判断的参考信号，不是100%确定的匹配依据，实际判断仍要结合上下文语义。如果用户明确表示某个判断不对（如"不是这个""你搞错了""我不是要这个服务""我说的不是XX"），必须立即采纳用户的说法并重新判断当前到底是哪个服务或哪个意图，不能因为消息中命中了某个 keyword 就固执坚持最初的判断，也不能反复用同一个理由说服用户接受你先前的判断。

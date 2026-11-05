@@ -707,17 +707,17 @@ def _valid_invoice_warehouses(context: dict, collected_fields: dict, db: DBSessi
     return None
 
 
-def _valid_upsert_address_warehouse_scope(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+def _valid_add_address_warehouse_scope(context: dict, collected_fields: dict, db: DBSession) -> str | None:
     """
-    upsert_address's own warehouse-scope check -- _valid_caller_warehouse_scope
+    add_address's own warehouse-scope check -- _valid_caller_warehouse_scope
     above is not enough here, because that function only ever compares the
     REQUESTED warehouse_code (the value being submitted) against the
     caller's assignment. For an UPDATE (matched_address_id set), the
     request submits whichever warehouse the caller intends the address to
     end up at -- always one they're authorized for, since a warehouseman
     would obviously only submit a code they themselves can use. The
-    address candidate list for upsert_address is intentionally the FULL,
-    unfiltered book (see core/session_manager.py's active_is_upsert_address
+    address candidate list for add_address is intentionally the FULL,
+    unfiltered book (see core/session_manager.py's active_is_add_address
     branch), so a JFK-only warehouseman could still have the AI match
     matched_address_id to an existing DE-owned address purely by its text
     description, then submit warehouse_code="JFK" -- passing the generic
@@ -752,7 +752,7 @@ def _valid_upsert_address_warehouse_scope(context: dict, collected_fields: dict,
 _ADDRESS_FIELD_LIMITS = {"contact": ("联系人", 100), "phone": ("电话", 50)}
 
 
-def _valid_upsert_address_field_lengths(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+def _valid_add_address_field_lengths(context: dict, collected_fields: dict, db: DBSession) -> str | None:
     for key, (label, limit) in _ADDRESS_FIELD_LIMITS.items():
         value = collected_fields.get(key)
         if isinstance(value, str) and len(value.strip()) > limit:
@@ -925,9 +925,9 @@ PRE_CONFIRM_VALIDATORS = {
     "view_storage": _valid_caller_warehouse_scope,
     "view_storage_history": _valid_caller_warehouse_scope,
     "view_invoice": _valid_invoice_warehouses,
-    "upsert_address": _compose(
-        _valid_upsert_address_field_lengths,
-        _valid_upsert_address_warehouse_scope,
+    "add_address": _compose(
+        _valid_add_address_field_lengths,
+        _valid_add_address_warehouse_scope,
     ),
     "fedex_label": _valid_label,
     "ups_label": _valid_label,

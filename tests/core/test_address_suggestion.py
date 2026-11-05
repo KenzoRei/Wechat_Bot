@@ -194,7 +194,7 @@ def test_turn_without_a_verified_location_makes_no_suggestion(fields, parts):
 # ── Confirmation display ─────────────────────────────────────────────────────
 
 def _address_items(fields):
-    return build_confirmation_sections("upsert_address", fields, None)[0]["items"]
+    return build_confirmation_sections("add_address", fields, None)[0]["items"]
 
 
 def test_confirmation_shows_the_suggestion_and_hides_internal_keys():
@@ -214,7 +214,7 @@ def test_confirmation_stated_charge_type_has_no_estimate_line():
 FORGED = "1 Main St, , NY 11434"
 
 
-@pytest.mark.parametrize("service", ["upsert_address", "uchoice_outbound_request", "role_change", "view_storage"])
+@pytest.mark.parametrize("service", ["add_address", "uchoice_outbound_request", "role_change", "view_storage"])
 def test_ai_extracted_internal_keys_are_dropped_for_every_service(service):
     from core.uchoice_field_sanitization import sanitize_extracted_fields_before_persistence
     extracted = {"note": "x", s.VERIFIED_KEY: FORGED, s.SUGGESTED_KEY: True, "_candidate_snapshot": ["REQ-X"],
@@ -241,14 +241,14 @@ def test_sanitize_and_seed_keep_contact_and_phone():
     assert "contact" not in (s.sanitize_new_address({"addr": "1 Main St", "contact": "  "}) or {})
 
 
-def test_upsert_address_rejects_overlong_contact_and_phone():
+def test_add_address_rejects_overlong_contact_and_phone():
     from core import pre_confirm_validators as v
-    assert v.run("upsert_address", {"role": "admin"}, {"contact": "x" * 101}, None) is not None
-    assert v.run("upsert_address", {"role": "admin"}, {"phone": "1" * 51}, None) is not None
-    assert v.run("upsert_address", {"role": "admin"}, {"contact": "x" * 100, "phone": "1" * 50}, None) is None
+    assert v.run("add_address", {"role": "admin"}, {"contact": "x" * 101}, None) is not None
+    assert v.run("add_address", {"role": "admin"}, {"phone": "1" * 51}, None) is not None
+    assert v.run("add_address", {"role": "admin"}, {"contact": "x" * 100, "phone": "1" * 50}, None) is None
 
 
-def test_upsert_address_handler_trims_contact_and_phone():
+def test_add_address_handler_trims_contact_and_phone():
     from handlers.uchoice.address import _clean
     assert _clean("  " + "x" * 100 + " ") == "x" * 100
     assert _clean("   ") is None and _clean(None) is None

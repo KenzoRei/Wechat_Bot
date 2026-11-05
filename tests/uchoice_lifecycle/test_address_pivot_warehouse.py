@@ -1,5 +1,5 @@
 """
-Smart Robot's outbound -> upsert_address pivot
+Smart Robot's outbound -> add_address pivot
 (core/workflow_engine._maybe_pivot_to_add_address): carries the outbound's
 warehouse over, and seeds a stated or suggested charge type (address-pivot
 plan rev 3, items 1-2). When the seed is complete the reply is the
@@ -18,7 +18,7 @@ _ADDRESS_ID = "00000000-0000-0000-0000-000000000003"
 
 _SERVICES = [
     {"name": "uchoice_outbound_request", "service_type_id": _OUTBOUND_ID},
-    {"name": "upsert_address", "service_type_id": _ADDRESS_ID,
+    {"name": "add_address", "service_type_id": _ADDRESS_ID,
      "input_schema": {"required": ["charge_type", "addr", "warehouse_code"]}, "requires_confirmation": True},
 ]
 
@@ -103,7 +103,7 @@ def test_complete_seed_with_estimate_sends_the_code_built_confirmation(pivot):
     )
     assert fields["addr"] == ADDR and fields["charge_type"] == "delivery"
     assert fields[address_suggestion.SUGGESTED_KEY] is True and fields[address_suggestion.MINUTES_KEY] == 12
-    assert confirmed == ["upsert_address"]
+    assert confirmed == ["add_address"]
     assert reply.startswith("该地址尚未收录，原出库申请已取消，先新增地址：")
     assert "CONFIRMATION" in reply and reply.endswith("新增后请重新提交出库申请。")
     assert AI_REPLY not in reply
@@ -117,7 +117,7 @@ def test_stated_charge_type_beats_the_estimate(pivot):
     )
     assert fields["charge_type"] == "self_pickup"
     assert address_suggestion.SUGGESTED_KEY not in fields and address_suggestion.MINUTES_KEY not in fields
-    assert confirmed == ["upsert_address"]
+    assert confirmed == ["add_address"]
 
 
 def test_incomplete_seed_sends_the_ai_reply_and_seeds_no_tier(pivot):

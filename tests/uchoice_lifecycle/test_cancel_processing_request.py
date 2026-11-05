@@ -220,7 +220,7 @@ def test_unscoped_caller_never_blocked_by_warehouse_scope():
 def test_single_assigned_warehouse_still_works():
     context = {"warehouse_codes": ["JFK"]}
     error = pre_confirm_validators.run(
-        "upsert_address",
+        "add_address",
         context,
         {"warehouse_code": "JFK", "charge_type": "delivery", "addr": "123 Main St"},
         db=None,

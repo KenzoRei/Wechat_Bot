@@ -6,9 +6,9 @@ def _clean(value):
     return value.strip() or None if isinstance(value, str) else value
 
 
-class UpsertAddressHandler(BaseHandler):
+class AddAddressHandler(BaseHandler):
     """
-    upsert_address — create-vs-update resolved by matched_address_id, which
+    add_address — create-vs-update resolved by matched_address_id, which
     the AI sets in extracted_fields if it matched the customer's description
     against the injected address candidate list. The confirmation template
     (core/confirmation.py's _address_sections_builder) already surfaced which
@@ -38,9 +38,9 @@ class UpsertAddressHandler(BaseHandler):
             if addr is None:
                 raise RuntimeError("待更新的地址不存在。")
             # Execution-time backstop matching
-            # core.pre_confirm_validators._valid_upsert_address_warehouse_scope
+            # core.pre_confirm_validators._valid_add_address_warehouse_scope
             # -- checks the EXISTING address's own warehouse, not just the
-            # requested one, since upsert_address's candidate list is
+            # requested one, since add_address's candidate list is
             # intentionally unfiltered (the full address book), so a
             # warehouseman could otherwise reach an address outside their
             # assignment purely via matched_address_id. Uses
@@ -82,7 +82,7 @@ class UpsertAddressHandler(BaseHandler):
         if not created_by:
             raise RuntimeError("无法确定操作人身份，无法新增地址。")
 
-        # Matches core.pre_confirm_validators._valid_upsert_address_
+        # Matches core.pre_confirm_validators._valid_add_address_
         # warehouse_scope's final check, which applies to both create and
         # update -- a new address had no execution-time backstop at all
         # before this (2026-09-15 audit finding 2).

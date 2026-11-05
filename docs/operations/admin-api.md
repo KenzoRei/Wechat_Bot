@@ -295,7 +295,7 @@ keys).
 | `adjust_storage` | `...-000000000007` | warehouseman |
 | `recount_storage` | `...-000000000008` | warehouseman |
 | `move_storage` | `...-000000000009` | warehouseman |
-| `upsert_address` | `...-00000000000a` | customer, warehouseman |
+| `add_address` | `...-00000000000a` | customer, warehouseman |
 | `role_change` | `...-00000000000b` | admin |
 | `view_invoice` | `...-00000000000c` | customer, accountant |
 | `cancel_inbound_request` | `...-000000000010` | customer, admin |

@@ -64,7 +64,7 @@ _DISPLAY_NAMES = {
     "adjust_storage":             "库存调整",
     "recount_storage":            "库存盘点",
     "move_storage":               "库存内部调拨",
-    "upsert_address":             "地址簿更新",
+    "add_address":             "地址簿更新",
     "role_change":                "角色变更",
     "view_storage":               "查询库存",
     "view_storage_history":       "库存变动记录",
@@ -769,7 +769,7 @@ def _recount_sections_builder(collected_fields: dict, db: DBSession) -> list[dic
 
 
 def _address_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
-    """upsert_address — must state create-vs-update mode explicitly. charge_type shown as its Chinese label, not the raw enum code."""
+    """add_address — must state create-vs-update mode explicitly. charge_type shown as its Chinese label, not the raw enum code."""
     from core.address_suggestion import suggestion_note
 
     mode = "更新" if collected_fields.get("matched_address_id") else "新增"
@@ -862,7 +862,7 @@ CONFIRMATION_BUILDERS: dict[str, Callable[[dict, DBSession], list[dict]]] = {
     "adjust_storage":           _adjust_sections_builder,
     "recount_storage":          _recount_sections_builder,
     "move_storage":             _move_sections_builder,
-    "upsert_address":           _address_sections_builder,
+    "add_address":           _address_sections_builder,
     "role_change":              _role_change_sections_builder,
     "cancel_inbound_request":   _cancel_request_sections_builder,
     "cancel_outbound_request":  _cancel_request_sections_builder,

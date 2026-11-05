@@ -17,7 +17,7 @@ misreading is visible before 确认. Only a verified address gets a
 suggestion; anything else keeps the AI's own addr text and the charge type
 is asked for, as before.
 
-Suggestion state lives next to charge_type/addr in the upsert_address
+Suggestion state lives next to charge_type/addr in the add_address
 session's collected_fields, under keys the address handler never copies:
   _charge_type_suggested         True when the system (not the user) set charge_type
   _charge_type_estimate_minutes  the minutes behind that suggestion
@@ -170,7 +170,7 @@ def apply_address_turn(
     stated_flag: bool = False, raw_parts=None,
 ) -> dict:
     """
-    One upsert_address turn, after this turn's extracted fields were merged
+    One add_address turn, after this turn's extracted fields were merged
     over `previous` into `merged`.
     - Valid addr_parts set addr to the address code builds from them.
     - The user stated a charge type: it stands, the suggestion is cleared.

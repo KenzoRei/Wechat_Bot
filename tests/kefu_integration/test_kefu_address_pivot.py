@@ -123,15 +123,15 @@ def test_unmatched_address_atomically_pivots_without_ai_operational_prose(monkey
         ), {"staff": staff_id}).mappings().all()
         db.close()
         by_service = {row["name"]: row for row in rows}
-        assert set(by_service) == {"uchoice_outbound_request", "upsert_address"}
+        assert set(by_service) == {"uchoice_outbound_request", "add_address"}
         # Parked, not cancelled: it resumes once the address is saved.
         assert (by_service["uchoice_outbound_request"]["session_status"],
                 by_service["uchoice_outbound_request"]["log_status"]) == ("active", "pending")
-        assert (by_service["upsert_address"]["session_status"],
-                by_service["upsert_address"]["log_status"]) == ("active", "pending")
-        assert by_service["upsert_address"]["collected_fields"]["addr"] == "600 Blair Rd, Carteret, NJ 07008"
+        assert (by_service["add_address"]["session_status"],
+                by_service["add_address"]["log_status"]) == ("active", "pending")
+        assert by_service["add_address"]["collected_fields"]["addr"] == "600 Blair Rd, Carteret, NJ 07008"
         # The outbound's warehouse is carried over; only the charge type is asked.
-        assert by_service["upsert_address"]["collected_fields"]["warehouse_code"] == warehouse
+        assert by_service["add_address"]["collected_fields"]["warehouse_code"] == warehouse
         assert "计费类型" in result.reply_text
         assert "所属仓库" not in result.reply_text
     finally:

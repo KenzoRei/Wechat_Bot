@@ -112,7 +112,7 @@ _RESULT_TITLE_BUILDERS: dict[str, Callable[[str, dict], str]] = {
     "confirm_outbound_completion_batch": _completion_batch_result_title,
     "cancel_inbound_request_batch":  _cancel_batch_result_title,
     "cancel_outbound_request_batch": _cancel_batch_result_title,
-    "upsert_address":              _address_result_title,
+    "add_address":              _address_result_title,
     "explain_service":             _explain_service_result_title,
     "cancel_inbound_request":      _cancel_inbound_result_title,
     "cancel_outbound_request":     _cancel_outbound_result_title,
@@ -603,7 +603,7 @@ def _move_result_sections_builder(context: dict, db: DBSession) -> list[dict]:
 
 def _address_result_sections_builder(context: dict, db: DBSession) -> list[dict]:
     """
-    upsert_address — no storage involved, shows the actual address details
+    add_address — no storage involved, shows the actual address details
     (from collected_fields, since context["result"] only carries the
     internal address_id + mode) rather than a raw UUID.
     """
@@ -694,7 +694,7 @@ RESULT_BUILDERS: dict[str, Callable[[dict, DBSession], list[dict]]] = {
     "adjust_storage":              _adjust_result_sections_builder,
     "recount_storage":             _recount_result_sections_builder,
     "move_storage":                _move_result_sections_builder,
-    "upsert_address":              _address_result_sections_builder,
+    "add_address":              _address_result_sections_builder,
     "role_change":                 _role_change_result_sections_builder,
     "explain_service":             _explain_service_sections_builder,
 }

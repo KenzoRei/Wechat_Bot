@@ -114,7 +114,7 @@ def _maybe_pivot_to_add_address(context: dict, ai_response: AIResponse, db: DBSe
     an address can be added, silently abandon the in-progress outbound
     session (closing its own request_log too, since uchoice_outbound_request
     isn't targets_existing_request and owns one) and open a fresh
-    upsert_address session pre-seeded with the AI's best-effort company_name/
+    add_address session pre-seeded with the AI's best-effort company_name/
     addr guess from the same message. Nothing about the abandoned outbound
     request survives this — the customer has to resubmit it once the address
     exists (accepted tradeoff, see docs/uchoice-design.md).
@@ -134,7 +134,7 @@ def _maybe_pivot_to_add_address(context: dict, ai_response: AIResponse, db: DBSe
     if current_service_name != "uchoice_outbound_request":
         return False
 
-    add_address_service = _find_service(context, "upsert_address")
+    add_address_service = _find_service(context, "add_address")
     if add_address_service is None:
         # this role can't add addresses — fall through to normal processing;
         # destination_address_id was never set per the prompt rule, so the
@@ -289,11 +289,11 @@ def pending_value_check_reply(context: dict, db: DBSession) -> str | None:
 
 
 def _apply_address_suggestion(db: DBSession, service: dict | None, session, previous: dict, extracted, ai_response) -> None:
-    """upsert_address: suggested charge type from the AI's drive-time
+    """add_address: suggested charge type from the AI's drive-time
     estimate; a stated charge type always wins (core/address_suggestion.py).
     May drop charge_type, so it replaces collected_fields rather than
     merging like update_collected_fields."""
-    if service is None or service["name"] != "upsert_address":
+    if service is None or service["name"] != "add_address":
         return
     from core.address_suggestion import apply_address_turn
     updated = apply_address_turn(
@@ -1242,7 +1242,7 @@ def _execute_workflow_and_finish(context: dict, session, db: DBSession) -> None:
 
     # The atomic transaction split applies only to explicitly named U-Choice
     # services. Every other
-    # service -- FedEx, UPS, OMS, upsert_address, anything else -- runs
+    # service -- FedEx, UPS, OMS, add_address, anything else -- runs
     # through the single-phase path. Use an explicit service-name allowlist,
     # not
     # step-type inference: the first version of this fix inferred

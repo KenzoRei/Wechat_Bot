@@ -171,7 +171,7 @@ follow them:**
   in AI replies (§9) — a code meant for the backend, shown to a person.
 - **Surface every AI assumption explicitly**, don't silently apply it — the
   largest-bucket default for a missing `boxes_per_pallet`, the
-  create-vs-update mode for `upsert_address`, the computed diff for
+  create-vs-update mode for `add_address`, the computed diff for
   `recount_storage` (never the raw snapshot the user typed). If the AI
   guessed something, the human must see exactly what before confirming.
 - **Trim boilerplate, but keep it re-askable.** An optional field that's

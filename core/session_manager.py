@@ -375,33 +375,33 @@ def _build_uchoice_candidates(
     # addresses were customer-private; the user corrected this after the
     # live incident that motivated this phase (see decisions.md's
     # "Superseded or challenged assumptions") -- customer_id is provenance/
-    # reporting metadata only, never an address ACL. upsert_address needs
+    # reporting metadata only, never an address ACL. add_address needs
     # the same candidate list to resolve create-vs-update via
     # matched_address_id, so it's included here too (previously a gap: it
     # received no address candidates at all).
-    if names & {"uchoice_outbound_request", "upsert_address"}:
+    if names & {"uchoice_outbound_request", "add_address"}:
         # Scoped to the request's own source warehouse by default. Originally
         # this only filtered when uchoice_outbound_request was the *sole*
-        # possible service, on the reasoning that upsert_address needs the
+        # possible service, on the reasoning that add_address needs the
         # full, unfiltered book -- but that made the filter a dead letter in
         # the single most common case: a brand-new session's first message,
-        # where the role (e.g. warehouseman) is also granted upsert_address,
+        # where the role (e.g. warehouseman) is also granted add_address,
         # so `names` is the full role set and the exact-match check always
         # failed. Live incident: "发货到DE" on turn 1 still offered the
         # DE-scoped self-pickup address to a JFK-sourced request, because
         # nothing had locked the session to uchoice_outbound_request yet.
         # Flipped: filter is now the default, and unfiltered is reserved for
         # the one case that actually needs it -- a session ALREADY locked to
-        # upsert_address specifically (not merely "could still become one").
+        # add_address specifically (not merely "could still become one").
         # scope_warehouse mirrors the SKU catalog scoping above/default-JFK
         # reasoning: real customers essentially never state warehouse_code,
         # so candidates should reflect whichever warehouse the request will
         # actually end up defaulting to.
-        active_is_upsert_address = (
+        active_is_add_address = (
             session is not None and session.service_type_id
-            and by_id.get(str(session.service_type_id)) == "upsert_address"
+            and by_id.get(str(session.service_type_id)) == "add_address"
         )
-        if active_is_upsert_address:
+        if active_is_add_address:
             candidates["addresses"] = uchoice_context.address_candidates(db)
         elif scope_warehouse:
             candidates["addresses"] = uchoice_context.address_candidates(db, source_warehouse_code=scope_warehouse)
@@ -409,11 +409,11 @@ def _build_uchoice_candidates(
             candidates["addresses"] = uchoice_context.address_candidates(db, allowed_warehouse_codes=allowed_warehouse_codes)
         else:
             candidates["addresses"] = uchoice_context.address_candidates(db, source_warehouse_code="JFK")
-        if "upsert_address" in names:
+        if "add_address" in names:
             # Origin addresses for the drive-time estimate behind a suggested
             # charge type (core/address_suggestion.py) -- needed on the
             # outbound turn that hands off to a new address too, not only
-            # inside an upsert_address session.
+            # inside an add_address session.
             from core.address_suggestion import origin_warehouse_addresses
             candidates["origin_warehouses"] = origin_warehouse_addresses(db)
         # boxes_per_pallet resolution (default-fill, ambiguity-clarification,

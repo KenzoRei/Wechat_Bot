@@ -2,7 +2,7 @@
 Real-PostgreSQL tests for the shared U-Choice address book. Distinct from
 test_kefu_customer_selection.py, which covers the customer-lock interaction;
 this file covers address-sharing mechanics on their own: null/varied
-customer_id are all matchable, upsert_address gets the same candidate list
+customer_id are all matchable, add_address gets the same candidate list
 as uchoice_outbound_request (a real, previously-missing gap), and a service
 outside the authorized set receives no address list at all.
 """
@@ -92,16 +92,16 @@ def test_addresses_with_varied_and_null_customer_id_are_all_matchable(kefu_acces
         db.commit()
 
 
-def test_upsert_address_receives_the_same_shared_candidate_list(kefu_access):
+def test_add_address_receives_the_same_shared_candidate_list(kefu_access):
     """
     Previously a real gap: only uchoice_outbound_request triggered address
-    candidate injection, so upsert_address's own matched_address_id
+    candidate injection, so add_address's own matched_address_id
     create-versus-update resolution had nothing to match against. Both are
     required.
     """
     access, db = kefu_access
     names = {s["name"] for s in access.allowed_services}
-    assert "upsert_address" in names, "fixture admin role must be granted upsert_address for this test"
+    assert "add_address" in names, "fixture admin role must be granted add_address for this test"
 
     message = {"content": "更新地址", "msg_id": "", "response_url": ""}
     context = session_manager.build_context(db, access, session=None, message=message)
@@ -116,7 +116,7 @@ def test_locked_outbound_session_scopes_addresses_to_its_own_source_warehouse(ke
     vs. a same-address DE-only self-pickup entry) -- observed live to
     confuse the AI into offering the wrong one for a JFK-sourced request.
     Once a session is locked to uchoice_outbound_request alone (the only
-    case this scoping applies to -- upsert_address needs the full list),
+    case this scoping applies to -- add_address needs the full list),
     candidates must exclude an address scoped to a different warehouse,
     while still including a warehouse-agnostic (null warehouse_code) one.
     """

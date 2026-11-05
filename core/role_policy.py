@@ -231,7 +231,7 @@ def check_warehouse_scope(role_name: str, allowed_codes: list[str] | None, reque
     """
     The one fail-closed runtime warehouse-scope check -- consulted by
     core.pre_confirm_validators._valid_caller_warehouse_scope,
-    core.pre_confirm_validators._valid_upsert_address_warehouse_scope,
+    core.pre_confirm_validators._valid_add_address_warehouse_scope,
     handlers.uchoice.storage_txns._require_caller_warehouse_scope, and
     handlers.uchoice.record_request.RecordUchoiceRequestHandler. Replaces
     each of their previous `if allowed_codes is None: return None` --
@@ -269,7 +269,7 @@ def check_warehouse_scope(role_name: str, allowed_codes: list[str] | None, reque
 # core.pre_confirm_validators.PRE_CONFIRM_VALIDATORS (uchoice_outbound_
 # request, uchoice_inbound_request, adjust_storage, move_storage,
 # recount_storage, view_storage, view_storage_history, view_invoice,
-# upsert_address) and handlers.uchoice.storage_txns's
+# add_address) and handlers.uchoice.storage_txns's
 # ApplyInboundStorageHandler/ApplyOutboundStorageHandler (confirm_inbound_
 # completion/confirm_outbound_completion, added in the same 2026-09-15 audit
 # fix as check_warehouse_scope's fail-closed behavior). Used only by
@@ -286,7 +286,7 @@ WAREHOUSE_SCOPED_SERVICE_NAMES = frozenset({
     "view_storage",
     "view_storage_history",
     "view_invoice",
-    "upsert_address",
+    "add_address",
     "confirm_inbound_completion",
     "confirm_outbound_completion",
     # Batch completion re-runs the single completion's warehouse-scope

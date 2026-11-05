@@ -10,7 +10,7 @@ from __future__ import annotations
 _SERVICE_LABELS = {
     "uchoice_inbound_request": "入库申请",
     "uchoice_outbound_request": "出库申请",
-    "upsert_address": "地址信息更新",
+    "add_address": "地址信息更新",
 }
 
 
@@ -75,7 +75,7 @@ def render_customer_copy(db, *, service_name: str | None, session, request_log, 
             # charge type, notes, UUIDs, staff identity and stock are omitted.
             lines.append(f"送货地址：{address.company_name}，{address.addr}")
 
-    if service_name == "upsert_address":
+    if service_name == "add_address":
         company = fields.get("company_name")
         address = fields.get("addr")
         if company:

@@ -20,7 +20,7 @@ audit's three findings on warehouse-scope enforcement
 import pytest
 
 from core.workflow_errors import TargetValidationError
-from handlers.uchoice.address import UpsertAddressHandler
+from handlers.uchoice.address import AddAddressHandler
 from handlers.uchoice.storage_txns import ApplyInboundStorageHandler, ApplyOutboundStorageHandler
 from handlers.uchoice.lookup_validate import LookupAndValidateCompletionHandler
 from models.request_log import RequestLog
@@ -28,7 +28,7 @@ from models.service import ServiceType
 from models.uchoice import UchoiceAddress
 
 
-# ── UpsertAddressHandler ──────────────────────────────────────────────────
+# ── AddAddressHandler ──────────────────────────────────────────────────
 
 class _FakeAddressQuery:
     def __init__(self, existing):
@@ -64,7 +64,7 @@ class _FakeAddressDB:
         pass
 
 
-def test_upsert_address_update_rejects_scoped_caller_with_missing_codes():
+def test_add_address_update_rejects_scoped_caller_with_missing_codes():
     existing = UchoiceAddress(
         address_id="33333333-0000-0000-0000-000000000003",
         company_name="OLD", charge_type="delivery", addr="OLD ADDR", warehouse_code="NJ",
@@ -78,12 +78,12 @@ def test_upsert_address_update_rejects_scoped_caller_with_missing_codes():
     }
     db = _FakeAddressDB(existing=existing)
     with pytest.raises(RuntimeError):
-        UpsertAddressHandler().handle(context, {}, db)
+        AddAddressHandler().handle(context, {}, db)
     assert existing.company_name == "OLD"  # never mutated
     assert not db.committed
 
 
-def test_upsert_address_create_rejects_scoped_caller_with_missing_codes():
+def test_add_address_create_rejects_scoped_caller_with_missing_codes():
     context = {
         "collected_fields": {"company_name": "ACME", "charge_type": "truck_transfer", "addr": "1 Main St", "warehouse_code": "NJ"},
         "wechat_openid": "caller",
@@ -93,11 +93,11 @@ def test_upsert_address_create_rejects_scoped_caller_with_missing_codes():
     }
     db = _FakeAddressDB()
     with pytest.raises(RuntimeError):
-        UpsertAddressHandler().handle(context, {}, db)
+        AddAddressHandler().handle(context, {}, db)
     assert db.added == []
 
 
-def test_upsert_address_create_allows_unrestricted_caller_with_no_codes():
+def test_add_address_create_allows_unrestricted_caller_with_no_codes():
     context = {
         "collected_fields": {"company_name": "ACME", "charge_type": "truck_transfer", "addr": "1 Main St", "warehouse_code": "NJ"},
         "wechat_openid": "caller",
@@ -106,12 +106,12 @@ def test_upsert_address_create_allows_unrestricted_caller_with_no_codes():
         "warehouse_codes": None,
     }
     db = _FakeAddressDB()
-    result = UpsertAddressHandler().handle(context, {}, db)
+    result = AddAddressHandler().handle(context, {}, db)
     assert result["mode"] == "新增"
     assert db.added and db.committed
 
 
-def test_upsert_address_update_rejects_out_of_scope_target_warehouse():
+def test_add_address_update_rejects_out_of_scope_target_warehouse():
     existing = UchoiceAddress(
         address_id="44444444-0000-0000-0000-000000000004",
         company_name="OLD", charge_type="delivery", addr="OLD ADDR", warehouse_code="NJ",
@@ -125,7 +125,7 @@ def test_upsert_address_update_rejects_out_of_scope_target_warehouse():
     }
     db = _FakeAddressDB(existing=existing)
     with pytest.raises(RuntimeError):
-        UpsertAddressHandler().handle(context, {}, db)
+        AddAddressHandler().handle(context, {}, db)
     assert existing.warehouse_code == "NJ"
 
 

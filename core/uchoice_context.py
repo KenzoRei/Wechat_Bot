@@ -105,7 +105,7 @@ def address_candidates(
     closely. core/pre_confirm_validators.py's _valid_destination_address_
     required is the actual correctness backstop for this; this filter only
     reduces how often the AI has to be corrected by it. Only meaningful for
-    uchoice_outbound_request's own candidate injection -- upsert_address
+    uchoice_outbound_request's own candidate injection -- add_address
     needs the FULL, unfiltered list to resolve create-vs-update, so its
     caller must never pass this.
 

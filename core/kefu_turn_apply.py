@@ -26,7 +26,7 @@ from core.uchoice_field_sanitization import sanitize_extracted_fields_before_per
 # distance/price definitions shown when asking for charge_type can never
 # drift out of sync with the single source of truth used everywhere else
 # (explain_service, the AI's charge-type explanation block, the
-# upsert_address confirmation summary).
+# add_address confirmation summary).
 _CHARGE_TYPE_QUESTION = "请选择计费类型：\n" + "\n".join(
     f"- {desc}" for desc in CHARGE_TYPE_DESCRIPTIONS.values()
 )
@@ -56,7 +56,7 @@ _FIELD_PROMPTS = {
 _SERVICE_LABELS = {
     "uchoice_outbound_request": "出库申请",
     "uchoice_inbound_request": "入库申请",
-    "upsert_address": "地址维护",
+    "add_address": "地址维护",
     "confirm_outbound_completion": "出库完成确认",
     "confirm_inbound_completion": "入库完成确认",
     "cancel_inbound_request": "取消入库申请",
@@ -290,7 +290,7 @@ def _pivot_to_address(db: DBSession, context: dict, old_session, old_log, guess:
     from core.kefu_outcomes import AddressPivotStartedOutcome
     from core.kefu_response_renderer import render_kefu_outcome
 
-    address_service = next((s for s in services if s["name"] == "upsert_address"), None)
+    address_service = next((s for s in services if s["name"] == "add_address"), None)
     if address_service is None:
         return None
 
@@ -354,7 +354,7 @@ def _pivot_to_address(db: DBSession, context: dict, old_session, old_log, guess:
         next_step_text=next_step,
     ))
     _replace_last_assistant(new_session, reply)
-    context["_effective_service_name"] = "upsert_address"
+    context["_effective_service_name"] = "add_address"
     context["_reply"] = reply
     return reply
 
@@ -664,7 +664,7 @@ def _workflow_steps(db: DBSession, context: dict, service: dict, session) -> Non
         handler_class = HANDLER_REGISTRY.get(step.step_type)
         if handler_class is None:
             raise RuntimeError(f"No handler registered for step_type: {step.step_type!r}")
-        if step.step_type == "upsert_address":
+        if step.step_type == "add_address":
             merged["_defer_commit"] = True
         result = handler_class().handle(context, merged, db)
         context["result"].update(result or {})
@@ -805,7 +805,7 @@ def confirm_kefu_turn(db: DBSession, context: dict, service: dict, session) -> s
         log.status = "processing"
     try:
         reply = _finish_execution(db, context, service, session, log)
-        if service["name"] == "upsert_address" and session.status == "completed":
+        if service["name"] == "add_address" and session.status == "completed":
             from core import parked_outbound
             if parked_outbound.resumes(session):
                 reply = _resume_parked_outbound(db, context, session, reply)
@@ -1456,7 +1456,7 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
         )
         session.collected_fields = {**(session.collected_fields or {}), **extracted}
         context["collected_fields"] = session.collected_fields
-    if service["name"] == "upsert_address":
+    if service["name"] == "add_address":
         # Suggested charge type from the AI's drive-time estimate; a stated
         # charge type always wins (core/address_suggestion.py).
         from core.address_suggestion import apply_address_turn
