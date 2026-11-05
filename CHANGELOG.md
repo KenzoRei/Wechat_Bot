@@ -7,7 +7,7 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
-## [1.12.0] - Unreleased
+## [1.12.0] - 2026-11-05
 
 **Migrations V43, V44 and V45 must be applied in a paused cutover together
 with this release. Do not deploy any intermediate commit of this release on
