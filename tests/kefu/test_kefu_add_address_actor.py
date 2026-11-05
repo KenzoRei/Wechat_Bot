@@ -19,6 +19,12 @@ class _FakeQuery:
     def filter_by(self, **kwargs):
         return self
 
+    def filter(self, *args, **kwargs):
+        return self
+
+    def all(self):
+        return []
+
     def first(self):
         return self.existing
 
@@ -83,7 +89,8 @@ def test_new_address_with_no_resolvable_actor_raises_instead_of_crashing_db():
     assert db.added == []
 
 
-def test_update_path_never_requires_an_actor():
+def test_edit_signal_is_rejected_by_create_only_add_address():
+    """Editing moved to update_address; add_address must refuse, not create a copy."""
     existing = UchoiceAddress(
         address_id="22222222-0000-0000-0000-000000000002",
         company_name="OLD", charge_type="delivery", addr="OLD ADDR", warehouse_code="JFK",
@@ -94,6 +101,6 @@ def test_update_path_never_requires_an_actor():
         "customer_id": None,
     }
     db = _FakeDB(existing=existing)
-    result = AddAddressHandler().handle(context, {}, db)
-    assert result["mode"] == "更新"
-    assert existing.company_name == "ACME"
+    with pytest.raises(RuntimeError, match="不支持修改"):
+        AddAddressHandler().handle(context, {}, db)
+    assert existing.company_name == "OLD" and db.added == []

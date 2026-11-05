@@ -8,67 +8,33 @@ def _clean(value):
 
 class AddAddressHandler(BaseHandler):
     """
-    add_address — create-vs-update resolved by matched_address_id, which
-    the AI sets in extracted_fields if it matched the customer's description
-    against the injected address candidate list. The confirmation template
-    (core/confirmation.py's _address_sections_builder) already surfaced which
-    mode this is before the user confirmed.
+    add_address -- creates ONE new address in the shared U-Choice address
+    book. Create-only: editing an existing address is the separate
+    update_address service (its own permission), so a leftover
+    matched_address_id (e.g. an edit draft from before the split) is
+    rejected here rather than silently creating a second address.
     """
 
     def handle(self, context: dict, config: dict, db) -> dict:
         from models.uchoice import UchoiceAddress
-        from core import role_policy
+        from core import address_dedupe, role_policy
 
         fields = context.get("collected_fields", {})
-        matched_id = fields.get("matched_address_id")
+        if fields.get("matched_address_id"):
+            raise RuntimeError(
+                "新增地址不支持修改已有地址。请重新发起：新增请直接提供新地址；修改已有地址请使用「更新地址」。"
+            )
         # customer_id is authoritative context: the case's locked customer,
-        # never a model-generated
-        # company_name string) -- present only for Kefu-originated cases,
-        # per the case-turn service. Smart Robot's existing pivot flow
-        # (core/workflow_engine.py _maybe_pivot_to_add_address) has no
-        # customer_id concept and is unaffected: an address created without
-        # one simply stays unassigned, same as the 5 pre-existing
-        # null-company rows, not a new failure mode.
+        # never a model-generated company_name string -- present only for
+        # Kefu-originated cases, per the case-turn service. Smart Robot's
+        # existing pivot flow (core/workflow_engine.py
+        # _maybe_pivot_to_add_address) has no customer_id concept and is
+        # unaffected: an address created without one simply stays
+        # unassigned, same as the 5 pre-existing null-company rows, not a
+        # new failure mode.
         customer_id = context.get("customer_id")
         role_name = context.get("role")
         allowed = context.get("warehouse_codes")
-
-        if matched_id:
-            addr = db.query(UchoiceAddress).filter_by(address_id=matched_id).first()
-            if addr is None:
-                raise RuntimeError("待更新的地址不存在。")
-            # Execution-time backstop matching
-            # core.pre_confirm_validators._valid_add_address_warehouse_scope
-            # -- checks the EXISTING address's own warehouse, not just the
-            # requested one, since add_address's candidate list is
-            # intentionally unfiltered (the full address book), so a
-            # warehouseman could otherwise reach an address outside their
-            # assignment purely via matched_address_id. Uses
-            # core.role_policy.check_warehouse_scope -- fail-closed for a
-            # warehouse-scoped caller with no warehouse_codes assigned
-            # (2026-09-15 audit finding 2: the previous "allowed is not
-            # None" guard skipped this check entirely for exactly that
-            # caller, an update could go through unchecked).
-            requested_warehouse = fields.get("warehouse_code", addr.warehouse_code)
-            message = (
-                role_policy.check_warehouse_scope(role_name, allowed, addr.warehouse_code)
-                or role_policy.check_warehouse_scope(role_name, allowed, requested_warehouse)
-            )
-            if message:
-                raise RuntimeError(message)
-            addr.company_name   = fields.get("company_name", addr.company_name)
-            addr.charge_type    = fields.get("charge_type", addr.charge_type)
-            addr.addr           = fields.get("addr", addr.addr)
-            addr.warehouse_code = fields.get("warehouse_code", addr.warehouse_code)
-            addr.note           = fields.get("note", addr.note)
-            addr.contact        = _clean(fields["contact"]) if "contact" in fields else addr.contact
-            addr.phone          = _clean(fields["phone"]) if "phone" in fields else addr.phone
-            # customer_id is deliberately never reassigned here -- editing an
-            # existing address's details must never silently move it to a
-            # different customer.
-            if not config.get("_defer_commit", False):
-                db.commit()
-            return {"address_id": str(addr.address_id), "mode": "更新"}
 
         # wechat_openid is always None for Kefu-originated turns (Kefu has
         # no such identity at all -- see core/kefu_turn_apply.py) -- must
@@ -76,19 +42,31 @@ class AddAddressHandler(BaseHandler):
         # handlers/uchoice/storage_txns.py's _actor_id. Without this,
         # every Kefu-originated new address crashes on uchoice_address's
         # NOT NULL created_by constraint (observed live, msgid
-        # B7AMS7ixMesqF5r4f4DWZ6DAa3). Scoped to the new-address branch only
-        # -- the update branch above never touches created_by at all.
+        # B7AMS7ixMesqF5r4f4DWZ6DAa3).
         created_by = context.get("wechat_openid") or context.get("submitted_by_staff_id")
         if not created_by:
             raise RuntimeError("无法确定操作人身份，无法新增地址。")
 
         # Matches core.pre_confirm_validators._valid_add_address_
-        # warehouse_scope's final check, which applies to both create and
-        # update -- a new address had no execution-time backstop at all
-        # before this (2026-09-15 audit finding 2).
+        # warehouse_scope's final check -- the execution-time backstop
+        # (2026-09-15 audit finding 2).
         message = role_policy.check_warehouse_scope(role_name, allowed, fields.get("warehouse_code"))
         if message:
             raise RuntimeError(message)
+
+        # Authoritative duplicate guard. The pre-confirm check can be raced
+        # (two sessions, or a row created after the card was shown), so
+        # serialise writers of the same key and re-check inside the
+        # transaction before inserting.
+        key = address_dedupe.duplicate_key(
+            customer_id, fields.get("addr"), fields.get("warehouse_code"), fields.get("charge_type")
+        )
+        address_dedupe.lock_for_key(db, key)
+        existing = address_dedupe.find_duplicate(
+            db, customer_id, fields.get("addr"), fields.get("warehouse_code"), fields.get("charge_type")
+        )
+        if existing is not None:
+            raise RuntimeError(address_dedupe.duplicate_message(existing))
 
         addr = UchoiceAddress(
             company_name=fields.get("company_name"),

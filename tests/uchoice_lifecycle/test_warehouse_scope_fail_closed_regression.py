@@ -37,6 +37,12 @@ class _FakeAddressQuery:
     def filter_by(self, **kwargs):
         return self
 
+    def filter(self, *args, **kwargs):
+        return self
+
+    def all(self):
+        return []
+
     def first(self):
         return self.existing
 
@@ -64,6 +70,10 @@ class _FakeAddressDB:
         pass
 
 
+# NOTE: the two "update" scope tests below were written for the old
+# create-and-update handler. add_address is create-only now: they assert the
+# edit signal is refused and nothing is mutated. The real update-scope tests
+# live with UpdateAddressHandler.
 def test_add_address_update_rejects_scoped_caller_with_missing_codes():
     existing = UchoiceAddress(
         address_id="33333333-0000-0000-0000-000000000003",
@@ -77,7 +87,7 @@ def test_add_address_update_rejects_scoped_caller_with_missing_codes():
         "warehouse_codes": None,  # scoped role, no assignment data
     }
     db = _FakeAddressDB(existing=existing)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="不支持修改"):
         AddAddressHandler().handle(context, {}, db)
     assert existing.company_name == "OLD"  # never mutated
     assert not db.committed
@@ -124,7 +134,7 @@ def test_add_address_update_rejects_out_of_scope_target_warehouse():
         "warehouse_codes": ["JFK"],  # assigned, but not to NJ
     }
     db = _FakeAddressDB(existing=existing)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="不支持修改"):
         AddAddressHandler().handle(context, {}, db)
     assert existing.warehouse_code == "NJ"
 

@@ -760,6 +760,27 @@ def _valid_add_address_field_lengths(context: dict, collected_fields: dict, db: 
     return None
 
 
+def _valid_add_address_create_only_and_unique(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """add_address creates only: reject an edit signal and an exact duplicate entry.
+
+    Duplicate key = (customer_id, normalised addr, warehouse_code,
+    charge_type), NULL-safe -- see core/address_dedupe.py. The handler
+    repeats this check under an advisory lock (the authoritative one).
+    """
+    from core import address_dedupe
+
+    if collected_fields.get("matched_address_id"):
+        return "新增地址不支持修改已有地址。请重新发起：新增请直接提供新地址；修改已有地址请使用「更新地址」。"
+    addr = collected_fields.get("addr")
+    charge_type = collected_fields.get("charge_type")
+    if db is None or not (isinstance(addr, str) and addr.strip() and charge_type):
+        return None  # incomplete draft (required-field handling asks for the rest)
+    existing = address_dedupe.find_duplicate(
+        db, context.get("customer_id"), addr, collected_fields.get("warehouse_code"), charge_type
+    )
+    return address_dedupe.duplicate_message(existing) if existing is not None else None
+
+
 _CANCEL_DIRECTION_SERVICE_NAMES = {
     "inbound":  "uchoice_inbound_request",
     "outbound": "uchoice_outbound_request",
@@ -926,6 +947,7 @@ PRE_CONFIRM_VALIDATORS = {
     "view_storage_history": _valid_caller_warehouse_scope,
     "view_invoice": _valid_invoice_warehouses,
     "add_address": _compose(
+        _valid_add_address_create_only_and_unique,
         _valid_add_address_field_lengths,
         _valid_add_address_warehouse_scope,
     ),

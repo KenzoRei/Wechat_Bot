@@ -772,7 +772,7 @@ def _address_sections_builder(collected_fields: dict, db: DBSession) -> list[dic
     """add_address — must state create-vs-update mode explicitly. charge_type shown as its Chinese label, not the raw enum code."""
     from core.address_suggestion import suggestion_note
 
-    mode = "更新" if collected_fields.get("matched_address_id") else "新增"
+    mode = "新增"  # add_address is create-only; editing is update_address
     items = {}
     for k, v in collected_fields.items():
         # _-prefixed keys are internal state (e.g. the suggested-charge-type
