@@ -7,6 +7,20 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.10.3] - 2026-11-05
+
+No migration.
+
+### Fixed
+- **U-Choice outbound transportation fee is now per pallet.** The rates
+  ($30 / $45 / $85) are documented as per-pallet, but the fee was charged as
+  a single flat amount per request. It is now rate × pallets shipped
+  (`ApplyOutboundStorageHandler`, regular and Kefu box-level paths). Whole-
+  pallet lines count by `pallet_count`; loose boxes count through
+  `new_pallet_count`; Kefu inter-warehouse transfers use the destination
+  packing lines. If goods ship but that yields zero pallets, 1 pallet is
+  billed. Previously logged outbound fees are not recalculated.
+
 ## [1.10.2] - 2026-11-03
 
 No migration.
