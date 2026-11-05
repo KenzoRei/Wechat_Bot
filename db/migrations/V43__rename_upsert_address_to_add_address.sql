@@ -48,4 +48,25 @@ BEGIN
     UPDATE service_type  SET name      = 'add_address' WHERE name      = 'upsert_address';
     UPDATE workflow      SET name      = 'add_address' WHERE name      = 'upsert_address';
     UPDATE workflow_step SET step_type = 'add_address' WHERE step_type = 'upsert_address';
+
+    -- Postconditions: the three catalogs must agree afterwards, otherwise a
+    -- partially migrated catalog would silently pass (service renamed but its
+    -- workflow / step missing, or an old-named leftover).
+    IF (SELECT count(*) FROM service_type WHERE name = 'add_address') <> 1 THEN
+        RAISE EXCEPTION 'V43: expected exactly one add_address service_type after rename';
+    END IF;
+    IF (SELECT count(*) FROM workflow WHERE name = 'add_address') <> 1 THEN
+        RAISE EXCEPTION 'V43: expected exactly one add_address workflow after rename';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM workflow_step ws JOIN workflow w ON w.workflow_id = ws.workflow_id
+        WHERE w.name = 'add_address' AND ws.step_type = 'add_address'
+    ) THEN
+        RAISE EXCEPTION 'V43: add_address workflow has no add_address step after rename';
+    END IF;
+    IF EXISTS (SELECT 1 FROM service_type WHERE name = 'upsert_address')
+       OR EXISTS (SELECT 1 FROM workflow WHERE name = 'upsert_address')
+       OR EXISTS (SELECT 1 FROM workflow_step WHERE step_type = 'upsert_address') THEN
+        RAISE EXCEPTION 'V43: old upsert_address rows remain after rename';
+    END IF;
 END $$;
