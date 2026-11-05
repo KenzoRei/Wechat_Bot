@@ -683,6 +683,14 @@ def _on_all_fields_collected(
         session_manager.update_collected_fields(db, session, {"warehouse_codes": resolved["warehouse_codes"]})
         context["collected_fields"] = session.collected_fields
 
+    if service["name"] == "update_address":
+        # Freeze the values the user will be shown (see core/address_update.py).
+        from core import address_update
+        patch = address_update.baseline_patch(db, session.collected_fields or {})
+        if patch:
+            session_manager.update_collected_fields(db, session, patch)
+            context["collected_fields"] = session.collected_fields
+
     error = pre_confirm_validators.run(service["name"], context, session.collected_fields, db)
     if error:
         send_message(context, error)

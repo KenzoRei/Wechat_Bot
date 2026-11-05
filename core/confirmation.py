@@ -64,7 +64,8 @@ _DISPLAY_NAMES = {
     "adjust_storage":             "库存调整",
     "recount_storage":            "库存盘点",
     "move_storage":               "库存内部调拨",
-    "add_address":             "地址簿更新",
+    "add_address":             "新增地址",
+    "update_address":          "更新地址",
     "role_change":                "角色变更",
     "view_storage":               "查询库存",
     "view_storage_history":       "库存变动记录",
@@ -786,6 +787,31 @@ def _address_sections_builder(collected_fields: dict, db: DBSession) -> list[dic
     return [{"label": f"您正在{mode}此地址", "type": "kv", "items": items}]
 
 
+def _update_address_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
+    """update_address -- the target (as frozen in _baseline) and old -> new per changed field."""
+    from core import address_update
+
+    baseline = collected_fields.get("_baseline") or {}
+    row = address_update.load_target(db, collected_fields) if db is not None else None
+    current = baseline or (address_update.snapshot(row) if row is not None else {})
+    target = {
+        "公司": current.get("company_name") or "（空）",
+        "地址": current.get("addr") or "?",
+        "所属仓库": current.get("warehouse_code") or "（空）",
+        "计费类型": charge_type_label(current.get("charge_type")),
+    }
+    changes = address_update.effective_changes(current, collected_fields)
+    shown = {}
+    for field, (old, new) in changes.items():
+        if field == "charge_type":
+            old, new = (charge_type_label(old) if old else None), (charge_type_label(new) if new else None)
+        shown[address_update.FIELD_LABELS[field]] = address_update.render_change(old, new)
+    return [
+        {"label": "您正在更新此地址", "type": "kv", "items": target},
+        {"label": "修改内容", "type": "kv", "items": shown or {"（无）": "未检测到修改"}},
+    ]
+
+
 def _role_change_sections_builder(collected_fields: dict, db: DBSession) -> list[dict]:
     """role_change — resolve target_openid to a display name and new_role to its Chinese label."""
     target_openid = collected_fields.get("target_openid")
@@ -863,6 +889,7 @@ CONFIRMATION_BUILDERS: dict[str, Callable[[dict, DBSession], list[dict]]] = {
     "recount_storage":          _recount_sections_builder,
     "move_storage":             _move_sections_builder,
     "add_address":           _address_sections_builder,
+    "update_address":        _update_address_sections_builder,
     "role_change":              _role_change_sections_builder,
     "cancel_inbound_request":   _cancel_request_sections_builder,
     "cancel_outbound_request":  _cancel_request_sections_builder,

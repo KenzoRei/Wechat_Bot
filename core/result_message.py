@@ -113,6 +113,7 @@ _RESULT_TITLE_BUILDERS: dict[str, Callable[[str, dict], str]] = {
     "cancel_inbound_request_batch":  _cancel_batch_result_title,
     "cancel_outbound_request_batch": _cancel_batch_result_title,
     "add_address":              _address_result_title,
+    "update_address":           _address_result_title,
     "explain_service":             _explain_service_result_title,
     "cancel_inbound_request":      _cancel_inbound_result_title,
     "cancel_outbound_request":     _cancel_outbound_result_title,
@@ -622,6 +623,20 @@ def _address_result_sections_builder(context: dict, db: DBSession) -> list[dict]
     return [{"label": None, "type": "kv", "items": items}]
 
 
+def _update_address_result_sections_builder(context: dict, db: DBSession) -> list[dict]:
+    """update_address -- the changes actually applied (from the handler's result), old -> new."""
+    from core import address_update
+    from core.confirmation import charge_type_label
+
+    items = {}
+    for field, pair in (context.get("result", {}).get("changes") or {}).items():
+        old, new = pair
+        if field == "charge_type":
+            old, new = (charge_type_label(old) if old else None), (charge_type_label(new) if new else None)
+        items[address_update.FIELD_LABELS.get(field, field)] = address_update.render_change(old, new)
+    return [{"label": None, "type": "kv", "items": items or {"（无）": "没有修改"}}]
+
+
 def _role_change_result_sections_builder(context: dict, db: DBSession) -> list[dict]:
     """role_change — same display-name + Chinese-role-label resolution as the confirmation."""
     from core.confirmation import member_display_label, role_label
@@ -695,6 +710,7 @@ RESULT_BUILDERS: dict[str, Callable[[dict, DBSession], list[dict]]] = {
     "recount_storage":             _recount_result_sections_builder,
     "move_storage":                _move_result_sections_builder,
     "add_address":              _address_result_sections_builder,
+    "update_address":           _update_address_result_sections_builder,
     "role_change":                 _role_change_result_sections_builder,
     "explain_service":             _explain_service_sections_builder,
 }

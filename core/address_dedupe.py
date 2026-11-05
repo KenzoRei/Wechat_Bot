@@ -46,7 +46,7 @@ def lock_key_text(key: tuple) -> str:
     return "add_address|" + "|".join("" if part is None else str(part) for part in key)
 
 
-def find_duplicate(db, customer_id, addr, warehouse_code, charge_type):
+def find_duplicate(db, customer_id, addr, warehouse_code, charge_type, exclude_id=None):
     """The existing UchoiceAddress with the same key, or None.
 
     customer_id / warehouse_code are matched NULL-safely (IS NULL when None).
@@ -63,6 +63,8 @@ def find_duplicate(db, customer_id, addr, warehouse_code, charge_type):
                          else UchoiceAddress.warehouse_code == warehouse_code)
     query = query.filter(UchoiceAddress.charge_type == charge_type)
     for row in query.all():
+        if exclude_id is not None and str(row.address_id) == str(exclude_id):
+            continue
         if duplicate_key(row.customer_id, row.addr, row.warehouse_code, row.charge_type) == wanted:
             return row
     return None

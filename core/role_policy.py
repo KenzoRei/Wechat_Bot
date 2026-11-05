@@ -287,6 +287,7 @@ WAREHOUSE_SCOPED_SERVICE_NAMES = frozenset({
     "view_storage_history",
     "view_invoice",
     "add_address",
+    "update_address",
     "confirm_inbound_completion",
     "confirm_outbound_completion",
     # Batch completion re-runs the single completion's warehouse-scope

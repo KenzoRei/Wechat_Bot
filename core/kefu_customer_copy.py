@@ -10,7 +10,8 @@ from __future__ import annotations
 _SERVICE_LABELS = {
     "uchoice_inbound_request": "入库申请",
     "uchoice_outbound_request": "出库申请",
-    "add_address": "地址信息更新",
+    "add_address": "地址信息新增",
+    "update_address": "地址信息更新",
 }
 
 

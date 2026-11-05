@@ -100,7 +100,7 @@ _OPEN_SESSION_STATUSES = ("active", "pending_confirmation")
 _KEFU_ENABLED_SERVICES = frozenset({
     "view_storage", "view_storage_history", "view_invoice",
     "view_pending_digest", "explain_service",
-    "uchoice_inbound_request", "uchoice_outbound_request", "add_address",
+    "uchoice_inbound_request", "uchoice_outbound_request", "add_address", "update_address",
     "confirm_inbound_completion", "confirm_outbound_completion",
     # Batch completion -- Kefu only (decision D1 in docs/reviews/active/
     # 2026-09-batch-completion-confirmation/plan.md).

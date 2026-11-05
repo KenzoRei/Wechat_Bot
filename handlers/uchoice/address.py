@@ -86,3 +86,68 @@ class AddAddressHandler(BaseHandler):
             db.commit()
             db.refresh(addr)
         return {"address_id": str(addr.address_id), "mode": "新增"}
+
+
+class UpdateAddressHandler(BaseHandler):
+    """
+    update_address -- edits ONE existing address chosen by matched_address_id.
+
+    Everything is re-checked here against freshly loaded, row-locked state
+    (the pre-confirm validators ran earlier and the grant may have been
+    revoked, or the row changed, since): target exists, warehouse scope on
+    the existing AND the requested warehouse, admin-only effective changes,
+    baseline (stale) check, and the duplicate key of the resulting row.
+    Only EDITABLE_FIELDS are ever written; customer_id is never touched.
+    """
+
+    def handle(self, context: dict, config: dict, db) -> dict:
+        from core import address_dedupe, address_update, role_policy
+
+        fields = context.get("collected_fields", {})
+        role_name = context.get("role")
+        allowed = context.get("warehouse_codes")
+
+        if "customer_id" in fields:
+            raise RuntimeError("地址所属客户不可修改。")
+        row = address_update.load_target(db, fields, lock=True)
+        if row is None:
+            raise RuntimeError("待更新的地址不存在。")
+        blank = address_update.blank_required_field(fields)
+        if blank:
+            raise RuntimeError(blank)
+        if address_update.stale_against_baseline(row, fields):
+            raise RuntimeError(address_update.STALE_MESSAGE)
+
+        changes = address_update.effective_changes(address_update.snapshot(row), fields)
+        if not changes:
+            raise RuntimeError("没有检测到任何需要修改的内容。")
+        if set(changes) & set(address_update.ADMIN_ONLY_FIELDS) and role_name != "admin":
+            raise RuntimeError("只有管理员可以修改计费类型或所属仓库。")
+
+        after = address_update.post_update_values(row, changes)
+        message = (
+            role_policy.check_warehouse_scope(role_name, allowed, row.warehouse_code)
+            or role_policy.check_warehouse_scope(role_name, allowed, after["warehouse_code"])
+        )
+        if message:
+            raise RuntimeError(message)
+
+        key = address_dedupe.duplicate_key(row.customer_id, after["addr"], after["warehouse_code"], after["charge_type"])
+        address_dedupe.lock_for_key(db, key)
+        duplicate = address_dedupe.find_duplicate(
+            db, row.customer_id, after["addr"], after["warehouse_code"], after["charge_type"], exclude_id=row.address_id
+        )
+        if duplicate is not None:
+            raise RuntimeError(address_dedupe.duplicate_message(duplicate))
+
+        for field, (_old, new) in changes.items():
+            setattr(row, field, new)
+        if config.get("_defer_commit", False):
+            db.flush()
+        else:
+            db.commit()
+        return {
+            "address_id": str(row.address_id),
+            "mode": "更新",
+            "changes": {field: [old, new] for field, (old, new) in changes.items()},
+        }

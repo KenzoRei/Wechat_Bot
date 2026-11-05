@@ -9,6 +9,19 @@ from ai.base import AddressMatch, AIResponse, SemanticIssue
 _WEEKDAY_CN = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
 
 
+def _address_book_instructions() -> str:
+    """update_address: how to pick the address being edited from `address_book`."""
+    return (
+        "- address_book：地址簿（更新地址专用）。用户要修改已有地址时，把用户描述（公司名、地址片段、联系人等）与此列表语义匹配，"
+        "只在 extracted_fields 中填 matched_address_id（必须是此列表中真实存在的 address_id，绝不能编造或把公司名/地址原文当作ID）。\n"
+        "  · 匹配到多项或没有任何一项匹配时，不要猜测、不要设置 matched_address_id，在 reply 中列出候选（公司名+地址）请用户指明是哪一个。\n"
+        "  · 其余字段只填用户明确要求修改的（company_name、addr、contact、phone、note）；没提到的字段不要填。"
+        "用户明确要求清空某个可选字段（company_name、contact、phone、note）时填空字符串 \"\"。地址 addr 不能清空。\n"
+        "  · charge_type（计费类型）和 warehouse_code（所属仓库）只有用户明确要求修改时才填；这两项仅管理员可改，不要主动建议修改。\n"
+        "  · 这是修改，不是新增：用户要加一条全新的地址时不属于此服务。\n"
+    )
+
+
 def _address_matching_instructions(is_kefu: bool) -> str:
     """
     Kefu uses a structured-only
@@ -238,6 +251,7 @@ def build_system_prompt(context: dict) -> str:
         "（假设其余必填字段已齐全）。错误输出（禁止）：extracted_fields 为空、或只给 t2 一行导致 t1 丢失、或反复不提取直接让系统重复问同一个问题——"
         "这会导致用户被同一个澄清问题无限循环追问。\n"
         f"{_address_matching_instructions(is_kefu)}"
+        f"{_address_book_instructions() if uchoice_candidates.get('address_book') is not None else ''}"
         f"{_drive_time_instructions(is_kefu) if uchoice_candidates.get('origin_warehouses') else ''}"
         "- pending_inbound_requests / pending_outbound_requests：当前所有待处理的入库/出库申请候选列表。\n"
         "  · 0 条：告知用户当前没有待处理的申请，不要设置 all_fields_collected=true。\n"

@@ -56,7 +56,8 @@ _FIELD_PROMPTS = {
 _SERVICE_LABELS = {
     "uchoice_outbound_request": "出库申请",
     "uchoice_inbound_request": "入库申请",
-    "add_address": "地址维护",
+    "add_address": "新增地址",
+    "update_address": "更新地址",
     "confirm_outbound_completion": "出库完成确认",
     "confirm_inbound_completion": "入库完成确认",
     "cancel_inbound_request": "取消入库申请",
@@ -664,7 +665,7 @@ def _workflow_steps(db: DBSession, context: dict, service: dict, session) -> Non
         handler_class = HANDLER_REGISTRY.get(step.step_type)
         if handler_class is None:
             raise RuntimeError(f"No handler registered for step_type: {step.step_type!r}")
-        if step.step_type == "add_address":
+        if step.step_type in ("add_address", "update_address"):
             merged["_defer_commit"] = True
         result = handler_class().handle(context, merged, db)
         context["result"].update(result or {})
@@ -1649,6 +1650,13 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
             return denial
         session.collected_fields = resolved
         context["collected_fields"] = session.collected_fields
+    if service["name"] == "update_address":
+        # Freeze the values the user will be shown (see core/address_update.py).
+        from core import address_update
+        patch = address_update.baseline_patch(db, session.collected_fields or {})
+        if patch:
+            session.collected_fields = {**(session.collected_fields or {}), **patch}
+            context["collected_fields"] = session.collected_fields
     validation_error = pre_confirm_validators.run(service["name"], context, session.collected_fields or {}, db)
     if validation_error:
         # Same rule as missing fields above: a case that no longer passes

@@ -28,7 +28,7 @@ from handlers.uchoice.queries import (
     ExplainServiceHandler,
     QueryPendingDigestHandler,
 )
-from handlers.uchoice.address import AddAddressHandler
+from handlers.uchoice.address import AddAddressHandler, UpdateAddressHandler
 from handlers.uchoice.role_change import RoleChangeHandler
 
 # Maps step_type strings (stored in workflow_step.step_type) to handler classes.
@@ -59,6 +59,7 @@ HANDLER_REGISTRY: dict[str, type] = {
     "query_storage_history":          QueryStorageHistoryHandler,
     "query_pending_digest":           QueryPendingDigestHandler,
     "add_address":                 AddAddressHandler,
+    "update_address":              UpdateAddressHandler,
     "apply_role_change":              RoleChangeHandler,
     "compute_invoice_handler":        ComputeInvoiceHandler,
     "explain_service":                ExplainServiceHandler,

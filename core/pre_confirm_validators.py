@@ -781,6 +781,38 @@ def _valid_add_address_create_only_and_unique(context: dict, collected_fields: d
     return address_dedupe.duplicate_message(existing) if existing is not None else None
 
 
+def _valid_update_address_target_and_changes(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """update_address: the target exists, something really changes, and the
+    change is allowed for this caller. Warehouse scope (existing AND
+    requested) and contact/phone lengths are composed separately."""
+    from core import address_dedupe, address_update
+
+    if db is None:
+        return None
+    if "customer_id" in collected_fields:
+        return "地址所属客户不可修改。"
+    row = address_update.load_target(db, collected_fields)
+    if row is None:
+        return "未找到要更新的地址，请说明要更新哪一个地址（可提供公司名或地址）。"
+    blank = address_update.blank_required_field(collected_fields)
+    if blank:
+        return blank
+    if address_update.stale_against_baseline(row, collected_fields):
+        return address_update.STALE_MESSAGE
+    changes = address_update.effective_changes(address_update.snapshot(row), collected_fields)
+    if not changes:
+        return "没有检测到任何需要修改的内容，请告知要修改哪些信息。"
+    if set(changes) & set(address_update.ADMIN_ONLY_FIELDS) and context.get("role") != "admin":
+        return "只有管理员可以修改计费类型或所属仓库。"
+    after = address_update.post_update_values(row, changes)
+    duplicate = address_dedupe.find_duplicate(
+        db, row.customer_id, after["addr"], after["warehouse_code"], after["charge_type"], exclude_id=row.address_id
+    )
+    if duplicate is not None:
+        return address_dedupe.duplicate_message(duplicate)
+    return None
+
+
 _CANCEL_DIRECTION_SERVICE_NAMES = {
     "inbound":  "uchoice_inbound_request",
     "outbound": "uchoice_outbound_request",
@@ -946,6 +978,11 @@ PRE_CONFIRM_VALIDATORS = {
     "view_storage": _valid_caller_warehouse_scope,
     "view_storage_history": _valid_caller_warehouse_scope,
     "view_invoice": _valid_invoice_warehouses,
+    "update_address": _compose(
+        _valid_update_address_target_and_changes,
+        _valid_add_address_field_lengths,
+        _valid_add_address_warehouse_scope,
+    ),
     "add_address": _compose(
         _valid_add_address_create_only_and_unique,
         _valid_add_address_field_lengths,

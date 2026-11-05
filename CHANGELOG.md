@@ -7,6 +7,66 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.12.0] - Unreleased
+
+**Migrations V43, V44 and V45 must be applied in a paused cutover together
+with this release. Do not deploy any intermediate commit of this release on
+its own.** Old code looks the service up as `upsert_address`, new code as
+`add_address`; mixing them breaks address handling in both directions.
+
+### Cutover (suspend → migrate → deploy → verify → resume)
+1. Suspend the Render service (stops Smart Robot/Kefu intake and the
+   scheduler). Wait for in-flight requests to finish.
+2. Read-only check (Render shell): `python scripts/check_address_cutover.py`
+   — lists open old address-edit drafts; they expire on their own and, if
+   confirmed after the upgrade, fail with a "start over" message instead of
+   creating a duplicate.
+3. Apply V43, V44, V45 in one transaction, in that order. Each is idempotent
+   and aborts on an inconsistent catalog.
+4. Deploy this release's code (Kefu messages queued meanwhile are processed
+   afterwards).
+5. Verify: `add_address` and `update_address` exist in `service_type`, no
+   `upsert_address` row remains, existing `add_address` grants are intact,
+   `update_address` has **no** role grants yet.
+6. Resume the service.
+
+**Rollback:** reverse the rename (`add_address` → `upsert_address` in
+`service_type`, `workflow`, `workflow_step`), remove or ignore
+`update_address`, and redeploy the previous revision together. Rolling back
+code alone is unsafe.
+
+### Changed
+- **`upsert_address` is now `add_address` and only creates.** It no longer
+  edits an existing address; a leftover edit draft is refused with a clear
+  message. An identical address (same customer, address text, warehouse and
+  charge type) is blocked before confirmation and again at execution under a
+  per-key lock. Unit numbers stay distinct (`1-2` ≠ `12`); abbreviations are
+  not folded.
+
+### Added
+- **New service `update_address`** to edit one existing address (company,
+  address, contact, phone, note). The AI picks the target from a separate
+  `address_book` list; the confirmation card shows the address and
+  old → new per changed field. An explicit empty value clears an optional
+  field; the address itself cannot be cleared.
+  - Changing `charge_type` or `warehouse_code` is admin only, and only when
+    the value actually changes.
+  - Warehouse-scoped roles stay limited to their assigned warehouses
+    (existing and requested).
+  - If the address changed between the card and 确认, the update is refused
+    and the user starts again, so an approval can't overwrite someone
+    else's edit.
+  - **Nobody can use it until you grant it:** V45 creates the service,
+    enables it for every group that has `add_address`, and creates **no role
+    grants**. Assign `update_address` to the roles you want.
+
+### Notes
+- Address ownership by customer is intentionally not enforced: the address
+  book is shared and `uchoice_address.customer_id` is tenant provenance, not
+  a caller identity.
+- Edits are recorded in the request result (old → new) and the request log;
+  there is no `updated_by` column on addresses.
+
 ## [1.11.0] - 2026-11-05
 
 **Apply migration V42 immediately before this deploy, in the same window.**

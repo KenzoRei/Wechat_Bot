@@ -379,6 +379,14 @@ def _build_uchoice_candidates(
     # the same candidate list to resolve create-vs-update via
     # matched_address_id, so it's included here too (previously a gap: it
     # received no address candidates at all).
+    if "update_address" in names:
+        # The full shared address book (limited to the caller's own warehouses
+        # for warehouse-scoped roles) so an edit can pick ANY row, regardless
+        # of the outbound source-warehouse scoping applied to `addresses`
+        # below. Kept as a separate key so outbound matching is unchanged.
+        candidates["address_book"] = uchoice_context.address_candidates(
+            db, allowed_warehouse_codes=allowed_warehouse_codes
+        )
     if names & {"uchoice_outbound_request", "add_address"}:
         # Scoped to the request's own source warehouse by default. Originally
         # this only filtered when uchoice_outbound_request was the *sole*
