@@ -25,6 +25,8 @@ _SCALE = 0.36  # 72/200 — px (on the approved 1700x2200 canvas) -> pt
 MAX_ROWS_PER_PAGE = 8
 _ROW_Y_PX = [882, 930, 978, 1026, 1074, 1122, 1170, 1218]  # approved, includes the 10px offset
 
+# Smallest font (px) the consignee box will shrink to before truncating.
+MIN_WRAPPED_FONT_PX = 16
 _FONT = "Helvetica"
 _FONT_BOLD = "Helvetica-Bold"
 # Helvetica has no CJK glyphs — the signature-block labels are bilingual
@@ -75,18 +77,47 @@ def _wrap_text(text: str, font: str, font_pt: float, max_width_pt: float) -> lis
             else:
                 lines.append(current)
                 current = word
+            # A single unbroken token wider than the box (CJK text has no
+            # spaces; also very long tokens) is split per character.
+            while stringWidth(current, font, font_pt) > max_width_pt and len(current) > 1:
+                cut = len(current) - 1
+                while cut > 1 and stringWidth(current[:cut], font, font_pt) > max_width_pt:
+                    cut -= 1
+                lines.append(current[:cut])
+                current = current[cut:]
         lines.append(current)
     return lines
+
+
+def _is_latin1(text: str) -> bool:
+    try:
+        text.encode("latin-1")
+        return True
+    except UnicodeEncodeError:
+        return False
 
 
 def _draw_wrapped_top(c, text, x_px, y_px, w_px, h_px, font_px):
     """Left-aligned, top-anchored, word-wrapped — matches the spec's TO/consignee alignment."""
     x_pt, top_pt, w_pt, h_pt = _rect_to_pt(x_px, y_px, w_px, h_px)
+    text = text.strip()
+    # Helvetica has no CJK glyphs: fall back to the CJK font when the text
+    # needs it (company / address / contact may be Chinese).
+    font = _FONT if _is_latin1(text) else _FONT_CJK
+    # Shrink the font (down to a legible floor) until every line fits, so a
+    # long company+address+contact never silently loses its trailing lines
+    # (the phone number is the last line).
     font_pt = _px(font_px)
-    c.setFont(_FONT, font_pt)
+    min_pt = _px(MIN_WRAPPED_FONT_PX)
+    while True:
+        lines = _wrap_text(text, font, font_pt, w_pt)
+        if len(lines) * font_pt * 1.3 - (font_pt * 0.3) <= h_pt or font_pt <= min_pt:
+            break
+        font_pt = max(min_pt, font_pt - _px(1))
+    c.setFont(font, font_pt)
     line_height = font_pt * 1.3
     y = top_pt - font_pt
-    for line in _wrap_text(text.strip(), _FONT, font_pt, w_pt):
+    for line in lines:
         if y < top_pt - h_pt:
             break
         c.drawString(x_pt, y, line)

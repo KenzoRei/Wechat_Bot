@@ -746,6 +746,20 @@ def _valid_upsert_address_warehouse_scope(context: dict, collected_fields: dict,
     return None
 
 
+# uchoice_address column limits (models.uchoice.UchoiceAddress): checked before
+# confirmation so an over-long value gets a correction request instead of a
+# database error at execution time.
+_ADDRESS_FIELD_LIMITS = {"contact": ("联系人", 100), "phone": ("电话", 50)}
+
+
+def _valid_upsert_address_field_lengths(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    for key, (label, limit) in _ADDRESS_FIELD_LIMITS.items():
+        value = collected_fields.get(key)
+        if isinstance(value, str) and len(value.strip()) > limit:
+            return f"{label}过长（最多 {limit} 个字符），请缩短后重新提供。"
+    return None
+
+
 _CANCEL_DIRECTION_SERVICE_NAMES = {
     "inbound":  "uchoice_inbound_request",
     "outbound": "uchoice_outbound_request",
@@ -911,7 +925,10 @@ PRE_CONFIRM_VALIDATORS = {
     "view_storage": _valid_caller_warehouse_scope,
     "view_storage_history": _valid_caller_warehouse_scope,
     "view_invoice": _valid_invoice_warehouses,
-    "upsert_address": _valid_upsert_address_warehouse_scope,
+    "upsert_address": _compose(
+        _valid_upsert_address_field_lengths,
+        _valid_upsert_address_warehouse_scope,
+    ),
     "fedex_label": _valid_label,
     "ups_label": _valid_label,
     "confirm_outbound_completion": _compose(

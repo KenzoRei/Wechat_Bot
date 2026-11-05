@@ -239,3 +239,10 @@ def test_sanitize_and_seed_keep_contact_and_phone():
     seeded = s.seed_fields(out)
     assert seeded["contact"] == "Vivek" and seeded["phone"] == "516-305-9127"
     assert "contact" not in (s.sanitize_new_address({"addr": "1 Main St", "contact": "  "}) or {})
+
+
+def test_upsert_address_rejects_overlong_contact_and_phone():
+    from core import pre_confirm_validators as v
+    assert v.run("upsert_address", {"role": "admin"}, {"contact": "x" * 101}, None) is not None
+    assert v.run("upsert_address", {"role": "admin"}, {"phone": "1" * 51}, None) is not None
+    assert v.run("upsert_address", {"role": "admin"}, {"contact": "x" * 100, "phone": "1" * 50}, None) is None
