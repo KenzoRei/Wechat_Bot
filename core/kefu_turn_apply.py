@@ -640,6 +640,9 @@ def _workflow_steps(db: DBSession, context: dict, service: dict, session) -> Non
                 if artifact is not None:
                     context["_kefu_artifacts"].append({"doc_type": doc_type, "artifact": artifact})
                     context["result"].update({"pdf_status": "ready", "pdf_artifact_key": artifact["artifact_key"]})
+                else:
+                    # Surfaced in the staff reply by result_message's outbound builder.
+                    context["result"]["pdf_status"] = "failed"
             continue
         if step.step_type == "compute_invoice_handler":
             # Kefu-native path: send the workbook itself as a chat file

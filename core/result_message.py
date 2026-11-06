@@ -425,10 +425,20 @@ def _outbound_request_result_sections_builder(context: dict, db: DBSession) -> l
     made it into the reply). Mirrors _completion_result_sections_builder's
     identical pdf_url raw-section pattern.
     """
-    pdf_url = context.get("result", {}).get("pdf_url")
+    result = context.get("result", {})
+    pdf_url = result.get("pdf_url")
     if not pdf_url:
+        if result.get("pdf_status") == "failed":
+            # The PDF step skipped or failed (e.g. the origin warehouse has no
+            # usable company_warehouse row). The request itself succeeded, so
+            # say plainly that the delivery order is missing instead of
+            # leaving staff to notice an absent file.
+            return [{"label": None, "type": "raw", "items": [DELIVERY_ORDER_FAILED_NOTICE]}]
         return []
     return [{"label": None, "type": "raw", "items": [f"[下载送货单]({pdf_url})（1小时内有效）"]}]
+
+
+DELIVERY_ORDER_FAILED_NOTICE = "⚠️ 送货单未能生成，申请本身已提交。请联系管理员处理，勿重复提交。"
 
 
 def _warehouse_storage_summary_sections(db: DBSession, warehouse_code: str | None, label_prefix: str) -> list[dict]:

@@ -7,6 +7,16 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [Unreleased]
+
+### Fixed
+- **A skipped or failed delivery order PDF is no longer silent.** When the PDF
+  step skips or fails (for example the origin warehouse has no usable
+  `company_warehouse` row), the outbound request reply now says the delivery
+  order could not be generated, that the request itself was submitted, and not
+  to resubmit. Smart Robot and Kefu. A delivery that fails after it was
+  queued (a send error) is still only visible in the delivery record.
+
 ## [1.12.1] - 2026-11-05
 
 **Deploy gate:** run `python scripts/check_delivery_order_cutover.py` in the
