@@ -7,6 +7,28 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [Unreleased]
+
+**Deploy gate:** run `python scripts/check_delivery_order_cutover.py` in the
+Render shell right before deploying; it must report 0 pending delivery orders
+queued without stored bytes (they send when the customer's 48h window
+reopens). Afterwards the same script's Q2 lists any that failed on a hash
+mismatch in the meantime. No migration.
+
+### Fixed
+- **Delivery order PDF printed the JFK site as sender for every warehouse.**
+  The header address, the FROM block and the signature name now come from the
+  `company_warehouse` row of the request's origin `warehouse_code`; the title
+  stays "TRANS WORLD FREIGHT SYSTEM CORP." and the header shows `TEL:` from the
+  row (the fax line is gone). A request whose origin warehouse is missing or
+  not in `company_warehouse` gets no PDF (logged) instead of the JFK address.
+  Chinese sender text uses the CJK font; long addresses are shrunk and wrapped
+  inside the page, and a value too long to print at all fails closed.
+- **Queued Kefu delivery orders can no longer fail on `artifact_hash_mismatch`.**
+  The PDF now depends on an editable warehouse row (and on the template), so
+  its exact bytes are stored when queued and read back for every retry, like
+  the invoice and storage-history workbooks.
+
 ## [1.12.0] - 2026-11-05
 
 **Migrations V43, V44 and V45 must be applied in a paused cutover together

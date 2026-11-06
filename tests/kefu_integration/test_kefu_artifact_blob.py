@@ -83,6 +83,61 @@ def test_loader_returns_stored_bytes_and_never_rebuilds(env, monkeypatch, doc, m
     assert content_hash(loaded.content) == delivery.payload_hash
 
 
+def test_delivery_order_pdf_is_stored_and_never_rebuilt(env, monkeypatch):
+    """Codex audit of 9f17f98 (P1): the delivery order prints the origin warehouse
+    row, so a rebuild after a warehouse edit or a template change would not match
+    the queued hash. It is stored at enqueue and read back like the workbooks."""
+    from core.kefu_artifact_loader import load_artifact
+    from core.kefu_delivery import content_hash
+    from handlers.uchoice.pdf_stub import GeneratePdfStubHandler
+
+    doc = "outbound_instruction"
+    db, staff_id, log_id = env
+    artifact = _artifact(log_id, b"%PDF original delivery order", doc=doc)
+    delivery = _enqueue(db, staff_id, log_id, artifact, doc=doc)
+
+    def _must_not_rebuild(*args, **kwargs):
+        raise AssertionError("delivery order rebuilt from live data")
+    monkeypatch.setattr(GeneratePdfStubHandler, "_build_outbound_instruction_artifact", staticmethod(_must_not_rebuild))
+
+    loaded = load_artifact(log_id, doc, f"{log_id}:{doc}")
+    assert loaded.content == b"%PDF original delivery order"
+    assert content_hash(loaded.content) == delivery.payload_hash
+
+
+def test_delivery_order_cutover_script_blocks_while_a_legacy_pdf_is_pending(env):
+    """A delivery order queued by the old code has no stored bytes and the old
+    template's hash; check_delivery_order_cutover.py Q1 must fail until sent."""
+    import importlib.util
+    import os
+    import sys
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "check_delivery_order_cutover", Path(__file__).resolve().parents[2] / "scripts" / "check_delivery_order_cutover.py")
+    check = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(check)
+
+    db, staff_id, log_id = env
+    db.execute(text("""
+        insert into kefu_outbound_delivery (request_log_id, recipient_staff_id, idempotency_key, payload_type,
+            artifact_request_log_id, artifact_doc_type, artifact_key, payload_hash, status)
+        values (:log, :staff, :key, 'file', :log, 'outbound_instruction', :akey, :hash, 'pending')"""),
+        {"log": log_id, "staff": staff_id, "key": f"blobtest:{log_id}:legacy-pdf",
+         "akey": f"{log_id}:outbound_instruction", "hash": "0" * 64})
+    db.commit()
+
+    old_argv, sys.argv = sys.argv, ["check", "--database-url", os.environ["DATABASE_URL"]]
+    try:
+        assert check.main() == 1
+        db.execute(text("update kefu_outbound_delivery set status = 'sent' where idempotency_key = :k"),
+                   {"k": f"blobtest:{log_id}:legacy-pdf"})
+        db.commit()
+        assert check.main() == 0
+    finally:
+        sys.argv = old_argv
+
+
 def test_same_key_different_bytes_is_rejected(env):
     db, staff_id, log_id = env
     _enqueue(db, staff_id, log_id, _artifact(log_id))

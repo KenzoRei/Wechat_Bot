@@ -150,11 +150,44 @@ def _fmt_phone(phone) -> str:
     return raw
 
 
-def sender_lines(sender) -> dict:
-    """Printable pieces of the shipping-origin warehouse (company_warehouse row).
+def _sender_font(text: str, bold: bool) -> str:
+    """Helvetica has no CJK glyphs: sender text (warehouse rows are free text)
+    falls back to the CJK font per line, like the consignee box does."""
+    if not _is_latin1(text):
+        return _FONT_CJK
+    return _FONT_BOLD if bold else _FONT
 
-    Raises ValueError if the sender is missing the address -- the caller must
-    never fall back to another warehouse's address on a legal document."""
+
+def _fit_block(texts, *, bold, sizes, max_w, max_lines_for):
+    """Largest font size at which ALL text fits: each text is word-wrapped
+    (per character for over-wide tokens) to ``max_w`` and the total line count
+    stays within ``max_lines_for(size)``. Returns (size, [(line, font), ...]).
+
+    Raises ValueError if even the smallest size does not fit: a long sender is
+    never drawn past the page edge and never truncated, the PDF fails closed."""
+    texts = [t for t in texts if t]
+    for size in sizes:
+        lines = []
+        for t in texts:
+            font = _sender_font(t, bold)
+            lines.extend((ln, font) for ln in _wrap_text(t, font, size, max_w))
+        if len(lines) <= max_lines_for(size):
+            return size, lines
+    raise ValueError("sender warehouse text is too long to print on the delivery order")
+
+
+_HEADER_W = PAGE_W - 2 * 28 - 24
+_FROM_W = PAGE_W - 28 - 6 - _px(900)
+_NAME_W = PAGE_W - 28 - 6 - _px(120)
+
+
+def sender_lines(sender) -> dict:
+    """Printable, already laid-out pieces of the shipping-origin warehouse
+    (company_warehouse row): header address block, FROM block, signature name.
+
+    Raises ValueError if the sender is missing the address, or its text cannot
+    be laid out within the page -- the caller must never fall back to another
+    warehouse's address, and a long value must never run off the page."""
     if sender is None:
         raise ValueError("sender warehouse is required")
     addr = (getattr(sender, "addr", "") or "").strip()
@@ -164,21 +197,29 @@ def sender_lines(sender) -> dict:
     if not (addr and city and state and zip_code):
         raise ValueError(f"sender warehouse {getattr(sender, 'warehouse_abbr', '?')} has an incomplete address")
     phone = _fmt_phone(getattr(sender, "phone", None))
+    contact = (getattr(sender, "contact", "") or "").strip().upper()
+    addr_u = addr.upper()
+    comma = f"{city}, {state} {zip_code}".upper()
+    plain = f"{city} {state} {zip_code}".upper()
+    tel = f"TEL: {phone}" if phone else ""
+
+    # Header: 10pt down to 7pt; room for (1 + 36/(1.4*size)) lines above the title.
+    h_size, h_lines = _fit_block(
+        [addr_u, comma, tel], bold=False, sizes=(10, 9, 8, 7.5, 7), max_w=_HEADER_W,
+        max_lines_for=lambda sz: int(1 + 36 / (sz * 1.4)))
+    # FROM block: company, address, city; the box has room down to the rule below it.
+    f_size, f_lines = _fit_block(
+        [COMPANY_TITLE.rstrip("."), addr_u, plain], bold=True, sizes=(9, 8.5, 8, 7.5, 7, 6.5), max_w=_FROM_W,
+        max_lines_for=lambda sz: int(1 + 81 / (sz * 1.36)))
+    n_size, n_lines = (None, [])
+    if contact:
+        n_size, n_lines = _fit_block(
+            [contact], bold=False, sizes=(9, 8, 7), max_w=_NAME_W,
+            max_lines_for=lambda sz: int(1 + 25 / (sz * 1.25)))
     return {
-        "addr": addr.upper(),
-        "city_line_comma": f"{city}, {state} {zip_code}".upper(),
-        "city_line": f"{city} {state} {zip_code}".upper(),
-        "tel": f"TEL: {phone}" if phone else "",
-        "contact": (getattr(sender, "contact", "") or "").strip().upper(),
+        "addr": addr_u, "city_line_comma": comma, "city_line": plain, "tel": tel, "contact": contact,
+        "header": (h_size, h_lines), "from": (f_size, f_lines), "name": (n_size, n_lines),
     }
-
-
-def _draw_fitted(c, x, y, text, font, size, max_w, floor=6.0):
-    """drawString that shrinks the font so a long value stays inside the page."""
-    while size > floor and stringWidth(text, font, size) > max_w:
-        size -= 0.5
-    c.setFont(font, size)
-    c.drawString(x, y, text)
 
 
 def _draw_static_background(c, outbound_order_no: str, sender: dict) -> None:
@@ -197,8 +238,10 @@ def _draw_static_background(c, outbound_order_no: str, sender: dict) -> None:
     c.setFont(_FONT_BOLD, 16)
     c.drawCentredString(cx, PAGE_H - 60, COMPANY_TITLE)
     c.setFont(_FONT, 10)
-    for i, line in enumerate(l for l in (sender["addr"], sender["city_line_comma"], sender["tel"]) if l):
-        c.drawCentredString(cx, PAGE_H - (76 + 14 * i), line)
+    h_size, h_lines = sender["header"]
+    for i, (line, font) in enumerate(h_lines):
+        c.setFont(font, h_size)
+        c.drawCentredString(cx, PAGE_H - (76 + h_size * 1.4 * i), line)
 
     c.setFont(_FONT_BOLD, 15)
     c.drawCentredString(cx, PAGE_H - 132, "PICKUP / DELIVERY ORDER")
@@ -212,9 +255,10 @@ def _draw_static_background(c, outbound_order_no: str, sender: dict) -> None:
     c.setFont(_FONT_BOLD, 10)
     c.drawString(_px(205), PAGE_H - _px(600), "TO")
     c.drawString(_px(900), PAGE_H - _px(600), "FROM")
-    from_max_w = PAGE_W - margin - 6 - _px(900)
-    for i, line in enumerate([COMPANY_TITLE.rstrip("."), sender["addr"], sender["city_line"]]):
-        _draw_fitted(c, _px(900), PAGE_H - _px(645 + i * 34), line, _FONT_BOLD, 9, from_max_w)
+    f_size, f_lines = sender["from"]
+    for i, (line, font) in enumerate(f_lines):
+        c.setFont(font, f_size)
+        c.drawString(_px(900), PAGE_H - _px(645) - f_size * 1.36 * i, line)
 
     # TO box border
     x_pt, top_pt, w_pt, h_pt = _rect_to_pt(195, 615, 620, 255)
@@ -239,9 +283,11 @@ def _draw_static_background(c, outbound_order_no: str, sender: dict) -> None:
         "AGREED TO BE PAID IN WRITING PRIOR TO SHIPPING.",
     ]):
         c.drawString(_px(100), PAGE_H - _px(1930 + i * 28), line)
-    if sender["contact"]:
-        # Warehouse contact person (was a hard-coded "JEFF" for JFK).
-        _draw_fitted(c, _px(120), PAGE_H - _px(2030), sender["contact"], _FONT, 9, _px(850))
+    n_size, n_lines = sender["name"]
+    # Warehouse contact person (was a hard-coded "JEFF" for JFK).
+    for i, (line, font) in enumerate(n_lines):
+        c.setFont(font, n_size)
+        c.drawString(_px(120), PAGE_H - _px(2030) - n_size * 1.25 * i, line)
 
     # signature block (right side)
     labels = [
