@@ -7,13 +7,18 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
-## [Unreleased]
+## [1.12.1] - 2026-11-05
 
 **Deploy gate:** run `python scripts/check_delivery_order_cutover.py` in the
-Render shell right before deploying; it must report 0 pending delivery orders
+Render shell and deploy immediately after it reports 0 pending delivery orders
 queued without stored bytes (they send when the customer's 48h window
-reopens). Afterwards the same script's Q2 lists any that failed on a hash
-mismatch in the meantime. No migration.
+reopens); do it in a quiet period. No migration. The check is a point-in-time
+observation, not a lock, and there is no maintenance mode: a delivery order the
+OLD version queues between the check and the switchover has no stored bytes and
+can still fail with `artifact_hash_mismatch`. The script's Q2 lists any such
+failure afterwards; that outbound order exists but its PDF was not delivered,
+so re-issue the PDF by hand (do not re-request the order, which would create a
+duplicate).
 
 ### Fixed
 - **Delivery order PDF printed the JFK site as sender for every warehouse.**
@@ -24,10 +29,10 @@ mismatch in the meantime. No migration.
   not in `company_warehouse` gets no PDF (logged) instead of the JFK address.
   Chinese sender text uses the CJK font; long addresses are shrunk and wrapped
   inside the page, and a value too long to print at all fails closed.
-- **Queued Kefu delivery orders can no longer fail on `artifact_hash_mismatch`.**
-  The PDF now depends on an editable warehouse row (and on the template), so
-  its exact bytes are stored when queued and read back for every retry, like
-  the invoice and storage-history workbooks.
+- **Delivery orders queued by this version can no longer fail on
+  `artifact_hash_mismatch`.** The PDF depends on an editable warehouse row (and
+  on the template), so its exact bytes are stored when queued and read back for
+  every retry, like the invoice and storage-history workbooks.
 
 ## [1.12.0] - 2026-11-05
 

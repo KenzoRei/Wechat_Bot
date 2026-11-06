@@ -12,10 +12,12 @@ so it would fail for good.
 Q1  Deploy gate: pending delivery orders queued without stored bytes.
     Must be 0 right before deploying; if not, wait for them to send
     (they send when the customer's 48h window reopens) and re-run.
-Q2  After deploying (informational): delivery orders that failed on
-    artifact_hash_mismatch in the last 24 hours -- one queued by the old
-    code in the moment between the Q1 check and the switchover. Send that
-    staff member their delivery order again.
+Q2  After deploying: delivery orders that failed on artifact_hash_mismatch
+    in the last 24 hours -- one queued by the OLD code in the moment between
+    the Q1 check and the switchover (Q1 is a point-in-time check, not a lock;
+    there is no maintenance mode to pause creation). The outbound order exists
+    but its PDF was never delivered: do not re-request the order (duplicate);
+    re-issue the PDF by hand.
 
 Render shell (DATABASE_URL is already set there):
     python scripts/check_delivery_order_cutover.py
@@ -85,7 +87,8 @@ def main() -> int:
                 _print_table(["idempotency key", "attempts", "next retry", "last error", "queued"], q1)
                 print(f"  -> {len(q1)} pending. Do NOT deploy yet: wait for them to send, then re-run.")
             else:
-                print("  -> 0 rows. Safe to deploy.")
+                print("  -> 0 rows right now. A delivery order the OLD version queues between this check and the
+     switchover can still fail, so deploy immediately after this check, in a quiet period.")
 
             print()
             print("Q2  Delivery orders failed on hash mismatch, last 24h (after deploy, informational)")
@@ -93,7 +96,8 @@ def main() -> int:
             q2 = cur.fetchall()
             if q2:
                 _print_table(["idempotency key", "staff", "failed at"], q2)
-                print(f"  -> {len(q2)} failed. Send those staff their delivery order again.")
+                print(f"  -> {len(q2)} failed. Those outbound orders EXIST but their PDF was never delivered: do NOT
+     re-request the order (that creates a duplicate); re-issue the PDF by hand.")
             else:
                 print("  -> 0 rows.")
     finally:
