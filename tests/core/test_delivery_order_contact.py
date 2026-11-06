@@ -1,5 +1,6 @@
 """Delivery order "to" card: optional receiver contact/phone line (no DB)."""
 import datetime
+from types import SimpleNamespace
 
 from core import uchoice_delivery_order as d
 
@@ -10,7 +11,14 @@ def _capture(monkeypatch):
     return seen
 
 
+_SENDER = SimpleNamespace(
+    warehouse_abbr="JFK", addr="145-02 156th St", city="Jamaica", state="NY", zip_code="11434",
+    contact="Jeff", phone="6462435122",
+)
+
+
 def _build(**kw):
+    kw.setdefault("sender", _SENDER)
     return d.build_delivery_order_pdf(
         consignee_company="ACME", consignee_addr="1 Main St",
         delivery_date=datetime.date(2026, 11, 5), product_lines=[],

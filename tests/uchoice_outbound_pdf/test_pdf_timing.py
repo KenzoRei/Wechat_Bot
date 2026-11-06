@@ -16,7 +16,7 @@ from sqlalchemy import text
 from database import SessionLocal
 from handlers.uchoice.pdf_stub import GeneratePdfStubHandler
 
-WH = "TESTWHXPDF"
+WH = "JFK"  # must exist in company_warehouse: it supplies the PDF sender block
 OPENID = "transworld"
 WECHAT_GROUP_ID = "wrY-jPKwAAfNXtgmgIBKovuS7Pm6fT6A"
 

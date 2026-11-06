@@ -31,6 +31,21 @@ def _wrap_artifact_for_smart_robot(artifact: dict) -> dict:
     }
 
 
+def _load_sender(db, warehouse_code, serial_number):
+    """Shipping-origin warehouse (company_warehouse) for the PDF header/FROM block.
+
+    None when the request has no origin warehouse or it is not in the table --
+    the caller then skips the PDF (logged) instead of printing another
+    warehouse's address."""
+    from core.warehouse_directory import get_warehouse
+
+    code = (warehouse_code or "").strip() if isinstance(warehouse_code, str) else ""
+    sender = get_warehouse(db, code) if code else None
+    if sender is None:
+        print(f"[uchoice] delivery order PDF skipped for {serial_number}: no company_warehouse row for origin warehouse {warehouse_code!r}", flush=True)
+    return sender
+
+
 class GeneratePdfStubHandler(BaseHandler):
     """
     confirm_inbound_completion's doc_type ("receiving_confirmation") stays
@@ -110,6 +125,10 @@ class GeneratePdfStubHandler(BaseHandler):
                     consignee_company, consignee_addr = addr.company_name or "", addr.addr
                     consignee_contact, consignee_phone = addr.contact or "", addr.phone or ""
 
+            sender = _load_sender(db, fields.get("warehouse_code"), serial_number)
+            if sender is None:
+                return None
+
             sku_labels = sku_label_map(db)
             product_lines = []
             for line in fields.get("sku_lines", []) or []:
@@ -134,6 +153,7 @@ class GeneratePdfStubHandler(BaseHandler):
                 delivery_date=delivery_date,
                 product_lines=product_lines,
                 outbound_order_no=serial_number,
+                sender=sender,
             )
             return {
                 "bytes": pdf_bytes,
@@ -167,6 +187,10 @@ class GeneratePdfStubHandler(BaseHandler):
                     consignee_company, consignee_addr = addr.company_name or "", addr.addr
                     consignee_contact, consignee_phone = addr.contact or "", addr.phone or ""
 
+            sender = _load_sender(db, original_fields.get("warehouse_code"), serial_number)
+            if sender is None:
+                return None
+
             sku_labels = sku_label_map(db)
             product_lines = []
             for line in fulfillment_lines:
@@ -194,6 +218,7 @@ class GeneratePdfStubHandler(BaseHandler):
                 delivery_date=datetime.now(timezone.utc).date(),
                 product_lines=product_lines,
                 outbound_order_no=serial_number,
+                sender=sender,
             )
             return {
                 "bytes": pdf_bytes,

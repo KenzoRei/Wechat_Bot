@@ -139,9 +139,53 @@ def _draw_wrapped_top(c, text, x_px, y_px, w_px, h_px, font_px, tail=""):
         y -= line_height
 
 
-def _draw_static_background(c, outbound_order_no: str) -> None:
+COMPANY_TITLE = "TRANS WORLD FREIGHT SYSTEM CORP."
+
+
+def _fmt_phone(phone) -> str:
+    """A bare 10-digit number -> 123-456-7890; anything else is printed as stored."""
+    raw = (phone or "").strip()
+    if len(raw) == 10 and raw.isdigit():
+        return f"{raw[:3]}-{raw[3:6]}-{raw[6:]}"
+    return raw
+
+
+def sender_lines(sender) -> dict:
+    """Printable pieces of the shipping-origin warehouse (company_warehouse row).
+
+    Raises ValueError if the sender is missing the address -- the caller must
+    never fall back to another warehouse's address on a legal document."""
+    if sender is None:
+        raise ValueError("sender warehouse is required")
+    addr = (getattr(sender, "addr", "") or "").strip()
+    city = (getattr(sender, "city", "") or "").strip()
+    state = (getattr(sender, "state", "") or "").strip()
+    zip_code = (getattr(sender, "zip_code", "") or "").strip()
+    if not (addr and city and state and zip_code):
+        raise ValueError(f"sender warehouse {getattr(sender, 'warehouse_abbr', '?')} has an incomplete address")
+    phone = _fmt_phone(getattr(sender, "phone", None))
+    return {
+        "addr": addr.upper(),
+        "city_line_comma": f"{city}, {state} {zip_code}".upper(),
+        "city_line": f"{city} {state} {zip_code}".upper(),
+        "tel": f"TEL: {phone}" if phone else "",
+        "contact": (getattr(sender, "contact", "") or "").strip().upper(),
+    }
+
+
+def _draw_fitted(c, x, y, text, font, size, max_w, floor=6.0):
+    """drawString that shrinks the font so a long value stays inside the page."""
+    while size > floor and stringWidth(text, font, size) > max_w:
+        size -= 0.5
+    c.setFont(font, size)
+    c.drawString(x, y, text)
+
+
+def _draw_static_background(c, outbound_order_no: str, sender: dict) -> None:
     """Everything that repeats on every page — header, labels, legal text —
-    reconstructed from the xlsx master's actual text content."""
+    reconstructed from the xlsx master's actual text content. The header
+    address and the FROM block come from the shipping-origin warehouse
+    (``sender``, see sender_lines); the company title is the same for all."""
     cx = PAGE_W / 2
 
     # outer border
@@ -151,11 +195,10 @@ def _draw_static_background(c, outbound_order_no: str) -> None:
 
     # header
     c.setFont(_FONT_BOLD, 16)
-    c.drawCentredString(cx, PAGE_H - 60, "TRANS WORLD FREIGHT SYSTEM CORP.")
+    c.drawCentredString(cx, PAGE_H - 60, COMPANY_TITLE)
     c.setFont(_FONT, 10)
-    c.drawCentredString(cx, PAGE_H - 76, "145-02 156TH STREET")
-    c.drawCentredString(cx, PAGE_H - 90, "JAMAICA, NY 11434")
-    c.drawCentredString(cx, PAGE_H - 104, "TEL: 718-276-6169   FAX: 646-243-5122")
+    for i, line in enumerate(l for l in (sender["addr"], sender["city_line_comma"], sender["tel"]) if l):
+        c.drawCentredString(cx, PAGE_H - (76 + 14 * i), line)
 
     c.setFont(_FONT_BOLD, 15)
     c.drawCentredString(cx, PAGE_H - 132, "PICKUP / DELIVERY ORDER")
@@ -169,13 +212,9 @@ def _draw_static_background(c, outbound_order_no: str) -> None:
     c.setFont(_FONT_BOLD, 10)
     c.drawString(_px(205), PAGE_H - _px(600), "TO")
     c.drawString(_px(900), PAGE_H - _px(600), "FROM")
-    c.setFont(_FONT_BOLD, 9)
-    for i, line in enumerate([
-        "TRANS WORLD FREIGHT SYSTEM CORP",
-        "145-02 156TH STREET",
-        "JAMAICA NY 11434",
-    ]):
-        c.drawString(_px(900), PAGE_H - _px(645 + i * 34), line)
+    from_max_w = PAGE_W - margin - 6 - _px(900)
+    for i, line in enumerate([COMPANY_TITLE.rstrip("."), sender["addr"], sender["city_line"]]):
+        _draw_fitted(c, _px(900), PAGE_H - _px(645 + i * 34), line, _FONT_BOLD, 9, from_max_w)
 
     # TO box border
     x_pt, top_pt, w_pt, h_pt = _rect_to_pt(195, 615, 620, 255)
@@ -200,8 +239,9 @@ def _draw_static_background(c, outbound_order_no: str) -> None:
         "AGREED TO BE PAID IN WRITING PRIOR TO SHIPPING.",
     ]):
         c.drawString(_px(100), PAGE_H - _px(1930 + i * 28), line)
-    c.setFont(_FONT, 9)
-    c.drawString(_px(120), PAGE_H - _px(2030), "JEFF")
+    if sender["contact"]:
+        # Warehouse contact person (was a hard-coded "JEFF" for JFK).
+        _draw_fitted(c, _px(120), PAGE_H - _px(2030), sender["contact"], _FONT, 9, _px(850))
 
     # signature block (right side)
     labels = [
@@ -224,13 +264,20 @@ def build_delivery_order_pdf(
     outbound_order_no: str,
     consignee_contact: str = "",
     consignee_phone: str = "",
+    *,
+    sender=None,
 ) -> bytes:
     """
+    sender: the shipping-origin company_warehouse record (core.warehouse_directory
+    WarehouseRecord or any object with addr/city/state/zip_code/phone/contact).
+    REQUIRED -- raises ValueError rather than print another warehouse's address.
+
     product_lines: [{"description": str, "quantity_text": str}, ...] — already
     formatted per the pallet/plain rules by the caller (core/result_message.py
     style separation: this module only renders, callers decide the text).
     Paginates at MAX_ROWS_PER_PAGE; zero lines still produces one page.
     """
+    sender_info = sender_lines(sender)
     buf = io.BytesIO()
     # ``invariant=1`` removes wall-clock metadata and random document IDs.
     # Durable Kefu delivery stores only a stable artifact reference + hash,
@@ -256,7 +303,7 @@ def build_delivery_order_pdf(
     pages = [product_lines[i:i + MAX_ROWS_PER_PAGE] for i in range(0, len(product_lines), MAX_ROWS_PER_PAGE)] or [[]]
 
     for page_lines in pages:
-        _draw_static_background(c, outbound_order_no)
+        _draw_static_background(c, outbound_order_no, sender_info)
         _draw_vcentered(c, date_str, 1090, 465, 300, 45, 27)
         _draw_wrapped_top(c, consignee_text, 205, 620, 600, 245, 27, tail=consignee_tail)
         for row_y, line in zip(_ROW_Y_PX, page_lines):
