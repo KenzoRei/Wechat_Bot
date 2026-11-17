@@ -774,6 +774,17 @@ def confirm_kefu_turn(db: DBSession, context: dict, service: dict, session) -> s
         reply = "该申请已处理或已关闭，不能重复确认。"
         _append(session, "assistant", reply)
         return reply
+    if service["name"] == "confirm_outbound_completion":
+        # A case that reached pending_confirmation before a validator existed
+        # (or whose inputs changed since) must not crash the worker on 确认:
+        # send it back to collection with the validator's question instead.
+        validation_error = pre_confirm_validators.run(
+            service["name"], context, session.collected_fields or {}, db)
+        if validation_error:
+            session.status = "active"
+            context["_reply"] = validation_error
+            _append(session, "assistant", validation_error)
+            return validation_error
     if service["name"] == "uchoice_outbound_request":
         # Reservations only count once a log is 'processing', and stock was
         # last checked while collecting fields: re-check under the storage
