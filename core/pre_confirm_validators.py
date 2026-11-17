@@ -497,6 +497,44 @@ def _loose_outbound_pick_required(context: dict, collected_fields: dict, db: DBS
     return "请核实以下商品库存：" + "；".join(messages) + "。或手动说明从哪些托盘规格各取多少箱。"
 
 
+def _internal_transfer_packing_required(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """
+    confirm_outbound_completion: ApplyOutboundStorageHandler refuses (at
+    execution time, after the user already said 确认) an internal transfer
+    whose lines are loose boxes or picks unless destination_packing_lines
+    says how the boxes are palletized at the destination. Ask for it here,
+    before the confirmation prompt, instead of letting the worker fail.
+    """
+    reference_serial = collected_fields.get("reference_serial")
+    if not reference_serial or collected_fields.get("destination_packing_lines") is not None:
+        return None
+
+    from models.uchoice import UchoiceAddress
+    from core.uchoice_context import resolve_completion_target, sku_label_map
+
+    target, original_fields = resolve_completion_target(db, reference_serial)
+    if target is None:
+        return None
+    address_id = original_fields.get("destination_address_id")
+    if not address_id:
+        return None
+    addr = db.query(UchoiceAddress).filter_by(address_id=address_id).first()
+    if addr is None or not addr.destination_warehouse_code:
+        return None
+
+    lines = collected_fields.get("fulfillment_lines") or original_fields.get("sku_lines") or []
+    loose = [l for l in lines if l.get("box_count") is not None or l.get("picks")]
+    if not loose:
+        return None
+    labels = sku_label_map(db)
+    names = "、".join(sorted({labels.get(l.get("sku_code"), l.get("sku_code")) for l in loose}))
+    return (
+        f"这是内部调仓（→ {addr.destination_warehouse_code} 仓），含散箱/取货明细（{names}）。"
+        "请说明货物到达目的仓后的装托方式（每托箱数 × 托盘数，各商品箱数合计须与出库箱数一致），"
+        "例如：50箱 = 50箱/托 × 1托。"
+    )
+
+
 def _loose_inbound_restatement_required(context: dict, collected_fields: dict, db: DBSession) -> str | None:
     """
     confirm_inbound_completion: a loose (box_count) original line has no
@@ -993,6 +1031,7 @@ PRE_CONFIRM_VALIDATORS = {
     "confirm_outbound_completion": _compose(
         _valid_outbound_completion_skus,
         _loose_outbound_pick_required,
+        _internal_transfer_packing_required,
     ),
     "confirm_inbound_completion": _compose(
         _valid_inbound_completion_skus,
