@@ -1,6 +1,6 @@
 # Customer pickup (客户自提) for outbound requests
 
-**Status:** rev 11, DRAFT, ready for Codex re-check (rev 11: user chose to record a Smart Robot exception to D12 for a delivery revision to an address not in the book, resolving audit finding 14; rev 10: user dropped the ignored-address note, which removes the `_pickup_ignored_address` mechanism and moots audit findings 11 and 13; rev 9: answers to re-audit findings 12–13, see `claude-response-rev6.md` "Round 3"; rev 8: answers to re-audit findings 9–11, see `claude-response-rev6.md` "Round 2"; rev 7: user resolved Q8 and Q9, see D13, D14; rev 6: answers to Codex audit `audit-codex.md`, see `claude-response-rev6.md`; adds "Contracts and chokepoints", Q8 and Q9 for the user; rev 5: PDF mark is now a small black bar in the REMARK area, text only; chat mock-up approved. rev 4: Q6 = yes, sample PDFs generated, banner moved into the title area, consignee-font finding, chat mock-up; rev 3: user answered Q1–Q3, one general `客户自提` row; rev 3: pickup-intent rules, revise-at-confirmation, and a warehouse-facing pickup banner on the PDF). Written by Claude for **Codex audit**. Not signed by either agent, not approved by the user. No code has been changed.
+**Status:** rev 11, DRAFT, ready for Codex re-check (rev 11: user chose to record a Smart Robot exception to D12 for a delivery revision to an address not in the book, resolving audit finding 14; rev 10: user dropped the ignored-address note, which removes the `_pickup_ignored_address` mechanism and moots audit findings 11 and 13; rev 9: answers to re-audit findings 12–13, see `claude-response-rev6.md` "Round 3"; rev 8: answers to re-audit findings 9–11, see `claude-response-rev6.md` "Round 2"; rev 7: user resolved Q8 and Q9, see D13, D14; rev 6: answers to Codex audit `audit-codex.md`, see `claude-response-rev6.md`; adds "Contracts and chokepoints", Q8 and Q9 for the user; rev 5: PDF mark is now a small black bar in the REMARK area, text only; chat mock-up approved. rev 4: Q6 = yes, sample PDFs generated, banner moved into the title area, consignee-font finding, chat mock-up; rev 3: user answered Q1–Q3, one general `客户自提` row; rev 3: pickup-intent rules, revise-at-confirmation, and a warehouse-facing pickup banner on the PDF). Written by Claude for **Codex audit**. Codex and Claude both signed rev 11; **the user approved it for implementation (2026-11-20)**. Implementation is on `feature/customer-pickup`.
 **Branch:** none yet. Proposed: a new branch from `main` (not from `feature/scheduled-outbound-reservation`, which has unrelated unmerged outbound changes).
 **Migration:** V42 (confirm it is the next free number before writing it). Must be applied to prod **before** the deploy (migrate-before-deploy lesson).
 
@@ -237,6 +237,6 @@ V42 goes to prod **first**, then the code deploy. The new column is nullable and
 13. Anything the plan misses, especially around the invoice export, batch completion, and result messages that show the destination.
 
 ## Signatures
-- Claude: _pending_
-- Codex: _pending_
-- User approval: _pending_
+- Claude: signed rev 11, 2026-11-20 (all audit findings 1–14 answered or moot; open items are only the implementation "read first" checks listed in the plan)
+- Codex: signed rev 11, 2026-11-20 (blocker audit; see `audit-codex.md`)
+- User approval: approved rev 11 for implementation, 2026-11-20
