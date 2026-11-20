@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session as DBSession
 
 import config
 from core import pre_confirm_validators
+from core import pickup
 from core.confirmation import build_confirmation_message, build_display_name, build_confirmation_sections
 from core.uchoice_rates import CHARGE_TYPE_DESCRIPTIONS
 from core.uchoice_constants import VALID_WAREHOUSE_CODES
@@ -781,6 +782,15 @@ def confirm_kefu_turn(db: DBSession, context: dict, service: dict, session) -> s
         reply = "该申请已处理或已关闭，不能重复确认。"
         _append(session, "assistant", reply)
         return reply
+    if pickup.is_outbound(service["name"]):
+        # Customer pickup: the final-combination check runs again right before
+        # execution (a request without the internal marker is grandfathered).
+        pickup_error = pickup.validate_combination(session.collected_fields or {}, db)
+        if pickup_error:
+            session.status = "active"
+            context["_reply"] = pickup_error
+            _append(session, "assistant", pickup_error)
+            return pickup_error
     # RequestLog supports ``processing``; ConversationSession deliberately
     # does not.  The surrounding CaseExecution claim/advisory lock owns this
     # confirmation attempt until the transaction reaches its terminal state.
@@ -1374,7 +1384,9 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
             service_type_id=UUID(service["service_type_id"]),
             status="active",
             conversation_history=[{"role": "user", "content": context["content"]}],
-            collected_fields={},
+            # Customer pickup: every NEW outbound request is stamped at
+            # creation (core/pickup.py grandfathering marker).
+            collected_fields=pickup.new_request_fields(service["name"]),
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=config.SESSION_EXPIRY_MINUTES),
             source_channel=context.get("source_channel") or "kefu",
             opened_by_staff_id=UUID(context["submitted_by_staff_id"]) if context.get("submitted_by_staff_id") else None,
@@ -1410,6 +1422,9 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
         # in this same transaction instead of producing a second session.
         if session.service_type_id is None:
             session.service_type_id = UUID(service["service_type_id"])
+            marker = pickup.new_request_fields(service["name"])
+            if marker:
+                session.collected_fields = {**(session.collected_fields or {}), **marker}
         if log is None:
             log = RequestLog(
                 wechat_openid=None,
@@ -1450,6 +1465,20 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
         )
         session.collected_fields = {**(session.collected_fields or {}), **extracted}
         context["collected_fields"] = session.collected_fields
+    if pickup.is_outbound(service["name"]):
+        # Customer pickup (core/pickup.py): the transition step, after the
+        # merge and BEFORE address matching below. Pickup wins over a named
+        # address; a pickup request never takes an AI-written or ambiguous
+        # address ID as its destination. Runs every turn so a persisted
+        # pickup mode still resolves (e.g. retention once the warehouse is known).
+        pickup_fields, pickup_ask = pickup.apply_turn(
+            db, context, previous_fields, session.collected_fields or {}, extracted)
+        session.collected_fields = pickup_fields
+        context["collected_fields"] = session.collected_fields
+        if pickup_ask:
+            context["_reply"] = pickup_ask
+            _append(session, "assistant", pickup_ask)
+            return pickup_ask
     if service["name"] == "upsert_address":
         # Suggested charge type from the AI's drive-time estimate; a stated
         # charge type always wins (core/address_suggestion.py).

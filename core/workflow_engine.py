@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from ai.base import AIResponse
 from core import session_manager, request_logger, pre_confirm_validators
+from core import pickup as _pickup
 from core.confirmation import build_confirmation_message, build_display_name, build_confirmation_sections
 from clients.wechat_client import send_message as _send_raw
 
@@ -132,6 +133,17 @@ def _maybe_pivot_to_add_address(context: dict, ai_response: AIResponse, db: DBSe
         svc = _find_service_by_type_id(context, session.service_type_id)
         current_service_name = svc["name"] if svc else current_service_name
     if current_service_name != "uchoice_outbound_request":
+        return False
+
+    # Customer pickup (core/pickup.py): this pivot runs BEFORE the turn hook, so
+    # it must not cancel an outbound whose effective mode is a pickup -- this
+    # turn's validated pickup_type, else the persisted one (a name-only
+    # follow-up omits pickup_type). "ask" also holds it: the hook asks which
+    # type was meant instead of abandoning the request. Only an effective mode
+    # of "none" pivots as before. Pickup wins over a named address (D11).
+    if _pickup.intent_for_pivot(
+        context, ai_response, (session.collected_fields if session is not None else None) or {},
+    ) in (_pickup.TYPE_CUSTOMER, _pickup.TYPE_RETENTION, "ask"):
         return False
 
     add_address_service = _find_service(context, "upsert_address")
@@ -307,6 +319,26 @@ def _apply_address_suggestion(db: DBSession, service: dict | None, session, prev
         db.commit()
 
 
+def _apply_pickup_step(context: dict, service: dict | None, session, previous: dict, extracted, db: DBSession) -> bool:
+    """Customer pickup (core/pickup.py): the transition step, after the merge
+    and before address matching/readiness. Outbound requests only. Resolves
+    the pickup row by code, clears stale fields on a revision, and asks when
+    the AI's classification and the user's own words disagree.
+    Returns True when this turn was answered with a question (caller stops)."""
+    if service is None or not _pickup.is_outbound(service["name"]):
+        return False
+    fields, ask = _pickup.apply_turn(db, context, previous or {}, session.collected_fields or {}, extracted or {})
+    if fields != (session.collected_fields or {}):
+        session.collected_fields = fields
+        db.commit()
+    context["collected_fields"] = session.collected_fields
+    if ask:
+        session_manager.add_message(db, session, "assistant", ask)
+        send_message(context, ask)
+        return True
+    return False
+
+
 # ── Intent handlers ───────────────────────────────────────────────────────────
 
 def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -> None:
@@ -366,6 +398,13 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
     context["session_id"] = str(session.session_id)
     context["service_type_id"] = service["service_type_id"]
 
+    # Customer pickup: stamp every NEW outbound request at creation (not in
+    # the turn hook, which would wrongly stamp drafts that predate the
+    # migration) so grandfathering is decided by durable provenance.
+    marker_fields = _pickup.new_request_fields(service["name"])
+    if marker_fields:
+        session_manager.update_collected_fields(db, session, marker_fields)
+
     # Log every resolved request immediately, regardless of eventual outcome —
     # EXCEPT for targets_existing_request services, which never own a log of
     # their own; they update the log they end up referencing instead.
@@ -394,6 +433,8 @@ def _handle_new_request(context: dict, ai_response: AIResponse, db: DBSession) -
             service["name"], strip_internal_keys(ai_response.extracted_fields), db, context.get("group_id"))
         session_manager.update_collected_fields(db, session, extracted)
     _apply_address_suggestion(db, service, session, {}, extracted, ai_response)
+    if _apply_pickup_step(context, service, session, _pickup.new_request_fields(service["name"]), extracted, db):
+        return
     if _inbound_container_step(context, ai_response, service, session, {}, db):
         return
 
@@ -1081,6 +1122,8 @@ def _handle_continuation(context: dict, ai_response: AIResponse, db: DBSession) 
         extracted = _sanitize_extracted_fields_before_persistence(service["name"], extracted, db, context.get("group_id"))
     session_manager.update_collected_fields(db, session, extracted)
     _apply_address_suggestion(db, service, session, previous_fields, extracted, ai_response)
+    if _apply_pickup_step(context, service, session, previous_fields, extracted, db):
+        return
     if _inbound_container_step(context, ai_response, service, session, previous_fields, db):
         return
 
@@ -1119,6 +1162,17 @@ def _handle_confirm(context: dict, db: DBSession) -> None:
     if session is None or session.status != "pending_confirmation":
         send_message(context, "抱歉，未找到待确认的申请，请重新发起。")
         return
+
+    # Customer pickup: the final-combination check runs again right before
+    # execution (a request without the internal marker is grandfathered).
+    confirm_service = _find_service_by_type_id(context, session.service_type_id)
+    if confirm_service is not None and _pickup.is_outbound(confirm_service["name"]):
+        pickup_error = _pickup.validate_combination(session.collected_fields or {}, db)
+        if pickup_error:
+            session.status = "active"
+            db.commit()
+            send_message(context, pickup_error)
+            return
 
     # Q1 fix: serial_number is None in context when confirm message arrives
     # because it was set in the previous request's context but not persisted.
