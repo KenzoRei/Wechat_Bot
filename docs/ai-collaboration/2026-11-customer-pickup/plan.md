@@ -1,6 +1,6 @@
 # Customer pickup (客户自提) for outbound requests
 
-**Status:** rev 5, DRAFT (rev 5: PDF mark is now a small black bar in the REMARK area, text only; chat mock-up approved. rev 4: Q6 = yes, sample PDFs generated, banner moved into the title area, consignee-font finding, chat mock-up; rev 3: user answered Q1–Q3, one general `客户自提` row; rev 3: pickup-intent rules, revise-at-confirmation, and a warehouse-facing pickup banner on the PDF). Written by Claude for **Codex audit**. Not signed by either agent, not approved by the user. No code has been changed.
+**Status:** rev 7, DRAFT, ready for Codex re-check (rev 7: user resolved Q8 and Q9, see D13, D14; rev 6: answers to Codex audit `audit-codex.md`, see `claude-response-rev6.md`; adds "Contracts and chokepoints", Q8 and Q9 for the user; rev 5: PDF mark is now a small black bar in the REMARK area, text only; chat mock-up approved. rev 4: Q6 = yes, sample PDFs generated, banner moved into the title area, consignee-font finding, chat mock-up; rev 3: user answered Q1–Q3, one general `客户自提` row; rev 3: pickup-intent rules, revise-at-confirmation, and a warehouse-facing pickup banner on the PDF). Written by Claude for **Codex audit**. Not signed by either agent, not approved by the user. No code has been changed.
 **Branch:** none yet. Proposed: a new branch from `main` (not from `feature/scheduled-outbound-reservation`, which has unrelated unmerged outbound changes).
 **Migration:** V42 (confirm it is the next free number before writing it). Must be applied to prod **before** the deploy (migrate-before-deploy lesson).
 
@@ -29,6 +29,8 @@ For self pickup, record **which customer is coming to the warehouse**, and print
 | D10 | **Classification is by pickup intent, not the literal string `自提`** (user, rev 3). Intent covers wording such as 自提, 自取, 来提货, 来取, 取货, 到仓提货, 客户自己来拿, pickup, will call. No pickup intent means a normal delivery to the matched address. With pickup intent: customer pickup vs retention (D4). |
 | D11 | **Pickup intent wins over a named delivery address** (resolves Q4). The named address is not used, and the confirmation says so, e.g. `客户自提 @JFK — 取货人：张三（未使用您提到的地址：X）`. |
 | D12 | The user can **revise the type at the confirmation step in either direction** ("这不是送货，是客户自己来提货" / "不是自提，送到 X"). A revision **re-resolves from scratch**: to pickup, clear `destination_address_id` and ask for the name if missing; to delivery, clear the pickup name and run normal address matching; then re-run the validators and show a fresh confirmation. |
+| D13 | **`仓库自提留存` means the recipient is Trans World itself**; goods stay physically in place, **stock is deducted as usual**. No inventory change in this feature (user, rev 7, resolves audit F5 / Q8). |
+| D14 | The invoice detail sheet shows `客户自提（<name>）` for a customer pickup (user, rev 7, resolves Q9). |
 
 ### Proposed by Claude, needs the user's confirmation
 | # | Proposal | Why |
@@ -53,6 +55,8 @@ Q4 (pickup request that also names an address): resolved by D11, pickup intent w
 | Q5 | Banner wording and style on the PDF (P4)? | See PDF section | **RESOLVED (user, rev 5):** a black bar with large white Chinese text in the REMARK area, only `客户自提 — 请勿送货` / retention equivalent. Retention wording: **`仓库自提留存`** (user, rev 5). |
 | Q6 | Does a **retention** pickup (`仓库自提留存`) also get a banner? | Yes, its own variant; or customer pickup only | **RESOLVED (user, rev 4): yes, retention gets its own banner.** |
 | Q7 | Should the warehouse-facing chat message for an outbound (not only the PDF) carry the same pickup flag? | Yes; or PDF only | **RESOLVED (user, rev 5): the mock-up is fine.** Zero extra lines in lists (the flag replaces the existing `→ 目的地` line), one extra line only in the single-request completion confirmation. See "Chat message mock-up" below. |
+| Q8 | **(audit F5)** What does `仓库自提留存` mean for stock? Today the seed note says "货物不离开仓", but the code deducts it as a plain outbound (`storage_txns.py:139-149`). | A: keep today's behavior (deducted); B: stock stays available, needing a separate inventory design (storage transactions, completion, invoice) | **RESOLVED (user, rev 7): A, and the premise was wrong.** `仓库自提留存` does **not** mean the stock stays available. It means **the recipient is us, Trans World**: the goods are already in our warehouse so nothing needs to move, hence 留存. **Stock is deducted as usual**, exactly as the code does today. This feature changes no inventory. The seed note "货物不离开仓" only describes the physical fact. |
+| Q9 | **(audit F7)** Should the invoice detail sheet show the pickup person? Today it would print `客户自提` with a blank address. | A: show `客户自提（<name>）` in the destination cell; B: leave it as the address row prints | **RESOLVED (user, rev 7): A.** The invoice detail sheet shows `客户自提（<name>）` in the destination cell. One small change in `core/uchoice_invoice_export.py` (`:270-287`), fed by the shared pickup display fact. Retention rows keep printing their own row label. |
 
 ## What the code does today (verified read-only)
 - `uchoice_address` (V1:237): `address_id, company_name, charge_type, addr, warehouse_code, note, created_by, created_at, destination_warehouse_code`. `charge_type` CHECK allows `self_pickup`. No kind column.
@@ -67,9 +71,21 @@ Q4 (pickup request that also names an address): resolved by D11, pickup intent w
 
 ### Data (V42)
 1. `ALTER TABLE uchoice_address ADD COLUMN IF NOT EXISTS pickup_kind VARCHAR(10)` with `CHECK (pickup_kind IN ('customer','retention','legacy'))`.
-2. Backfill: the three existing `仓库自提留存` rows to `retention`; `散客` to `legacy` (P3, D9).
+2. Backfill **by the four stable seed IDs, not by label** (rev 6, audit F6): `bb8c35cb-dda1-404d-9294-682ed3df5659` (JFK), `a25bb922-2340-41ac-8e2d-f0a5192d85d0` (DE), `a1000000-0024-0000-0000-000000000005` (NJ) to `retention`; `5a1cd32c-f2a3-492d-b2c3-360acfff7514` (`散客`) to `legacy` (P3, D9). The migration raises if fewer than four rows match.
+2b. Constraints (rev 6): `CHECK (pickup_kind IS NULL OR charge_type = 'self_pickup')`; partial unique indexes: one `customer` row overall, one `retention` row per `warehouse_code`. No new `charge_type` value. Rows with `pickup_kind` are system-managed: `upsert_address` and the admin panel must not edit or delete them (check during implementation).
 3. Seed **one** `客户自提` row: `company_name='客户自提'`, `charge_type='self_pickup'`, `addr=''` (same as `散客`; renderers already handle an empty address), `warehouse_code=NULL`, `pickup_kind='customer'`, `destination_warehouse_code=NULL`, a note. Fixed UUID, `ON CONFLICT DO NOTHING`, same style as V24, idempotent on both a fresh and an existing DB.
 4. Why one row works: `_valid_destination_address_required` already treats a NULL `warehouse_code` as "any source warehouse", and `storage_txns` treats a NULL `destination_warehouse_code` as a plain outbound with fee $0. Trade-off: the row itself does not say which warehouse. The request's own `warehouse_code` does, and for the PDF the consignee block can print the pickup warehouse from `company_warehouse` (V29) if the user wants it (not required by D8).
+
+### Contracts and chokepoints (rev 6, from audit findings 1–4; supersedes any conflicting text below)
+- **Fields live in `extracted_fields`.** `pickup_type` (`customer` / `retention` / `none`; absent = no change this turn, which is the explicit revision signal) and `pickup_customer_name` are collected like any other field on both channels. No new `AIResponse` members and no `parse_response` change (verified: `AIResponse` at `ai/base.py:32-72` and `parse_response` at `ai/prompt_builder.py:518-530` carry only known members). They are added to the outbound service's field list so the sanitizer keeps them; the sanitizer trims the name and caps its length.
+- **Sanitizer strips AI-written pickup IDs.** For outbound requests, an AI-supplied `destination_address_id` that resolves to a row with `pickup_kind` set is removed before persistence, on both channels. Only the resolver writes a pickup ID.
+- **Turn hook `apply_pickup_turn(previous_fields, merged_fields, extracted)`**, run after the merge and before address matching on both channels, modelled on the existing `apply_address_turn` (Kefu `core/kefu_turn_apply.py:1457`) and `_apply_address_suggestion` (Smart Robot `core/workflow_engine.py:1083`):
+  - `pickup_type` customer/retention this turn: clear the old `destination_address_id` (any kind) and, for retention, the name; call the resolver.
+  - `pickup_type: none` this turn: clear the pickup ID, name and stored type, so normal address matching runs on the same turn (Kefu's `if not destination_address_id` check at `:1496` then works).
+  - Absent: no change, persisted mode stays.
+  - It never relies on the AI emitting null, and a merged null never counts as "destination absent".
+  - It also runs on the address-pivot resume path (`core/kefu_turn_apply.py:899-907`).
+  - After it: readiness, validators, and a fresh confirmation.
 
 ### Candidates for the LLM
 - Outbound candidate injection filters out `pickup_kind IS NOT NULL`. `address_candidates` for `upsert_address` must stay **unfiltered** (its docstring forbids scoping there), so the filter is an explicit parameter, not a default.
@@ -83,30 +99,40 @@ Q4 (pickup request that also names an address): resolved by D11, pickup intent w
 - `pickup_kind='customer'` row and no name: ask for the name. (Walk-in: the user says `散客`.)
 - `pickup_kind='retention'` row and a name present: ask which was meant.
 - A name present while the destination is not a customer-pickup row: ask, do not silently drop.
-- **Vocabulary backstop (code, deterministic):** scan the **user's own message** for pickup vocabulary (the D10 list). If the AI says pickup but the message has none, or the message has pickup vocabulary but the AI says delivery, do not proceed silently: ask. Code never decides intent alone; it only catches disagreement.
-- **Revision re-resolve (D12):** a switch in either direction clears the other side's fields (`destination_address_id` or `pickup_customer_name`), re-runs these validators, and shows a fresh confirmation.
+- **Vocabulary backstop (rev 6, audit F4; replaces the whole-message regex):** only for a **newly stated** intent this turn.
+  - AI newly says pickup (customer/retention) but the message has no pickup vocabulary at all: ask (guards the costly direction, a delivery silently becoming a $0 pickup).
+  - AI says nothing about pickup, the session is not in pickup mode, and the message has un-negated pickup vocabulary: ask.
+  - Negation (不是自提, 不用自提, 非自提, 不自提) counts as delivery intent and must be paired with `pickup_type: none` from the AI, or the backend asks.
+  - Vocabulary inside a span matching a candidate address's company or address text is ignored.
+  - A follow-up carrying only a name emits no `pickup_type`, so nothing is checked and the persisted mode stays.
+- **Revision (D12):** handled by the transition step of `apply_pickup_turn` (see "Contracts and chokepoints"), not by the validators.
+- **Final-combination check (rev 6, audit F2):** at confirmation **and again before execution**, `(pickup_type, destination row's pickup_kind, destination_address_id, pickup_customer_name)` must be consistent: `customer` → the one `customer` row and a name; `retention` → the source warehouse's own retention row and no name; `none`/absent → the destination row has no `pickup_kind`. A request that already references a `legacy` row (`散客`) is allowed only if it existed before this change. Fail closed.
 - `_valid_destination_address_required` stays unchanged as the backstop.
 
 ### Prompt (`ai/prompt_builder.py`, both Smart Robot and kefu variants)
-- Define the two types: **retention** = `留存`, `自留`, `货不离开仓库`, no person involved. **Customer pickup** = a named person comes to collect.
+- Define the two types (rev 7, corrected by the user): **retention (`仓库自提留存`)** = the recipient is **us, Trans World**; the goods are already in our warehouse so nothing is moved (留存, 自留, "留在我们仓库", "给公司自己"). No person involved; stock is still deducted as usual. **Customer pickup (`客户自提`)** = a named outside person or customer comes to the warehouse to collect.
 - **Intent first (D10):** decide whether the request is a pickup at all, from intent, with the phrasings listed above as examples. No pickup intent means a normal delivery to the matched address. The prompt must not tell the AI to key on the literal string `自提`.
 - **Pickup intent wins over a named address (D11).** Return the pickup fields and ignore the named address for matching, but still report it so the confirmation can say it was not used.
 - A bare pickup with neither the customer signal nor the retention signal: ask which one, never choose (D4).
 - Both directions of revision at confirmation (D12).
 - **Why asymmetric care:** calling a delivery a pickup makes the fee $0 silently (lost revenue); calling a pickup a delivery adds a fee staff will notice. When unsure, ask.
-- Return `pickup_type` and `pickup_customer_name` as top-level fields; never put the name in `destination_address_id` or `address_match`; never match it to an address.
+- Return `pickup_type` (`customer` / `retention` / `none`; omit when nothing about pickup changed this turn) and `pickup_customer_name` **inside `extracted_fields`** (rev 6, audit F1), never top-level; never put the name in `destination_address_id` or `address_match`; never match it to an address; never write a pickup row's `destination_address_id`.
 - Keep the existing rule that the AI never states a charge type or price.
 
 ### Confirmation and renderers
-- `core/confirmation.py`: field label for the pickup name; the summary reads like `客户自提 @DE — 取货人：张三`.
-- `core/kefu_response_renderer.py`, `core/kefu_customer_copy.py`: show the name wherever the destination shows.
-- `core/uchoice_invoice_export.py` (destination company, line ~276): check what a `self_pickup` row renders as, and decide whether the name belongs there (read first, no change assumed).
+- **One shared pickup display fact (rev 6, audit F7):** a single function builds the label from the **original request fields** (`pickup_type`, `pickup_customer_name`), e.g. `【自提】客户自提：王小明（无需送货）`. Every builder calls it instead of formatting the destination itself:
+  - Kefu pending-list arrow: `core/kefu_turn_apply.py:139-150`, fed by `destination_name` (`core/uchoice_context.py:227-237`);
+  - the separate pending-candidate `destination` field: `core/uchoice_context.py:286-295,340-354`;
+  - batch completion `destination_label`: `core/completion_batch.py:281-289`;
+  - confirmation and completion destination sections: `core/confirmation.py:396-411,550-556,677-680,835-841`;
+  - `core/kefu_response_renderer.py`, `core/kefu_customer_copy.py`, and Smart Robot result messages.
+- **Invoice detail sheet** (`core/uchoice_invoice_export.py:270-287`): today it exports the address row's company and address only, so it would show `客户自提` with a blank address and no person. Open question for the user (Q9).
 
 ### Carry-along (D6)
 - Modify flow, address-pivot resume (`core/kefu_turn_apply.py`, `core/workflow_engine.py`), and batch completion (`core/completion_batch.py`): the name must survive each, and the guards re-run on a modified request. These are listed as **read first**, because I have not yet traced each path.
 
 ### PDF
-- `build_delivery_order_pdf(..., pickup_customer_name: str | None = None)`. The name prints in the **consignee block** (D8): company, address (empty for this row), then `客户自提：<name>`. Check that an empty address line does not leave a blank gap. With no name the output is byte-identical to today (pinned by a test).
+- `build_delivery_order_pdf(..., pickup_type: str | None = None, pickup_customer_name: str | None = None)` (rev 6, audit F8: the stored `pickup_type` decides the REMARK bar variant and the CJK gating; the name alone is not enough). Both builders in `handlers/uchoice/pdf_stub.py` (`:128-134`, `:185-191`) pass both, read from the request's stored fields. Kefu regenerates from the origin session (`core/kefu_artifact_loader.py:40-60`) and checks bytes against the enqueued hash (`core/kefu_delivery.py:234-273`), so a request with no `pickup_type` key must take the exact existing drawing path. The name prints in the **consignee block** (D8): company, address (empty for this row), then `客户自提：<name>`. Check that an empty address line does not leave a blank gap. With no name the output is byte-identical to today (pinned by a test).
 - Both `pdf_stub.py` call sites pass the name from the request fields.
 - **Pickup mark in the REMARK area (P4, rev 5: user judged the full-width title banner "too significant", so it is replaced by a small bar in REMARK).**
   - **Sample PDFs (generated from the project's own drawing helpers):** `sample-customer-pickup.pdf` and `sample-retention-pickup.pdf` in this folder. They are mock-ups from a scratch script, not project code.
@@ -165,6 +191,13 @@ Length rules: the pickup marker is a fixed 4-character `【自提】` prefix, th
 - Confirmation summary and kefu rendering show the name.
 - PDF: with name, without name (byte-identical to the current output), long name wrapping.
 - Modify and address-pivot resume keep the name.
+- (rev 6, audit) Parser-to-confirmation on **each channel**: an AI response with `pickup_type`/`pickup_customer_name` in `extracted_fields` reaches `collected_fields`, readiness, validation, confirmation and the PDF.
+- (rev 6) Direct-ID injection on both channels: AI writes the general row's ID, a retention row's ID, or `散客`'s ID into `destination_address_id`; each is stripped or rejected. Final-combination check runs at confirmation and again before execution. A historical request that already references `散客` still renders and executes.
+- (rev 6) Revision from `pending_confirmation` in both directions on both channels, and from an address-pivot resume: no stale `destination_address_id`, name or type survives; a merged null does not bypass the missing-destination branch.
+- (rev 6) Vocabulary backstop: a name-only follow-up ("张三") passes; "不是自提，送到 X" is read as delivery; an address name containing 自提 does not trigger; AI-says-pickup-with-no-vocabulary asks.
+- (rev 6) Migration: backfill hits exactly the four seed IDs and raises otherwise; a second `customer` row or a second retention row for one warehouse is rejected by the unique indexes; a non-`self_pickup` row cannot get a `pickup_kind`.
+- (rev 6) Renderers: the shared pickup display fact appears in the Kefu pending list, the pending-candidate `destination` field, batch completion, confirmation and completion sections, and Smart Robot result messages.
+- (rev 6) PDF: a no-`pickup_type` fixture is byte-identical before and after; a multi-page pickup order has the bar and CJK text on every page.
 - Intent: each phrasing in the D10 list classifies as pickup; plain delivery requests do not; a bare pickup asks which type; a pickup naming an address ignores the address and the confirmation says so.
 - Vocabulary backstop: AI says pickup with no pickup words in the message, and AI says delivery with pickup words present, both ask instead of proceeding.
 - Revision at confirmation, both directions, leaves no stale `destination_address_id` or `pickup_customer_name`.
