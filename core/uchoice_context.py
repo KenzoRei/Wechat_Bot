@@ -6,6 +6,7 @@ context, the same mechanism as the existing group_context/location_presets
 block in ai/prompt_builder.py, just generalized to four more lists.
 """
 from sqlalchemy.orm import Session as DBSession
+from core import pickup
 from models.uchoice import UchoiceAddress, UchoiceStorage, UchoiceSku
 from models.request_log import RequestLog
 from models.group import GroupMember
@@ -235,7 +236,13 @@ def _creator_names(db: DBSession, rows: list) -> dict:
 def _display_fields(r, original_fields: dict, addr, sku_labels: dict[str, str], creator_names: dict) -> dict:
     """Structured fields for the Kefu pending-list layout (kefu_turn_apply._pending_candidate_options)."""
     fields = {"sku_lines_display": _sku_display_lines(original_fields.get("sku_lines", []), sku_labels)}
-    if addr is not None:
+    pickup_label = pickup.list_label(original_fields)
+    if pickup_label:
+        # Customer pickup: the `→` line of the pending/cancel lists. No street
+        # address is attached (a pickup has none), so two requests with the
+        # same pickup name never get a misleading address suffix.
+        fields["destination_name"] = pickup_label
+    elif addr is not None:
         name = (addr.company_name or "").strip() or (addr.addr or "").strip()
         if name:
             fields["destination_name"] = name
@@ -299,7 +306,7 @@ def pending_request_candidates(
         if destination_address_id:
             addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
             if addr:
-                candidate["destination"] = format_address_label(addr)
+                candidate["destination"] = pickup.list_label(original_fields) or format_address_label(addr)
         candidate.update(_display_fields(r, original_fields, addr, sku_labels, creator_names))
 
         candidates.append(candidate)
@@ -358,7 +365,7 @@ def cancelable_request_candidates(db: DBSession, group_id, service_type_ids: lis
         if destination_address_id:
             addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
             if addr:
-                candidate["destination"] = format_address_label(addr)
+                candidate["destination"] = pickup.list_label(original_fields) or format_address_label(addr)
         candidate.update(_display_fields(r, original_fields, addr, sku_labels, creator_names))
         candidates.append(candidate)
 

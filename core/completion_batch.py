@@ -286,7 +286,10 @@ def load_target(db: DBSession, serial: str) -> BatchTarget | None:
     destination_address_id = original_fields.get("destination_address_id")
     if destination_address_id:
         addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
-        target.destination_label = format_address_label(addr)
+        # Customer pickup (core/pickup.py): the pickup wording comes from the
+        # request's own fields, so batch lists show the same `【自提】` line.
+        from core import pickup
+        target.destination_label = pickup.list_label(original_fields) or format_address_label(addr)
         if addr is not None:
             target.destination_warehouse_code = addr.destination_warehouse_code
     return target

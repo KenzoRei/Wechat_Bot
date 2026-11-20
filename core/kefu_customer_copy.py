@@ -71,9 +71,15 @@ def render_customer_copy(db, *, service_name: str | None, session, request_log, 
 
         address = db.query(UchoiceAddress).filter_by(address_id=fields["destination_address_id"]).first()
         if address is not None:
-            # Company/address are customer-owned logistics data.  Internal
-            # charge type, notes, UUIDs, staff identity and stock are omitted.
-            lines.append(f"送货地址：{address.company_name}，{address.addr}")
+            from core import pickup
+
+            if pickup.persisted_mode(fields) == pickup.TYPE_CUSTOMER:
+                # Customer pickup: no delivery address exists; say who collects.
+                lines.append(f"取货方式：{pickup.confirmation_destination(fields)}")
+            else:
+                # Company/address are customer-owned logistics data.  Internal
+                # charge type, notes, UUIDs, staff identity and stock are omitted.
+                lines.append(f"送货地址：{address.company_name}，{address.addr}")
 
     if service_name == "upsert_address":
         company = fields.get("company_name")

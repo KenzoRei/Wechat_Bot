@@ -8,6 +8,7 @@ that go into it — mirroring handlers/registry.py's idiom. Most services
 import logging
 from typing import Callable
 from sqlalchemy.orm import Session as DBSession
+from core import pickup
 from core.message_sections import render_sections
 
 logger = logging.getLogger(__name__)
@@ -397,7 +398,9 @@ def _outbound_sections_builder(collected_fields: dict, db: DBSession) -> list[di
     if dest_id:
         from core.uchoice_context import format_address_label
         addr = db.query(UchoiceAddress).filter_by(address_id=dest_id).first()
-        dest_label = format_address_label(addr)
+        # Customer pickup (core/pickup.py): the pickup wording comes from the
+        # request's own fields, never from the address row's label.
+        dest_label = pickup.confirmation_destination(collected_fields) or format_address_label(addr)
         sections.append({"label": None, "type": "list", "items": [f"目的地：{dest_label}"]})
         # Future tense, deliberately different wording from
         # _outbound_completion_sections_builder's own warning below --
@@ -534,18 +537,21 @@ def _outbound_completion_sections_builder(collected_fields: dict, db: DBSession)
     if not restated:
         sections.append({"label": None, "type": "list", "items": ["（按原申请数量发货，如实发数量有出入请重新说明）"]})
 
-    for item in _completion_destination_items(db, original_fields):
+    for item in _completion_destination_items(db, original_fields, with_pickup_warning=True):
         sections.append({"label": None, "type": "list", "items": [item]})
 
     return sections
 
 
-def _completion_destination_items(db: DBSession, original_fields: dict) -> list[str]:
+def _completion_destination_items(db: DBSession, original_fields: dict, with_pickup_warning: bool = False) -> list[str]:
     """
     Outbound completion only: the resolved destination and, for an internal
     transfer, the present-tense inventory warning (confirming a completion
     IS the inventory-moving step). Shared by the single and batch completion
-    builders so both word it identically.
+    builders so both word it identically. Customer pickup (core/pickup.py):
+    the destination reads from the request's own pickup fields, and the single
+    completion confirmation (with_pickup_warning) adds ONE line telling the
+    warehouse not to deliver -- batch lists stay one line per request.
     """
     destination_address_id = original_fields.get("destination_address_id")
     if not destination_address_id:
@@ -553,7 +559,10 @@ def _completion_destination_items(db: DBSession, original_fields: dict) -> list[
     from models.uchoice import UchoiceAddress
     from core.uchoice_context import format_address_label
     addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
-    items = [f"目的地：{format_address_label(addr)}"]
+    items = [f"目的地：{pickup.confirmation_destination(original_fields) or format_address_label(addr)}"]
+    warning = pickup.warning_line(original_fields) if with_pickup_warning else None
+    if warning:
+        items.append(warning)
     if addr and addr.destination_warehouse_code:
         items.append(f"⚠️ 此为内部调仓：确认后将同时增加 {addr.destination_warehouse_code} 仓对应库存")
     return items
@@ -677,7 +686,7 @@ def _cancel_batch_sections_builder(collected_fields: dict, db: DBSession) -> lis
         destination_address_id = target.original_fields.get("destination_address_id")
         if destination_address_id:
             addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
-            items.append(f"目的地：{format_address_label(addr)}")
+            items.append(f"目的地：{pickup.confirmation_destination(target.original_fields) or format_address_label(addr)}")
         creator = _creator_names(db, [target.log]).get(target.log.log_id)
         created = ""
         if target.log.created_at:
@@ -838,7 +847,8 @@ def _cancel_request_sections_builder(collected_fields: dict, db: DBSession) -> l
         from core.uchoice_context import format_address_label
         addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
         if addr:
-            sections.append({"label": None, "type": "list", "items": [f"目的地：{format_address_label(addr)}"]})
+            dest = pickup.confirmation_destination(original_fields) or format_address_label(addr)
+            sections.append({"label": None, "type": "list", "items": [f"目的地：{dest}"]})
 
     return sections
 
