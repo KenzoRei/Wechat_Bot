@@ -156,6 +156,35 @@ def test_a_disagreement_asks_the_question_and_changes_nothing(db):
     assert session.conversation_history[-1] == {"role": "assistant", "content": pickup.ASK_WHICH}
 
 
+def test_a_clarification_takes_a_pending_confirmation_back_to_collecting(db):
+    """Audit finding 15: the unreviewed warehouse change that came with the vague
+    pickup must not be confirmable -- a fresh summary is required."""
+    session = _session({pickup.MARKER_KEY: 1, "warehouse_code": "JFK", "destination_address_id": str(PLAIN)},
+                       status="pending_confirmation")
+    ai = _ai({"pickup_type": "customer", "pickup_customer_name": "王小明", "warehouse_code": "DE"})
+    reply = _turn(db, session, ai, "发给王小明")
+    assert reply == pickup.ASK_WHICH and session.status == "active"
+    assert "pickup_type" not in session.collected_fields
+
+
+def test_a_repeated_pickup_type_does_not_hide_a_negation_and_asks(db):
+    """Audit finding 16."""
+    session = _session({pickup.MARKER_KEY: 1, "warehouse_code": "JFK", "pickup_type": "customer",
+                        "pickup_customer_name": "王小明", "destination_address_id": str(GENERAL)},
+                       status="pending_confirmation")
+    reply = _turn(db, session, _ai({"pickup_type": "customer"}), "不是自提，送到 ABC Trading")
+    assert reply == pickup.ASK_WHICH and session.status == "active"
+    assert session.collected_fields["destination_address_id"] == str(GENERAL)
+
+
+def test_a_new_name_with_retention_asks_instead_of_being_dropped(db):
+    """Audit finding 17."""
+    session = _session({pickup.MARKER_KEY: 1, "warehouse_code": "JFK"}, status="pending_confirmation")
+    reply = _turn(db, session, _ai({"pickup_type": "retention", "pickup_customer_name": "张三"}), "JFK仓库自提留存，张三")
+    assert reply == pickup.ASK_RETENTION_NAME and session.status == "active"
+    assert "pickup_type" not in session.collected_fields
+
+
 def test_bare_ziti_with_no_classification_asks_which_type(db):
     session = _session({pickup.MARKER_KEY: 1, "warehouse_code": "JFK"})
     assert _turn(db, session, _ai({}), "S2 3箱 自提") == pickup.ASK_WHICH
@@ -194,7 +223,7 @@ def test_revision_to_pickup_replaces_a_matched_delivery_destination(db):
 
 def test_retention_resolves_to_the_source_warehouses_own_row(db):
     session = _session({pickup.MARKER_KEY: 1, "warehouse_code": "JFK"})
-    ai = _ai({"pickup_type": "retention", "pickup_customer_name": "张三"})
+    ai = _ai({"pickup_type": "retention"})
     assert _turn(db, session, ai, "JFK仓库自提留存") == "CONFIRM THIS"
     assert session.collected_fields["destination_address_id"] == str(JFK_RET)
     assert "pickup_customer_name" not in session.collected_fields

@@ -1476,6 +1476,12 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
         session.collected_fields = pickup_fields
         context["collected_fields"] = session.collected_fields
         if pickup_ask:
+            # A clarification must not leave a confirmation executable: this
+            # turn's other extracted fields were merged but never reviewed, so
+            # a later 确认 would run them. Back to collecting; a fresh summary
+            # is required.
+            if session.status == "pending_confirmation":
+                session.status = "active"
             context["_reply"] = pickup_ask
             _append(session, "assistant", pickup_ask)
             return pickup_ask

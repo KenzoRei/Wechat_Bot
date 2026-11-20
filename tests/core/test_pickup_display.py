@@ -158,5 +158,7 @@ def test_a_long_pickup_name_is_truncated_in_lists_only(db):
     long_fields = {**CUSTOMER, "pickup_customer_name": "王" * 40}
     label = pickup.list_label(long_fields)
     assert label.count("王") <= pickup.LIST_NAME_MAX_LEN and "…" in label
-    assert pickup.confirmation_destination(long_fields).count("王") <= pickup.LIST_NAME_MAX_LEN
+    # Audit finding 18: a confirmation shows everything the PDF will print (D5).
+    assert pickup.confirmation_destination(long_fields).count("王") == 40
+    assert "…" not in pickup.confirmation_destination(long_fields)
     assert pickup.invoice_destination(long_fields).count("王") == 40       # the billing record keeps the full name

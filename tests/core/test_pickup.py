@@ -106,6 +106,16 @@ def test_negated_pickup_but_ai_kept_pickup_asks():
     assert pickup.intent_this_turn(None, "customer", "不是自提，送到 X 公司") == "ask"
 
 
+@pytest.mark.parametrize("persisted", ["customer", "retention"])
+def test_negated_pickup_with_a_repeated_pickup_type_asks(persisted):
+    assert pickup.intent_this_turn(persisted, persisted, "不是自提，送到 X 公司") == "ask"
+
+
+def test_a_repeated_type_with_no_negation_is_still_accepted():
+    assert pickup.intent_this_turn("customer", "customer", "王小明") == "customer"
+    assert pickup.intent_this_turn("customer", "customer", "不是自提，是客户自提") == "customer"
+
+
 def test_plain_delivery_stays_delivery():
     assert pickup.intent_this_turn(None, "none", "发货到 ABC Trading") == "none"
 
@@ -195,13 +205,53 @@ def test_pickup_wins_over_an_ordinary_destination_the_ai_also_gave(db):
     assert ask is None and fields["destination_address_id"] == str(GENERAL)
 
 
-def test_retention_resolves_by_warehouse_and_drops_any_name(db):
+def test_retention_resolves_by_the_source_warehouse(db):
     previous = {"warehouse_code": "DE"}
-    extracted = {"pickup_type": "retention", "pickup_customer_name": "张三"}
+    extracted = {"pickup_type": "retention"}
     fields, ask = pickup.apply_turn(db, _ctx("DE仓库自提留存"), previous, {**previous, **extracted}, extracted)
     assert ask is None
     assert fields["destination_address_id"] == str(DE_RET)
     assert "pickup_customer_name" not in fields
+
+
+def test_a_name_given_this_turn_with_retention_asks_which_was_meant(db):
+    """Audit finding 17: never silently drop a pickup person the user just named."""
+    previous = {"warehouse_code": "DE"}
+    extracted = {"pickup_type": "retention", "pickup_customer_name": "张三"}
+    fields, ask = pickup.apply_turn(db, _ctx("DE仓库自提留存，张三"), previous, {**previous, **extracted}, extracted)
+    assert ask == pickup.ASK_RETENTION_NAME
+    assert "pickup_type" not in fields and "pickup_customer_name" not in fields
+    assert "destination_address_id" not in fields
+
+
+def test_a_new_name_on_a_name_only_followup_of_a_retention_request_also_asks(db):
+    previous = {"warehouse_code": "JFK", "pickup_type": "retention", "destination_address_id": str(JFK_RET),
+                pickup.MARKER_KEY: 1}
+    extracted = {"pickup_customer_name": "张三"}
+    fields, ask = pickup.apply_turn(db, _ctx("张三"), previous, {**previous, **extracted}, extracted)
+    assert ask == pickup.ASK_RETENTION_NAME
+    assert fields["pickup_type"] == "retention" and "pickup_customer_name" not in fields
+
+
+def test_a_stale_name_from_an_earlier_customer_draft_is_cleared_on_a_switch_to_retention(db):
+    """D12: switching the type clears the old side's fields; that is NOT a name given this turn."""
+    previous = {"warehouse_code": "JFK", "pickup_type": "customer", "pickup_customer_name": "王小明",
+                "destination_address_id": str(GENERAL), pickup.MARKER_KEY: 1}
+    extracted = {"pickup_type": "retention"}
+    fields, ask = pickup.apply_turn(db, _ctx("改成仓库自提留存"), previous, {**previous, **extracted}, extracted)
+    assert ask is None
+    assert fields["destination_address_id"] == str(JFK_RET) and "pickup_customer_name" not in fields
+
+
+def test_a_repeated_type_does_not_hide_an_explicit_negation(db):
+    """Audit finding 16: the AI repeats the persisted type but the user said 不是自提."""
+    for persisted in ("customer", "retention"):
+        previous = {"warehouse_code": "JFK", "pickup_type": persisted, pickup.MARKER_KEY: 1,
+                    "destination_address_id": str(GENERAL if persisted == "customer" else JFK_RET)}
+        extracted = {"pickup_type": persisted}
+        fields, ask = pickup.apply_turn(db, _ctx("不是自提，送到 ABC Trading"), previous, {**previous, **extracted}, extracted)
+        assert ask == pickup.ASK_WHICH
+        assert fields["pickup_type"] == persisted and fields["destination_address_id"] == previous["destination_address_id"]
 
 
 def test_retention_uses_the_callers_default_warehouse_when_none_stated(db):

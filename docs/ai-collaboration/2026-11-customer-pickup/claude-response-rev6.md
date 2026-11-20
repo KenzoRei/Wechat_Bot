@@ -145,3 +145,15 @@ Accepted: a regex over each entire message is not a reliable gate. Revised rule 
 
 ## Review state
 All eight findings are now resolved in the plan text (rev 7). The plan can go back to Codex for re-check and signature.
+
+## Post-implementation round: findings 15-18 (commit after `8ac63c8`)
+All four accepted and fixed; each was real (verified by reading the code and by the new tests failing against the old behaviour before the fix).
+
+| # | Verdict | Fix |
+|---|---|---|
+| 15 | **Fixed** | A clarification no longer leaves a confirmation executable: on `ask`, both channels take a `pending_confirmation` session back to `active`, so a fresh summary is required. The pickup type/name are restored as before; the turn's other merged fields stay but must be re-confirmed. Tests on both channels, starting from `pending_confirmation`. |
+| 16 | **Fixed** | `intent_this_turn` now applies the negation check before the same-type return: a repeated `customer`/`retention` with an explicit negation and no pickup wording asks (or needs `pickup_type: none`). `不是自提，是客户自提` still counts as pickup. Tests: core, Smart Robot, Kefu. |
+| 17 | **Fixed** | A pickup person named THIS turn together with retention asks (`ASK_RETENTION_NAME`) instead of being dropped. A stale name carried from an earlier customer draft is still cleared on a switch (D12). The old test that expected the silent drop was rewritten. |
+| 18 | **Fixed** | `confirmation_destination` shows the FULL name (D5: show everything the PDF prints); only the pending lists truncate (20 characters). Display test updated. |
+
+Offline suite after the fixes: 1241 passed (389 PostgreSQL tests still not run; V42 still not run against a database).

@@ -333,6 +333,13 @@ def _apply_pickup_step(context: dict, service: dict | None, session, previous: d
         db.commit()
     context["collected_fields"] = session.collected_fields
     if ask:
+        # A clarification must not leave a confirmation executable: this
+        # turn's other extracted fields (a different address, warehouse, SKU
+        # lines) are merged but were never reviewed, so a later 确认 would run
+        # them. Back to collecting -- a fresh summary is required.
+        if session.status == "pending_confirmation":
+            session.status = "active"
+            db.commit()
         session_manager.add_message(db, session, "assistant", ask)
         send_message(context, ask)
         return True

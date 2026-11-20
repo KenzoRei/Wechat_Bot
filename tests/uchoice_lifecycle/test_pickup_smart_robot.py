@@ -98,8 +98,8 @@ def _new_request(monkeypatch, db, ai, content, collected=None):
     return session, context
 
 
-def _continuation(monkeypatch, db, ai, content, collected):
-    session = _FakeSession(collected_fields=collected)
+def _continuation(monkeypatch, db, ai, content, collected, status="active"):
+    session = _FakeSession(collected_fields=collected, status=status)
     monkeypatch.setattr(workflow_engine, "_get_session", lambda context, db: session)
     context = {"session_id": "sess-1", "content": content, "allowed_services": [_service()],
                "group_id": _GROUP_ID, "warehouse_codes": None}
@@ -160,6 +160,37 @@ def test_revision_to_pickup_replaces_a_delivery_destination(monkeypatch, db, sen
     ai = _ai({"pickup_type": "customer", "pickup_customer_name": "王小明"}, content_type="continuation")
     session, _ = _continuation(monkeypatch, db, ai, "这不是送货，是客户自己来提货", collected)
     assert session.collected_fields["destination_address_id"] == str(GENERAL)
+
+
+# ── clarifications must not leave a confirmation executable (audit 15-17) ─────
+
+def test_a_clarification_takes_a_pending_confirmation_back_to_collecting(monkeypatch, db, sent):
+    """The unreviewed warehouse change that came with the vague pickup must not
+    be confirmable: a fresh summary is required."""
+    collected = {pickup.MARKER_KEY: 1, "warehouse_code": "JFK", "destination_address_id": str(PLAIN)}
+    ai = _ai({"pickup_type": "customer", "pickup_customer_name": "王小明", "warehouse_code": "DE"},
+             content_type="continuation")
+    session, _ = _continuation(monkeypatch, db, ai, "发给王小明", collected, status="pending_confirmation")
+    assert sent == [pickup.ASK_WHICH]
+    assert session.status == "active"
+    assert "pickup_type" not in session.collected_fields
+
+
+def test_a_repeated_pickup_type_does_not_hide_a_negation_and_asks(monkeypatch, db, sent):
+    collected = {pickup.MARKER_KEY: 1, "warehouse_code": "JFK", "pickup_type": "customer",
+                 "pickup_customer_name": "王小明", "destination_address_id": str(GENERAL)}
+    ai = _ai({"pickup_type": "customer"}, content_type="continuation")
+    session, _ = _continuation(monkeypatch, db, ai, "不是自提，送到 ABC Trading", collected, status="pending_confirmation")
+    assert sent == [pickup.ASK_WHICH] and session.status == "active"
+    assert session.collected_fields["destination_address_id"] == str(GENERAL)      # the pickup is kept until answered
+
+
+def test_a_new_name_with_retention_asks_instead_of_being_dropped(monkeypatch, db, sent):
+    collected = {pickup.MARKER_KEY: 1, "warehouse_code": "JFK"}
+    ai = _ai({"pickup_type": "retention", "pickup_customer_name": "张三"}, content_type="continuation")
+    session, _ = _continuation(monkeypatch, db, ai, "JFK仓库自提留存，张三", collected, status="pending_confirmation")
+    assert sent == [pickup.ASK_RETENTION_NAME] and session.status == "active"
+    assert "pickup_type" not in session.collected_fields
 
 
 # ── the address-pivot gate ────────────────────────────────────────────────────

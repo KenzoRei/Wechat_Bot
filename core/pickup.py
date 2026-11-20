@@ -62,6 +62,10 @@ ASK_WHICH = (
     "这笔出库是自提吗？请说明是「客户自提」（有客户到仓库取货，请告知取货人姓名）"
     "还是「仓库自提留存」（货物留给公司自己，无需移动）。如果是送货，请告知送货地址。"
 )
+ASK_RETENTION_NAME = (
+    "您提供了取货人姓名，但选择了「仓库自提留存」（货物留给公司自己）。"
+    "请问是「客户自提」（有客户到仓库取货）还是「仓库自提留存」？"
+)
 
 # ── Vocabulary (backstop only; the AI decides intent, code catches disagreement)
 
@@ -197,8 +201,11 @@ def intent_this_turn(ai_type, persisted: str, message: str, address_texts=()) ->
     pickup_type and no pickup wording, and must keep the persisted mode)."""
     positive, negated = vocabulary_flags(message, address_texts)
     if ai_type in PICKUP_TYPES:
-        if ai_type != persisted and not positive:
-            return "ask"            # AI says pickup, the words don't: never a silent $0
+        if not positive and (ai_type != persisted or negated):
+            # AI says pickup, the words don't: never a silent $0. Also when it
+            # merely REPEATS the persisted type but the user explicitly negated
+            # pickup ("不是自提，送到 X"): that needs pickup_type none, or a question.
+            return "ask"
         return ai_type
     if ai_type == TYPE_NONE:
         if persisted == TYPE_NONE and positive:
@@ -253,13 +260,19 @@ def apply_turn(db: DBSession, context: dict, previous: dict, merged: dict, extra
     persisted = persisted_mode(previous)
 
     mode = intent_this_turn(ai_type, persisted, (context or {}).get("content") or "", _address_texts(context))
-    if mode == "ask":
+    ask_text = ASK_WHICH if mode == "ask" else None
+    if mode == TYPE_RETENTION and (extracted or {}).get(NAME_KEY):
+        # A pickup person named THIS turn alongside retention: which was meant?
+        # (A stale name carried over from an earlier customer-pickup draft is
+        # not this -- it is cleared below, per D12.)
+        ask_text = ASK_RETENTION_NAME
+    if ask_text:
         for key in (TYPE_KEY, NAME_KEY):
             if key in (previous or {}):
                 fields[key] = previous[key]
             else:
                 fields.pop(key, None)
-        return fields, ASK_WHICH
+        return fields, ask_text
 
     if ai_type in PICKUP_TYPES:
         fields[TYPE_KEY] = ai_type
@@ -344,8 +357,10 @@ def confirmation_destination(fields: dict) -> str | None:
     fields = fields or {}
     mode = persisted_mode(fields)
     if mode == TYPE_CUSTOMER:
+        # The FULL name (a confirmation must show everything the PDF will
+        # print, D5); only the pending lists truncate.
         name = clean_name(fields.get(NAME_KEY))
-        return f"客户自提 — 取货人：{_short(name)}" if name else "客户自提"
+        return f"客户自提 — 取货人：{name}" if name else "客户自提"
     if mode == TYPE_RETENTION:
         return "仓库自提留存"
     return None
