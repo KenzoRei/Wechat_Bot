@@ -37,4 +37,4 @@ Branch `feature/customer-pickup`. Version 1.11.0 (1.10.0 is taken by the unmerge
 - No live LLM check: the prompt wording and the AI's `pickup_type` classification are untested against a real model.
 
 ## Offline test inventory (new)
-`tests/core/test_pickup.py` (66), `test_pickup_prompt.py` (10), `test_pickup_display.py` (15), `tests/uchoice_lifecycle/test_pickup_smart_robot.py` (16), `tests/kefu/test_pickup_kefu.py` (14), `tests/uchoice_outbound_pdf/test_pdf_pickup_mark.py` (9).
+`tests/core/test_pickup.py` (67), `test_pickup_prompt.py` (10), `test_pickup_display.py` (15), `tests/uchoice_lifecycle/test_pickup_smart_robot.py` (16), `tests/kefu/test_pickup_kefu.py` (14), `tests/uchoice_outbound_pdf/test_pdf_pickup_mark.py` (9).
