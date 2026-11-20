@@ -21,3 +21,15 @@
 ## Review state
 
 The plan is **not ready for signatures** while findings 1-5 are unresolved. No production code was changed during this audit.
+
+## Codex re-audit of plan rev 7 (commit `80d7c0a`, 2026-11-20)
+
+Only remaining blockers are listed below. Findings 1-8 were addressed in the rev 7 plan and Claude response; the user's D13 and D14 resolve the inventory and invoice choices.
+
+9. **[P1] Smart Robot can cancel a pickup before the proposed turn hook runs.** `workflow_engine.run_and_get_reply` calls `_maybe_pivot_to_add_address` before dispatching to `_handle_new_request` or `_handle_continuation` (`core/workflow_engine.py:69-87`); the proposed `apply_pickup_turn` runs only inside those handlers. If the AI emits `pickup_type=customer` with `unmatched_new_address` for the named address in the same message, the pre-dispatch pivot cancels the outbound and opens an address case (`core/workflow_engine.py:105-160`). D11 says pickup intent wins over that address. Gate the pivot on the *validated* pickup intent, or move pickup classification ahead of the pivot, and test an initial pickup request and a confirmation revision that each name an unmatched delivery address.
+
+10. **[P1] The new final-combination rule would reject in-flight historical retention requests.** V42 marks the three existing retention IDs `pickup_kind='retention'`, while requests created before V42 have no stored `pickup_type`. The rev 7 rule says absent type requires a destination with no `pickup_kind` (`plan.md`, “Final-combination check”), and grants a historical exception only for `legacy` (`散客`). A pre-deploy outbound draft or pending confirmation pointing to a retention row would fail the new check after deployment, especially at the proposed pre-execution gate. Define a grandfather rule for *all* pre-change pickup rows, including retention, based on durable request provenance or a version/cutover marker; keep the rule fail-closed for newly created requests. Test confirmation and completion of old retention and `散客` requests across the migration.
+
+11. **[P1] D11's ignored address has no defined path into confirmation.** D11 requires the confirmation to say which named delivery address was not used, but the rev 7 contract specifies only `pickup_type` and `pickup_customer_name` in `extracted_fields`; the resolver outputs only `destination_address_id` (`plan.md`, “Contracts and chokepoints”, “Resolver”, “Prompt”). No field or turn hook records the ignored address, and the shared pickup display fact is built only from type and name. Specify a bounded, sanitized ignored-address field (or equivalent structured evidence), its lifecycle through confirmation corrections, and both channel renderers. Test a pickup request that names a delivery address and a later revision that removes that address from the new confirmation.
+
+**Re-audit state:** findings 9-11 block signature. No production code was changed during this re-audit.

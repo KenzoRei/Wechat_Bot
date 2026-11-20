@@ -76,5 +76,39 @@ Accepted: a regex over each entire message is not a reliable gate. Revised rule 
 - **F5 / Q8:** the user corrected the premise. `仓库自提留存` means **the recipient is Trans World itself**. The goods are already in our warehouse, so nothing moves (hence 留存), and **stock is deducted as usual**. The current `storage_txns.py:139-149` behavior is therefore correct and stays unchanged. The "stock stays available" reading in the audit and in my first summary was wrong; no separate inventory design is needed. The prompt's definition of retention is corrected to match (plan Prompt section).
 - **F7 / Q9:** approved. The invoice detail sheet shows `客户自提（<name>）` for a customer pickup.
 
+## Round 2: responses to findings 9–11 (rev 7 → rev 8)
+
+| # | Verdict | Summary |
+|---|---|---|
+| 9 | **Accepted** (verified) | `_maybe_pivot_to_add_address` runs at `core/workflow_engine.py:81`, before the handlers, so it can cancel the outbound before `apply_pickup_turn` runs. Fix: gate the pivot on validated pickup intent. |
+| 10 | **Accepted** | Grandfather **all** requests created before the cutover, by a durable creation-time marker. Fail closed for new ones. |
+| 11 | **Accepted** | Add a bounded, sanitized internal field for the ignored address, with a defined lifecycle and both renderers. |
+
+### 9. Pivot gate (Smart Robot)
+- **Verified:** `run_and_get_reply` calls `_maybe_pivot_to_add_address` at `core/workflow_engine.py:81`, before `_handle_new_request` / `_handle_continuation` (`:84-87`). With `pickup_type=customer` plus `unmatched_new_address` in one reply, the pivot closes the session and the request log (`:150-155`) before the hook can act.
+- **Kefu is not affected:** its pivot happens inside the turn (`core/kefu_turn_apply.py:1496-1510`), after the merge, and only when no `destination_address_id` exists. With the hook placed before `:1496`, a resolved pickup ID already satisfies that check.
+- **Fix:** a small pure function `pickup_intent_this_turn(ai_response, context)` is evaluated **before** the pivot. It returns `customer`, `retention`, `none`, `ask`, or `unchanged`, using the same rules as the revised backstop (AI's `pickup_type` this turn plus the vocabulary check). The pivot returns `False` when the result is `customer`, `retention` or `ask`. Only `none` and `unchanged` let the pivot run as today.
+- `ask` also skips the pivot, so the outbound is not abandoned while we are still asking which type was meant.
+- **Tests (Smart Robot):** an initial pickup request that names an unmatched delivery address (no pivot, request survives, ignored address recorded); a confirmation revision to pickup that names one; `pickup_type=none` plus an unmatched address still pivots as today.
+
+### 10. Grandfathering in-flight requests
+- **Marker:** every outbound request created **after** deploy is stamped with an internal `_pickup_v = 1` at **creation** (the new-request handler on each channel), not in the turn hook. A stamp in the hook would wrongly mark old drafts that continue after deploy. `_` keys cannot come from the AI (existing stripping), so the marker is trustworthy.
+- **Rule:**
+  - **No `_pickup_v`** (created before the cutover): grandfathered. It is judged by the old rules, with **no** final-combination check, for any destination row including `retention`, `legacy` (`散客`) and rows that now carry a `pickup_kind`. This covers drafts, pending confirmations, and processing requests awaiting warehouse completion, and the pre-execution gate.
+  - **`_pickup_v` present:** strict final-combination check, fail closed.
+- **Revision of a grandfathered draft:** once the user states a pickup type on a later turn, the hook sets `pickup_type` and the request is judged strictly from then on (the hook stamps `_pickup_v` at that moment, since the request is now in the new model). If the user never states one, it stays on the old path and its PDF takes the exact existing drawing path (byte-identical).
+- **Tests:** confirmation and completion of an old retention request, an old `散客` request, and an old ordinary delivery, each created before the migration and handled after; a new request with no type and a retention destination is rejected.
+
+### 11. The ignored address (D11)
+- **Field:** an internal `_pickup_ignored_address` in `collected_fields`, written only by the hook, so the AI cannot write it. Its value is a single bounded string (80 characters max, whitespace normalized, newlines and markup stripped).
+- **Source** (deterministic, not AI free text): (a) the sanitized `company_name`/`addr` from `unmatched_new_address`, or (b) the label of the first `address_match.candidate_ids` entry looked up in the database. If neither exists, the field is not set and the confirmation shows no "not used" note, since nothing is known to report.
+- **Lifecycle:**
+  - Any turn that (re)states `pickup_type` customer/retention **recomputes** the field from that turn's address evidence. No address evidence clears it. That is how "the later revision removes that address".
+  - `pickup_type: none` clears it, along with the pickup fields (the named address is then matched normally).
+  - A turn with `pickup_type` absent leaves it unchanged.
+  - Prompt rule: while in pickup mode, any message correcting the pickup or its address must re-emit `pickup_type`.
+- **Rendering:** the shared pickup display fact gets an optional second part, `（未使用您提到的地址：X）`, used **only in confirmation builders** on both channels. Lists, the PDF and the invoice never print it.
+- **Tests:** a pickup request that names a delivery address shows the note on both channels; a later revision that drops the address shows a confirmation without it; a switch to delivery clears it.
+
 ## Review state
 All eight findings are now resolved in the plan text (rev 7). The plan can go back to Codex for re-check and signature.
