@@ -7,6 +7,55 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
+## [1.11.0] - 2026-11-20
+
+**Migration V42 -- apply it to production BEFORE the deploy.** It adds a
+nullable column and one seeded row, so the previous code keeps working
+against the migrated database. It fails closed (raises) if any of the four
+known self-pickup rows is missing. (Numbered 1.11.0 because 1.10.0 is taken by
+the scheduled-outbound-reservation branch, which has not merged yet.)
+
+### Added
+- **Customer pickup (客户自提).** An outbound can now be a pickup by a named
+  customer. The LLM reports pickup *intent* (自提, 自取, 来提货, 到仓提货,
+  pickup ... -- not just the word 自提) and the pickup person's name; code,
+  never the LLM, picks the destination. Requests are one of: a normal
+  delivery, `客户自提` (a named outside customer collects; one general
+  address row for every warehouse) or `仓库自提留存` (the recipient is Trans
+  World itself; stock is deducted as usual, unchanged). The name is free
+  text, not matched against any list; `散客` is now just a name.
+  A bare "自提" with neither signal asks which type was meant; pickup wins
+  over an address named in the same message; a pickup can be revised to a
+  delivery (and back) at the confirmation step.
+- **Pickup shows everywhere the destination does.** Confirmations, the
+  pending and cancel lists (`→ 【自提】客户自提：王小明（无需送货）`), the
+  warehouse completion confirmation (one extra warning line), batch
+  completions and the customer copy. The invoice Outbound sheet shows
+  `客户自提（王小明）`.
+- **Delivery-order PDF.** A pickup order carries a black REMARK-area bar,
+  `客户自提 — 请勿送货` or `仓库自提留存 — 请勿送货`, on every page, plus the
+  name in the consignee block, so warehouse staff notice a wrongly generated
+  pickup and never make a delivery trip for a real one.
+
+### Changed
+- `uchoice_address.pickup_kind` (`customer` / `retention` / `legacy`) tells
+  the self-pickup rows apart by code. `散客` is retired but kept (`legacy`) so
+  past requests still render. The self-pickup rows are system-managed:
+  `upsert_address` can no longer update them.
+- The outbound address candidate list no longer includes the self-pickup rows.
+- Smart Robot's address pivot no longer cancels an outbound that is a pickup.
+  Documented exception: a pickup revised to a delivery at an address that is
+  not in the book still takes the existing cancel-and-resubmit pivot on Smart
+  Robot (Kefu parks and resumes).
+- Requests created before this release are grandfathered (no pickup
+  checks, identical PDF); every new outbound is stamped at creation.
+
+### Fixed
+- The delivery-order PDF consignee block drew in Helvetica, so a Chinese
+  consignee such as `仓库自提留存` printed as black boxes. New pickup orders
+  draw it correctly; other requests are left byte-identical on purpose
+  (Kefu compares regenerated PDF bytes against the enqueued hash).
+
 ## [1.9.0] - 2026-10-15
 
 No migration.
