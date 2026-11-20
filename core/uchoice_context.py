@@ -64,7 +64,8 @@ def sku_label_map(db: DBSession) -> dict[str, str]:
 
 
 def address_candidates(
-    db: DBSession, customer_id=None, source_warehouse_code=None, allowed_warehouse_codes=None
+    db: DBSession, customer_id=None, source_warehouse_code=None, allowed_warehouse_codes=None,
+    exclude_pickup: bool = False,
 ) -> list[dict]:
     """
     The U-Choice address book is shared across every authorized U-Choice
@@ -110,6 +111,13 @@ def address_candidates(
     query = db.query(UchoiceAddress)
     if customer_id is not None:
         query = query.filter_by(customer_id=customer_id)
+    if exclude_pickup:
+        # Customer pickup (core/pickup.py): the self-pickup rows (客户自提,
+        # 仓库自提留存, retired 散客) are never offered to the AI for semantic
+        # matching -- the AI reports pickup INTENT and code resolves the row.
+        # Only the outbound candidate injection asks for this; upsert_address
+        # keeps the full, unfiltered book (see the note above).
+        query = query.filter(UchoiceAddress.pickup_kind.is_(None))
     if source_warehouse_code is not None:
         query = query.filter(
             (UchoiceAddress.warehouse_code == source_warehouse_code) | (UchoiceAddress.warehouse_code.is_(None))

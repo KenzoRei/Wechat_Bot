@@ -63,6 +63,11 @@ def sanitize_extracted_fields_before_persistence(service_name: str, extracted_fi
     extracted_fields = strip_internal_keys(extracted_fields)
     if service_name == "role_change":
         return _sanitize_role_change_fields_before_persistence(extracted_fields, db, group_id)
+    if service_name == "uchoice_outbound_request":
+        # Customer pickup: valid pickup_type / cleaned name only, and no
+        # AI-written destination_address_id that points at a pickup row.
+        from core import pickup
+        extracted_fields = pickup.sanitize_extracted(extracted_fields, db)
 
     field_name = _SKU_LINES_FIELD_BY_SERVICE.get(service_name)
     if not field_name or field_name not in (extracted_fields or {}):

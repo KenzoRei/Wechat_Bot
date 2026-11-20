@@ -61,6 +61,11 @@ class UchoiceAddress(Base):
     # outbound to it triggers a storage increase there too, not just a
     # decrease at the origin.
     destination_warehouse_code: Mapped[str | None] = mapped_column(String(20))
+    # V42: tells the self-pickup rows apart by code, never by label text.
+    # 'retention' (仓库自提留存, one per warehouse), 'customer' (客户自提, the
+    # one general row), 'legacy' (散客, retired -- kept for history). NULL on
+    # every ordinary address. See core/pickup.py.
+    pickup_kind: Mapped[str | None] = mapped_column(String(10))
     # Nullable during migration; rows with company_name IS NULL are excluded
     # from automatic backfill and block the eventual NOT NULL tightening
     # until manually classified. Every row belongs to exactly one customer

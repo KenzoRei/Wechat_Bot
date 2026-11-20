@@ -404,11 +404,14 @@ def _build_uchoice_candidates(
         if active_is_upsert_address:
             candidates["addresses"] = uchoice_context.address_candidates(db)
         elif scope_warehouse:
-            candidates["addresses"] = uchoice_context.address_candidates(db, source_warehouse_code=scope_warehouse)
+            candidates["addresses"] = uchoice_context.address_candidates(
+                db, source_warehouse_code=scope_warehouse, exclude_pickup=True)
         elif allowed_warehouse_codes is not None:
-            candidates["addresses"] = uchoice_context.address_candidates(db, allowed_warehouse_codes=allowed_warehouse_codes)
+            candidates["addresses"] = uchoice_context.address_candidates(
+                db, allowed_warehouse_codes=allowed_warehouse_codes, exclude_pickup=True)
         else:
-            candidates["addresses"] = uchoice_context.address_candidates(db, source_warehouse_code="JFK")
+            candidates["addresses"] = uchoice_context.address_candidates(
+                db, source_warehouse_code="JFK", exclude_pickup=True)
         if "upsert_address" in names:
             # Origin addresses for the drive-time estimate behind a suggested
             # charge type (core/address_suggestion.py) -- needed on the

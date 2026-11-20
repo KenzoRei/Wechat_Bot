@@ -662,6 +662,16 @@ def _valid_destination_address_required(context: dict, collected_fields: dict, d
     return None
 
 
+def _valid_pickup_combination(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """Customer pickup (core/pickup.py): (pickup_type, destination row kind,
+    warehouse, pickup name) must be consistent. Fails closed for requests
+    created after V42; a request without the internal marker predates the
+    feature and is grandfathered (judged by the old rules)."""
+    del context
+    from core import pickup
+    return pickup.validate_combination(collected_fields, db)
+
+
 def _valid_caller_warehouse_scope(context: dict, collected_fields: dict, db: DBSession) -> str | None:
     """
     Rejects an explicitly-named target warehouse the caller isn't assigned
@@ -888,6 +898,7 @@ PRE_CONFIRM_VALIDATORS = {
         _valid_outbound_sku_lines,
         _valid_outbound_sku_quantities,
         _valid_destination_address_required,
+        _valid_pickup_combination,
         _valid_caller_warehouse_scope,
     ),
     "uchoice_inbound_request": _compose(
