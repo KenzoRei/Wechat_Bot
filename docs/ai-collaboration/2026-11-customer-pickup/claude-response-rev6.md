@@ -110,5 +110,32 @@ Accepted: a regex over each entire message is not a reliable gate. Revised rule 
 - **Rendering:** the shared pickup display fact gets an optional second part, `（未使用您提到的地址：X）`, used **only in confirmation builders** on both channels. Lists, the PDF and the invoice never print it.
 - **Tests:** a pickup request that names a delivery address shows the note on both channels; a later revision that drops the address shows a confirmation without it; a switch to delivery clears it.
 
+## Round 3: responses to findings 12–13 (rev 8 → rev 9)
+
+| # | Verdict | Summary |
+|---|---|---|
+| 12 | **Accepted** | `unchanged` is the normal output for a name-only continuation of a pickup, so the pivot gate must use the **effective** mode (this turn's `pickup_type`, else the persisted one). |
+| 13 | **Accepted** | The ignored-address note must come from validated evidence only: a unique match inside the turn-local candidate list, or the sanitized unmatched text. Ambiguous, fabricated or out-of-list IDs produce no note. |
+
+### 12. Effective mode for the pivot gate
+- `pickup_intent_this_turn(ai_response, context)` now returns the **effective mode after this turn**: this turn's `pickup_type` if present and validated, else the session's persisted `pickup_type` (read through `_get_session`, which the pivot already uses), else none. Outcomes: `customer`, `retention`, `none`, `ask`.
+- The pivot returns `False` when the effective mode is `customer`, `retention` or `ask`. It runs as today only when the effective mode is `none` (no pickup now and none persisted), including a brand-new request with no pickup signal.
+- A name-only continuation of an existing pickup that also carries `unmatched_new_address` therefore keeps the request. The address text, if valid evidence (see 13), updates `_pickup_ignored_address`.
+- **Tests (Smart Robot):** a multi-turn pickup where turn 2 is name-only with an unmatched-address signal (no pivot, request and pickup fields intact); the rev 8 initial-turn and revision cases; a delivery request with `unmatched_new_address` still pivots.
+
+### 13. Validated evidence for the ignored address
+- **Only two sources are allowed:**
+  1. the **sanitized text** of `unmatched_new_address` (`company_name` / `addr`), which is the user's own description and already passes the existing sanitizer;
+  2. the **label of a unique, valid match**: on Kefu, the single candidate ID that passes the existing turn-local validation (`core/kefu_response_renderer.py:97-119`, against the exact candidate list injected this turn), with status `matched`. On Smart Robot, an AI-supplied `destination_address_id` counts only if it is in this turn's candidate list and is not a pickup row.
+- **Everything else yields no note:** an `ambiguous` result, any ID not in the turn-local list, a fabricated ID, a pickup row's ID. The pickup decision itself is unchanged (pickup still wins, D11); we simply do not claim an address the user did not clearly name. No extra question is asked for this, since the note is informational.
+- The hook **reuses** the validation helper and never applies the match: it supplies the pickup destination ID itself, so Kefu's own address branch stays skipped (`core/kefu_turn_apply.py:1496-1503`).
+- **Tests:** pickup intent with an ambiguous `address_match` (no note), with a fabricated candidate ID (no note), with an ID outside the turn-local list (no note), with a unique valid match (note shows its label), on Kefu; and the Smart Robot equivalents.
+
+## User decision (rev 10, 2026-11-20): drop the ignored-address note
+- The user chose to drop the note from D11. The confirmation no longer says that a named delivery address was not used.
+- **Effect on earlier answers:** the `_pickup_ignored_address` field, its lifecycle, its evidence validation, and its confirmation rendering (round 2 item 11, round 3 item 13) are **removed**. Finding 11 is resolved by removal and finding 13 is moot. The sentence in item 12 saying the address text "updates `_pickup_ignored_address`" is void.
+- **Kept:** the pivot gate on the effective mode (finding 12), the grandfather marker `_pickup_v` (finding 10), and the rule that a pickup request never takes an AI-written or ambiguous address ID as its destination (the sanitizer strips pickup-row IDs, and the hook supplies the pickup destination itself).
+- **Replacement test:** see plan Tests, "(rev 10, replaces the F11 and F13 tests)".
+
 ## Review state
 All eight findings are now resolved in the plan text (rev 7). The plan can go back to Codex for re-check and signature.
