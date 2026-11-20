@@ -137,5 +137,11 @@ Accepted: a regex over each entire message is not a reliable gate. Revised rule 
 - **Kept:** the pivot gate on the effective mode (finding 12), the grandfather marker `_pickup_v` (finding 10), and the rule that a pickup request never takes an AI-written or ambiguous address ID as its destination (the sanitizer strips pickup-row IDs, and the hook supplies the pickup destination itself).
 - **Replacement test:** see plan Tests, "(rev 10, replaces the F11 and F13 tests)".
 
+## Round 4: finding 14 (rev 10 → rev 11)
+- **Verdict: accepted as a product decision; the user chose option A.**
+- **Verified:** `_maybe_pivot_to_add_address` runs before the handlers and cancels the outbound session and its request log (`core/workflow_engine.py:81,150-155`), so a Smart Robot revision from pickup to delivery at an address outside the book loses the SKU lines. Kefu parks and resumes instead.
+- **Decision (user, A):** record a documented exception to D12 for Smart Robot only. The existing cancel-and-resubmit flow stays; its reply already tells the user the outbound was cancelled and to resubmit after the address is added. No park-and-resume is built for Smart Robot (that would be a separate feature on a legacy path).
+- **Plan changes:** D12 now states the exception; the F9 test asserts the cancellation and the resubmit reply explicitly; a revision to an address in the book follows D12 normally on both channels.
+
 ## Review state
 All eight findings are now resolved in the plan text (rev 7). The plan can go back to Codex for re-check and signature.
