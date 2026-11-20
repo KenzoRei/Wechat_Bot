@@ -170,18 +170,84 @@ def _draw_static_background(c, outbound_order_no: str) -> None:
         c.line(_px(1000), PAGE_H - _px(y_px + 55), PAGE_W - margin, PAGE_H - _px(y_px + 55))
 
 
+# ── Customer pickup (core/pickup.py) ───────────────────────────────────────────
+# A pickup order gets (a) a black bar with large white Chinese text in the
+# REMARK area -- so warehouse staff notice a request wrongly generated as a
+# pickup, and never make a delivery trip for a real one -- and (b) a
+# CJK-capable consignee block (the stock one draws in Helvetica, which has no
+# Chinese glyphs: 仓库自提留存 prints as black boxes). Both are used ONLY when
+# the request carries a stored pickup_type; a request without one takes the
+# exact existing drawing path, so regenerating an old request after a
+# closed-window deferral stays byte-identical to what was enqueued.
+_PICKUP_BAR_TEXT = {
+    "customer": "客户自提 — 请勿送货",
+    "retention": "仓库自提留存 — 请勿送货",
+}
+
+
+def _draw_pickup_bar(c, text: str) -> None:
+    """Inside the REMARK area, under 'Outbound Order #:' and left of the
+    signature column; every page of a multi-page order."""
+    x0 = _px(100)
+    x1 = _px(975)
+    top = _px(1432)
+    h = _px(95)
+    c.setFillColorRGB(0, 0, 0)
+    c.rect(x0, PAGE_H - top - h, x1 - x0, h, stroke=0, fill=1)
+    c.setFillColorRGB(1, 1, 1)
+    c.setFont(_FONT_CJK, 26)
+    c.drawCentredString((x0 + x1) / 2, PAGE_H - top - h / 2 - 9, text)
+    c.setFillColorRGB(0, 0, 0)
+
+
+def _wrap_cjk(text: str, font: str, font_pt: float, max_width_pt: float) -> list[str]:
+    """Character-level wrap (Chinese has no spaces to break on)."""
+    lines: list[str] = []
+    for segment in text.split("\n"):
+        current = ""
+        for ch in segment:
+            if current and stringWidth(current + ch, font, font_pt) > max_width_pt:
+                lines.append(current)
+                current = ch
+            else:
+                current += ch
+        lines.append(current)
+    return lines
+
+
+def _draw_consignee_cjk(c, lines: list[str], x_px, y_px, w_px, h_px, font_px) -> None:
+    """Top-anchored consignee block in the CJK font (same box as _draw_wrapped_top)."""
+    x_pt, top_pt, w_pt, h_pt = _rect_to_pt(x_px, y_px, w_px, h_px)
+    font_pt = _px(font_px)
+    c.setFont(_FONT_CJK, font_pt)
+    line_height = font_pt * 1.3
+    y = top_pt - font_pt
+    for line in _wrap_cjk("\n".join(l for l in lines if l), _FONT_CJK, font_pt, w_pt):
+        if y < top_pt - h_pt:
+            break
+        c.drawString(x_pt, y, line)
+        y -= line_height
+
+
 def build_delivery_order_pdf(
     consignee_company: str,
     consignee_addr: str,
     delivery_date: date,
     product_lines: list[dict],
     outbound_order_no: str,
+    pickup_type: str | None = None,
+    pickup_customer_name: str | None = None,
 ) -> bytes:
     """
     product_lines: [{"description": str, "quantity_text": str}, ...] — already
     formatted per the pallet/plain rules by the caller (core/result_message.py
     style separation: this module only renders, callers decide the text).
     Paginates at MAX_ROWS_PER_PAGE; zero lines still produces one page.
+
+    pickup_type ("customer" / "retention", from the request's own stored
+    fields) switches on the pickup mark and CJK consignee (see above);
+    pickup_customer_name adds a `客户自提：<name>` line to the consignee block.
+    Both default to None: the unchanged, byte-identical path.
     """
     buf = io.BytesIO()
     # ``invariant=1`` removes wall-clock metadata and random document IDs.
@@ -198,10 +264,22 @@ def build_delivery_order_pdf(
 
     pages = [product_lines[i:i + MAX_ROWS_PER_PAGE] for i in range(0, len(product_lines), MAX_ROWS_PER_PAGE)] or [[]]
 
+    pickup_bar_text = _PICKUP_BAR_TEXT.get(pickup_type)
+    pickup_consignee_lines = None
+    if pickup_bar_text:
+        pickup_consignee_lines = [consignee_company.strip(), consignee_addr.strip()]
+        if pickup_type == "customer" and (pickup_customer_name or "").strip():
+            pickup_consignee_lines.append(f"客户自提：{pickup_customer_name.strip()}")
+
     for page_lines in pages:
         _draw_static_background(c, outbound_order_no)
+        if pickup_bar_text:
+            _draw_pickup_bar(c, pickup_bar_text)
         _draw_vcentered(c, date_str, 1090, 465, 300, 45, 27)
-        _draw_wrapped_top(c, consignee_text, 205, 620, 600, 245, 27)
+        if pickup_consignee_lines is not None:
+            _draw_consignee_cjk(c, pickup_consignee_lines, 205, 620, 600, 245, 27)
+        else:
+            _draw_wrapped_top(c, consignee_text, 205, 620, 600, 245, 27)
         for row_y, line in zip(_ROW_Y_PX, page_lines):
             _draw_vcentered(c, line["description"], 165, row_y, 545, 47, 25)
             _draw_vcentered(c, line["quantity_text"], 880, row_y, 535, 47, 25)

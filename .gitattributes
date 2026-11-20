@@ -1,0 +1,2 @@
+# Golden PDFs are compared byte for byte; never let line-ending conversion touch them.
+tests/uchoice_outbound_pdf/golden/*.pdf binary

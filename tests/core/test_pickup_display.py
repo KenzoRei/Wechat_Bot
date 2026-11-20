@@ -99,6 +99,24 @@ def test_completion_of_an_ordinary_delivery_has_no_warning(db):
     assert items == ["目的地：ABC Trading（123 Main St）"]
 
 
+# ── invoice detail sheet (D14) ────────────────────────────────────────────────
+
+def test_invoice_destination_cells_for_a_customer_pickup(db):
+    from core.uchoice_invoice_export import _destination_cells
+    addr = db.query(UchoiceAddress).filter(UchoiceAddress.address_id == GENERAL).one()
+    assert _destination_cells(CUSTOMER, addr) == ("客户自提（王小明）", "")
+
+
+def test_invoice_destination_cells_are_unchanged_for_everything_else(db):
+    from core.uchoice_invoice_export import _destination_cells
+    plain = db.query(UchoiceAddress).filter(UchoiceAddress.address_id == PLAIN).one()
+    ret = db.query(UchoiceAddress).filter(UchoiceAddress.address_id == JFK_RET).one()
+    assert _destination_cells(DELIVERY, plain) == ("ABC Trading", "123 Main St")
+    assert _destination_cells(RETENTION, ret) == ("JFK仓库自提留存", "14502 156th St")
+    old = {"warehouse_code": "JFK", "destination_address_id": JFK_RET}
+    assert _destination_cells(old, ret) == ("JFK仓库自提留存", "14502 156th St")
+
+
 # ── pending list `→` line ─────────────────────────────────────────────────────
 
 def _row_log():

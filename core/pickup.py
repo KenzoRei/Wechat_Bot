@@ -361,6 +361,21 @@ def warning_line(fields: dict) -> str | None:
     return None
 
 
+def pdf_args(fields: dict) -> dict:
+    """Keyword arguments for core.uchoice_delivery_order.build_delivery_order_pdf.
+    Empty for an ordinary delivery AND for a request that predates this feature
+    (no stored pickup_type), so those take the exact existing drawing path and
+    their regenerated PDF stays byte-identical."""
+    fields = fields or {}
+    mode = persisted_mode(fields)
+    if mode not in PICKUP_TYPES:
+        return {}
+    return {
+        "pickup_type": mode,
+        "pickup_customer_name": clean_name(fields.get(NAME_KEY)) if mode == TYPE_CUSTOMER else None,
+    }
+
+
 def invoice_destination(fields: dict) -> str | None:
     """Destination cell on the invoice detail sheet (D14)."""
     fields = fields or {}

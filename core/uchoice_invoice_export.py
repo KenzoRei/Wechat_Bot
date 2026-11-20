@@ -116,6 +116,19 @@ def _line_quantity(line: dict) -> str | None:
     return None
 
 
+def _destination_cells(original_fields: dict, addr) -> tuple[str, str]:
+    """(Destination Company, Destination Address) for an Outbound detail row.
+    Customer pickup (core/pickup.py, D14): `客户自提（<name>）` and no address,
+    so billing records say who collected. Everything else -- an ordinary
+    delivery, a retention row, an old request with no pickup_type -- prints
+    the address row exactly as before."""
+    from core import pickup
+    label = pickup.invoice_destination(original_fields)
+    if label:
+        return label, ""
+    return addr.company_name or "", addr.addr
+
+
 def _sku_summary(lines: list[dict], sku_labels: dict) -> str:
     parts = []
     for line in lines:
@@ -273,8 +286,7 @@ def build_invoice_report(
             if destination_address_id:
                 addr = db.query(UchoiceAddress).filter_by(address_id=destination_address_id).first()
                 if addr:
-                    destination_company = addr.company_name or ""
-                    destination_addr = addr.addr
+                    destination_company, destination_addr = _destination_cells(original_fields, addr)
 
             ws2.append([
                 warehouse_code,

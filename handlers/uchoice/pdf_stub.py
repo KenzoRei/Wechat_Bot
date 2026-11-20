@@ -87,6 +87,7 @@ class GeneratePdfStubHandler(BaseHandler):
             from models.uchoice import UchoiceAddress
             from core.uchoice_context import sku_label_map
             from core.uchoice_delivery_order import build_delivery_order_pdf
+            from core import pickup
 
             fields = context.get("collected_fields", {})
             serial_number = context.get("serial_number", "")
@@ -131,6 +132,7 @@ class GeneratePdfStubHandler(BaseHandler):
                 delivery_date=delivery_date,
                 product_lines=product_lines,
                 outbound_order_no=serial_number,
+                **pickup.pdf_args(fields),
             )
             return {
                 "bytes": pdf_bytes,
@@ -149,6 +151,7 @@ class GeneratePdfStubHandler(BaseHandler):
             from models.uchoice import UchoiceAddress
             from core.uchoice_context import sku_label_map
             from core.uchoice_delivery_order import build_delivery_order_pdf
+            from core import pickup
 
             target = context.get("_uchoice_target", {})
             original_fields = target.get("original_fields", {})
@@ -188,6 +191,7 @@ class GeneratePdfStubHandler(BaseHandler):
                 delivery_date=datetime.now(timezone.utc).date(),
                 product_lines=product_lines,
                 outbound_order_no=serial_number,
+                **pickup.pdf_args(original_fields),
             )
             return {
                 "bytes": pdf_bytes,
