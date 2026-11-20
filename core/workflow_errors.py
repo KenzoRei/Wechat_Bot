@@ -59,6 +59,23 @@ class TargetValidationError(TargetOperationRejected):
         super().__init__(message)
 
 
+class AddressOperationRejected(RuntimeError):
+    """
+    An EXPECTED business rejection from add_address / update_address (stale
+    confirmation, duplicate that appeared after the card, edit draft from
+    before the split, admin-only field, out-of-scope warehouse...). Carries
+    the user-facing message. Both orchestrators (core/workflow_engine.py and
+    core/kefu_turn_apply.py) turn it into a cancelled session with that
+    message and a failed-with-reason request log, instead of an operational
+    failure (generic "处理失败" / a failed worker message). Subclasses
+    RuntimeError so any generic handler still treats it as an error.
+    """
+
+    def __init__(self, user_message: str):
+        self.user_message = user_message
+        super().__init__(user_message)
+
+
 class LabelCreationRejected(Exception):
     """
     Raised by handlers/label/base.py when YiDiDa/the carrier rejects a

@@ -3,7 +3,7 @@ Customer pickup (客户自提) for outbound requests.
 docs/ai-collaboration/2026-11-customer-pickup/plan.md (rev 11, signed).
 
 Three kinds of self-pickup destination exist in the address book, told apart
-by uchoice_address.pickup_kind (V42), never by label text:
+by uchoice_address.pickup_kind (V46), never by label text:
 
   retention  仓库自提留存 -- the recipient is Trans World itself; the goods are
              already in our warehouse. Stock is deducted as usual. One row per
@@ -39,7 +39,7 @@ OUTBOUND_SERVICE = "uchoice_outbound_request"
 TYPE_KEY = "pickup_type"
 NAME_KEY = "pickup_customer_name"
 # Internal (an "_" key, so the AI can never write it): stamped on every
-# outbound request created after V42. A request WITHOUT it is grandfathered --
+# outbound request created after V46. A request WITHOUT it is grandfathered --
 # judged by the old rules, no combination check -- so drafts, pending
 # confirmations and processing requests that predate the migration keep working.
 MARKER_KEY = "_pickup_v"
@@ -299,7 +299,7 @@ def apply_turn(db: DBSession, context: dict, previous: dict, merged: dict, extra
 
 def validate_combination(fields: dict, db: DBSession) -> str | None:
     """(pickup_type, destination row kind, warehouse, name) must be consistent.
-    Fails closed for requests created after V42; a request without the marker
+    Fails closed for requests created after V46; a request without the marker
     is grandfathered and judged by the old rules."""
     fields = fields or {}
     if not has_marker(fields):

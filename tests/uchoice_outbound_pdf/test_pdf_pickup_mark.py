@@ -2,16 +2,17 @@
 Customer pickup on the delivery-order PDF (core/uchoice_delivery_order.py) --
 docs/ai-collaboration/2026-11-customer-pickup/plan.md, audit finding 8.
 
-A pickup order gets a black REMARK-area bar and a CJK consignee block. A
-request WITHOUT a stored pickup_type must take the exact existing drawing
-path: Kefu regenerates outbound PDFs after a closed-window deferral and checks
-the bytes against the hash that was enqueued, so the golden files below (made
-from the builder BEFORE this feature existed, reportlab 5.1.0) must match
-byte for byte.
+A pickup order gets a black REMARK-area bar and a `客户自提：<name>` consignee
+line. A request WITHOUT a stored pickup_type must take the exact existing
+drawing path: Kefu regenerates outbound PDFs queued before bytes were stored at
+enqueue and checks them against the enqueued hash, so the golden files below
+(made from `main`'s builder BEFORE this feature, reportlab 5.1.0, with a
+sender and receiver contact/phone) must match byte for byte.
 """
 import re
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,8 +25,14 @@ LINES2 = [{"description": "Jelly Cup Mix - Item S2", "quantity_text": "Quantity:
 LINES9 = [{"description": f"Item {i}", "quantity_text": f"Quantity: {i}"} for i in range(1, 10)]
 
 
+JFK = SimpleNamespace(warehouse_abbr="JFK", company_name="TWF-JFK", addr="145-02 156th St", city="Jamaica",
+                      state="NY", zip_code="11434", contact="Jeff", phone="6462435122", email=None)
+
+
 def _build(lines, order_no, company="ABC Trading Co", addr="123 Main St, Queens, NY 11101", **kwargs):
-    return build_delivery_order_pdf(company, addr, date(2026, 11, 20), lines, order_no, **kwargs)
+    # The same call (receiver contact/phone + the origin warehouse as sender) the golden files were made with.
+    return build_delivery_order_pdf(company, addr, date(2026, 11, 20), lines, order_no, "Amy Wu", "7185550123",
+                                    sender=JFK, **kwargs)
 
 
 # ── byte identity for everything that is not a stored pickup ──────────────────

@@ -112,7 +112,8 @@ _RESULT_TITLE_BUILDERS: dict[str, Callable[[str, dict], str]] = {
     "confirm_outbound_completion_batch": _completion_batch_result_title,
     "cancel_inbound_request_batch":  _cancel_batch_result_title,
     "cancel_outbound_request_batch": _cancel_batch_result_title,
-    "upsert_address":              _address_result_title,
+    "add_address":              _address_result_title,
+    "update_address":           _address_result_title,
     "explain_service":             _explain_service_result_title,
     "cancel_inbound_request":      _cancel_inbound_result_title,
     "cancel_outbound_request":     _cancel_outbound_result_title,
@@ -178,7 +179,7 @@ _TXN_TYPE_LABELS = {
 }
 
 
-def _sku_bucket_sections(rows: list[dict], sku_labels: dict[str, str]) -> list[dict]:
+def _sku_bucket_sections(rows: list[dict], sku_labels: dict[str, str], notes: dict[str, str] | None = None) -> list[dict]:
     """
     Shared by view_storage and the completion-response full-storage builder.
     rows are already scoped to one warehouse: {sku_code, boxes_per_pallet,
@@ -203,15 +204,36 @@ def _sku_bucket_sections(rows: list[dict], sku_labels: dict[str, str]) -> list[d
         label = sku_labels.get(sku_code, sku_code)
         if len(buckets) == 1:
             b = buckets[0]
-            sections.append({
-                "label": None, "type": "list",
-                "items": [f'{label}：{b["pallet_count"]} 托 @ {b["boxes_per_pallet"]}/托'],
-            })
+            items = [f'{label}：{b["pallet_count"]} 托 @ {b["boxes_per_pallet"]}/托']
+            if notes and sku_code in notes:
+                items.append(notes[sku_code])
+            sections.append({"label": None, "type": "list", "items": items})
         else:
             total = sum(b["pallet_count"] for b in buckets)
             items = [f'{b["pallet_count"]} 托 @ {b["boxes_per_pallet"]}/托' for b in buckets]
+            if notes and sku_code in notes:
+                items.append(notes[sku_code])
             sections.append({"label": f"{label}（合计 {total} 托）", "type": "list", "items": items})
+    # A SKU can be scheduled out while having no physical pallets left (a
+    # recount or adjustment took them); its shortfall line must still show.
+    for sku_code in sorted(set(notes or {}) - set(by_sku)):
+        sections.append({
+            "label": None, "type": "list",
+            "items": [f"{sku_labels.get(sku_code, sku_code)}：0 托", notes[sku_code]],
+        })
     return sections
+
+
+def _schedule_notes(db: DBSession, warehouse_code: str) -> dict[str, str]:
+    """SKU -> the one 待出库 line for SKUs with scheduled outbound; {} when nothing is scheduled."""
+    from core.outbound_reservation import schedule_line, schedule_positions
+
+    return {sku: schedule_line(pos) for sku, pos in schedule_positions(db, warehouse_code).items()}
+
+
+# Roles that can run the outbound-completion service the hint points to.
+_OUTBOUND_CONFIRM_HINT_ROLES = frozenset({"admin", "warehouseman", "warehouse_admin"})
+_OUTBOUND_CONFIRM_HINT = "查询“出库确认”获取待出库明细"
 
 
 def _storage_sections_builder(context: dict, db: DBSession) -> list[dict]:
@@ -221,20 +243,32 @@ def _storage_sections_builder(context: dict, db: DBSession) -> list[dict]:
 
     result = context.get("result", {})
     rows = result.get("storage_rows") or []
-    if not rows:
-        return [{"label": None, "type": "list", "items": ["（无匹配记录）"]}]
-
     sku_labels = sku_label_map(db)
     by_warehouse: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         by_warehouse[r["warehouse_code"]].append(r)
+    if not rows:
+        # No physical stock in scope, but scheduled outbounds may still
+        # exceed it -- keep that visible instead of "no records".
+        fields = context.get("collected_fields") or {}
+        scope = [fields["warehouse_code"]] if fields.get("warehouse_code") else (context.get("warehouse_codes") or [])
+        for warehouse_code in sorted(scope):
+            if _schedule_notes(db, warehouse_code):
+                by_warehouse[warehouse_code] = []
+        if not by_warehouse:
+            return [{"label": None, "type": "list", "items": ["（无匹配记录）"]}]
 
     sections = []
+    any_scheduled = False
     for warehouse_code in sorted(by_warehouse):
         warehouse_rows = by_warehouse[warehouse_code]
         warehouse_total = sum(r["pallet_count"] for r in warehouse_rows)
+        notes = _schedule_notes(db, warehouse_code)
+        any_scheduled = any_scheduled or bool(notes)
         sections.append({"label": f"{warehouse_code} 仓（共 {warehouse_total} 托）", "type": "list", "items": []})
-        sections += _sku_bucket_sections(warehouse_rows, sku_labels)
+        sections += _sku_bucket_sections(warehouse_rows, sku_labels, notes)
+    if any_scheduled and context.get("role") in _OUTBOUND_CONFIRM_HINT_ROLES:
+        sections.append({"label": None, "type": "raw", "items": [_OUTBOUND_CONFIRM_HINT]})
     return sections
 
 
@@ -391,10 +425,20 @@ def _outbound_request_result_sections_builder(context: dict, db: DBSession) -> l
     made it into the reply). Mirrors _completion_result_sections_builder's
     identical pdf_url raw-section pattern.
     """
-    pdf_url = context.get("result", {}).get("pdf_url")
+    result = context.get("result", {})
+    pdf_url = result.get("pdf_url")
     if not pdf_url:
+        if result.get("pdf_status") == "failed":
+            # The PDF step skipped or failed (e.g. the origin warehouse has no
+            # usable company_warehouse row). The request itself succeeded, so
+            # say plainly that the delivery order is missing instead of
+            # leaving staff to notice an absent file.
+            return [{"label": None, "type": "raw", "items": [DELIVERY_ORDER_FAILED_NOTICE]}]
         return []
     return [{"label": None, "type": "raw", "items": [f"[下载送货单]({pdf_url})（1小时内有效）"]}]
+
+
+DELIVERY_ORDER_FAILED_NOTICE = "⚠️ 送货单未能生成，申请本身已提交。请联系管理员处理，勿重复提交。"
 
 
 def _warehouse_storage_summary_sections(db: DBSession, warehouse_code: str | None, label_prefix: str) -> list[dict]:
@@ -420,11 +464,11 @@ def _warehouse_storage_summary_sections(db: DBSession, warehouse_code: str | Non
     )
     rows = [{"sku_code": r.sku_code, "boxes_per_pallet": r.boxes_per_pallet, "pallet_count": r.pallet_count} for r in orm_rows]
     sku_labels = sku_label_map(db)
-    if not rows:
+    if not rows and not _schedule_notes(db, warehouse_code):
         return [{"label": f"{warehouse_code} {label_prefix}", "type": "list", "items": ["（无库存记录）"]}]
     warehouse_total = sum(r["pallet_count"] for r in rows)
     sections = [{"label": f"{warehouse_code} {label_prefix}（共 {warehouse_total} 托）", "type": "list", "items": []}]
-    sections += _sku_bucket_sections(rows, sku_labels)
+    sections += _sku_bucket_sections(rows, sku_labels, _schedule_notes(db, warehouse_code))
     return sections
 
 
@@ -570,7 +614,7 @@ def _move_result_sections_builder(context: dict, db: DBSession) -> list[dict]:
 
 def _address_result_sections_builder(context: dict, db: DBSession) -> list[dict]:
     """
-    upsert_address — no storage involved, shows the actual address details
+    add_address — no storage involved, shows the actual address details
     (from collected_fields, since context["result"] only carries the
     internal address_id + mode) rather than a raw UUID.
     """
@@ -587,6 +631,20 @@ def _address_result_sections_builder(context: dict, db: DBSession) -> list[dict]
     if fields.get("note"):
         items["备注"] = fields["note"]
     return [{"label": None, "type": "kv", "items": items}]
+
+
+def _update_address_result_sections_builder(context: dict, db: DBSession) -> list[dict]:
+    """update_address -- the changes actually applied (from the handler's result), old -> new."""
+    from core import address_update
+    from core.confirmation import charge_type_label
+
+    items = {}
+    for field, pair in (context.get("result", {}).get("changes") or {}).items():
+        old, new = pair
+        if field == "charge_type":
+            old, new = (charge_type_label(old) if old else None), (charge_type_label(new) if new else None)
+        items[address_update.FIELD_LABELS.get(field, field)] = address_update.render_change(old, new)
+    return [{"label": None, "type": "kv", "items": items or {"（无）": "没有修改"}}]
 
 
 def _role_change_result_sections_builder(context: dict, db: DBSession) -> list[dict]:
@@ -661,7 +719,8 @@ RESULT_BUILDERS: dict[str, Callable[[dict, DBSession], list[dict]]] = {
     "adjust_storage":              _adjust_result_sections_builder,
     "recount_storage":             _recount_result_sections_builder,
     "move_storage":                _move_result_sections_builder,
-    "upsert_address":              _address_result_sections_builder,
+    "add_address":              _address_result_sections_builder,
+    "update_address":           _update_address_result_sections_builder,
     "role_change":                 _role_change_result_sections_builder,
     "explain_service":             _explain_service_sections_builder,
 }

@@ -263,6 +263,6 @@ def test_confirm_executes_a_consistent_pickup(monkeypatch, db):
 
 
 def test_confirm_still_executes_a_grandfathered_retention_request(monkeypatch, db):
-    collected = {"warehouse_code": "JFK", "destination_address_id": str(JFK_RET)}       # predates V42: no marker
+    collected = {"warehouse_code": "JFK", "destination_address_id": str(JFK_RET)}       # predates V46: no marker
     _, _, finished = _confirm(monkeypatch, db, collected)
     assert finished == [1]

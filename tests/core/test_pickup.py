@@ -155,7 +155,7 @@ def test_sanitizer_is_applied_through_the_shared_entry_point(db):
         "uchoice_outbound_request", {"destination_address_id": str(GENERAL), "pickup_type": "customer"}, db)
     assert out == {"pickup_type": "customer"}
     # other services are untouched
-    other = sanitize_extracted_fields_before_persistence("upsert_address", {"pickup_type": "customer"}, db)
+    other = sanitize_extracted_fields_before_persistence("add_address", {"pickup_type": "customer"}, db)
     assert other == {"pickup_type": "customer"}
 
 
@@ -393,35 +393,43 @@ def test_the_combination_check_is_part_of_the_outbound_validator_chain():
     assert "_valid_pickup_combination" in chain
 
 
-# ── the pickup rows are system-managed (upsert_address) ───────────────────────
+# ── the pickup rows are system-managed (update_address) ───────────────────────
 
 @pytest.mark.parametrize("row", [GENERAL, JFK_RET, LEGACY])
-def test_upsert_address_cannot_update_a_pickup_row(db, row):
+def test_update_address_cannot_target_a_pickup_row(db, row):
     from core import pre_confirm_validators as pcv
-    error = pcv._valid_upsert_address_not_pickup_row({}, {"matched_address_id": str(row)}, db)
+    error = pcv._valid_update_address_not_pickup_row({}, {"matched_address_id": str(row)}, db)
     assert error == pcv.PICKUP_ROW_NOT_EDITABLE_MESSAGE
 
 
-def test_upsert_address_can_still_update_an_ordinary_address_and_create_new_ones(db):
+def test_update_address_can_still_target_an_ordinary_address(db):
     from core import pre_confirm_validators as pcv
-    assert pcv._valid_upsert_address_not_pickup_row({}, {"matched_address_id": str(PLAIN)}, db) is None
-    assert pcv._valid_upsert_address_not_pickup_row({}, {"company_name": "New Co"}, db) is None
+    assert pcv._valid_update_address_not_pickup_row({}, {"matched_address_id": str(PLAIN)}, db) is None
+    assert pcv._valid_update_address_not_pickup_row({}, {}, db) is None
 
 
-def test_the_upsert_address_chain_includes_the_pickup_guard():
+def test_the_update_address_chain_runs_the_pickup_guard_first():
     import inspect
     from core import pre_confirm_validators as pcv
-    chain = inspect.getsource(pcv).split('"upsert_address": _compose(', 1)[1].split("),", 1)[0]
-    assert "_valid_upsert_address_not_pickup_row" in chain
+    chain = inspect.getsource(pcv).split('"update_address": _compose(', 1)[1].split("),", 1)[0]
+    assert chain.index("_valid_update_address_not_pickup_row") < chain.index("_valid_update_address_target_and_changes")
 
 
-def test_the_upsert_handler_refuses_a_pickup_row_at_execution_time(db):
-    from handlers.uchoice.address import UpsertAddressHandler
+def test_the_update_handler_refuses_a_pickup_row_at_execution_time(db):
+    from core.workflow_errors import AddressOperationRejected
+    from handlers.uchoice.address import UpdateAddressHandler
     # (a UUID object, not a string: SQLite's UUID type needs one; PostgreSQL accepts either)
     context = {"collected_fields": {"matched_address_id": GENERAL, "company_name": "Hijacked"}, "role": "admin"}
-    with pytest.raises(RuntimeError, match="系统自提地址"):
-        UpsertAddressHandler().handle(context, {}, db)
+    with pytest.raises(AddressOperationRejected, match="系统自提地址"):
+        UpdateAddressHandler().handle(context, {}, db)
     assert db.query(UchoiceAddress).filter(UchoiceAddress.address_id == GENERAL).one().company_name == "客户自提"
+
+
+def test_add_address_is_create_only_so_it_cannot_overwrite_a_pickup_row(db):
+    """add_address (main's create-only handler) never loads an existing row by id."""
+    import inspect
+    from handlers.uchoice.address import AddAddressHandler
+    assert "matched_id" not in inspect.getsource(AddAddressHandler)
 
 
 # ── candidate list ────────────────────────────────────────────────────────────
@@ -431,7 +439,7 @@ def test_outbound_candidates_exclude_every_pickup_row(db):
     assert ids == {str(PLAIN)}
 
 
-def test_upsert_address_candidates_keep_the_full_book(db):
+def test_add_address_candidates_keep_the_full_book(db):
     ids = {c["address_id"] for c in address_candidates(db)}
     assert {str(GENERAL), str(JFK_RET), str(LEGACY), str(PLAIN)} <= ids
 

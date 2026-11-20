@@ -33,7 +33,7 @@ def send_message(context: dict, content: str) -> None:
 from handlers.registry import HANDLER_REGISTRY
 from models.workflow import WorkflowStep
 from models.service import ServiceType
-from core.workflow_errors import TargetOperationRejected, LabelCreationRejected
+from core.workflow_errors import TargetOperationRejected, LabelCreationRejected, AddressOperationRejected
 from core.uchoice_constants import VALID_WAREHOUSE_CODES
 
 
@@ -115,7 +115,7 @@ def _maybe_pivot_to_add_address(context: dict, ai_response: AIResponse, db: DBSe
     an address can be added, silently abandon the in-progress outbound
     session (closing its own request_log too, since uchoice_outbound_request
     isn't targets_existing_request and owns one) and open a fresh
-    upsert_address session pre-seeded with the AI's best-effort company_name/
+    add_address session pre-seeded with the AI's best-effort company_name/
     addr guess from the same message. Nothing about the abandoned outbound
     request survives this — the customer has to resubmit it once the address
     exists (accepted tradeoff, see docs/uchoice-design.md).
@@ -146,7 +146,7 @@ def _maybe_pivot_to_add_address(context: dict, ai_response: AIResponse, db: DBSe
     ) in (_pickup.TYPE_CUSTOMER, _pickup.TYPE_RETENTION, "ask"):
         return False
 
-    add_address_service = _find_service(context, "upsert_address")
+    add_address_service = _find_service(context, "add_address")
     if add_address_service is None:
         # this role can't add addresses — fall through to normal processing;
         # destination_address_id was never set per the prompt rule, so the
@@ -301,11 +301,11 @@ def pending_value_check_reply(context: dict, db: DBSession) -> str | None:
 
 
 def _apply_address_suggestion(db: DBSession, service: dict | None, session, previous: dict, extracted, ai_response) -> None:
-    """upsert_address: suggested charge type from the AI's drive-time
+    """add_address: suggested charge type from the AI's drive-time
     estimate; a stated charge type always wins (core/address_suggestion.py).
     May drop charge_type, so it replaces collected_fields rather than
     merging like update_collected_fields."""
-    if service is None or service["name"] != "upsert_address":
+    if service is None or service["name"] != "add_address":
         return
     from core.address_suggestion import apply_address_turn
     updated = apply_address_turn(
@@ -731,6 +731,14 @@ def _on_all_fields_collected(
         session_manager.update_collected_fields(db, session, {"warehouse_codes": resolved["warehouse_codes"]})
         context["collected_fields"] = session.collected_fields
 
+    if service["name"] == "update_address":
+        # Freeze the values the user will be shown (see core/address_update.py).
+        from core import address_update
+        patch = address_update.baseline_patch(db, session.collected_fields or {})
+        if patch:
+            session_manager.update_collected_fields(db, session, patch)
+            context["collected_fields"] = session.collected_fields
+
     error = pre_confirm_validators.run(service["name"], context, session.collected_fields, db)
     if error:
         send_message(context, error)
@@ -913,6 +921,19 @@ def _resolve_outbound_pallet_defaults(context: dict, session, db: DBSession) -> 
     return None
 
 
+def _shortage_lines(sku_labels: dict[str, str], shortages: list, skip: set | None = None) -> list[str]:
+    from core.outbound_reservation import shortage_text
+
+    return [shortage_text(sku_labels.get(s.sku_code, s.sku_code), s) for s in shortages if s.sku_code not in (skip or ())]
+
+
+def _outbound_shortage_message(db: DBSession, warehouse_code: str | None, shortages: list) -> str:
+    from core.uchoice_context import sku_label_map
+
+    lines_text = "；".join(_shortage_lines(sku_label_map(db), shortages))
+    return f"申请已取消：{warehouse_code} 仓库没有足够库存可满足此次出库——{lines_text}。请核实商品规格或数量后重新提交。"
+
+
 def _reject_invalid_outbound_stock(context: dict, session, db: DBSession) -> bool:
     """
     A palletized outbound line's boxes_per_pallet — whether stated by the
@@ -973,13 +994,22 @@ def _reject_invalid_outbound_stock(context: dict, session, db: DBSession) -> boo
         if available < pallet_count:
             problems.append((line.get("sku_code"), bpp, available, pallet_count))
 
-    if not problems:
+    # The bucket check above only covers palletized lines against physical
+    # buckets. Every line, loose or palletized, must also fit within the
+    # SKU's available boxes (physical minus confirmed, uncompleted outbounds).
+    from core.outbound_reservation import stock_shortages
+    shortages = stock_shortages(db, fields, session.request_log_id)
+
+    if not problems and not shortages:
         return False
 
     sku_labels = sku_label_map(db)
     lines_text = "；".join(
-        f"{sku_labels.get(sku, sku)}@{bpp}/托 现有 {available} 托，申请 {requested} 托"
-        for sku, bpp, available, requested in problems
+        [
+            f"{sku_labels.get(sku, sku)}@{bpp}/托 现有 {available} 托，申请 {requested} 托"
+            for sku, bpp, available, requested in problems
+        ]
+        + _shortage_lines(sku_labels, shortages, skip={sku for sku, *_ in problems})
     )
     message = f"申请已取消：{warehouse_code} 仓库没有足够库存可满足此次出库——{lines_text}。请核实商品规格或数量后重新提交。"
 
@@ -1258,12 +1288,30 @@ def _execute_workflow_and_finish(context: dict, session, db: DBSession) -> None:
     targets_existing_request = bool(
         service_for_split_check.get("targets_existing_request", False)
     ) if service_for_split_check else False
+    if (
+        service_name_for_split_check == "uchoice_outbound_request"
+        and session.request_log_id
+        and not targets_existing_request
+    ):
+        # Reservations only count once a log is 'processing', and stock was
+        # last checked while collecting fields: re-check under the storage
+        # lock. mark_processing's commit below is what releases that lock,
+        # so a concurrent confirm of the same SKU sees this reservation.
+        from core.outbound_reservation import locked_stock_shortages
+
+        shortages = locked_stock_shortages(db, session.collected_fields or {}, session.request_log_id)
+        if shortages:
+            warehouse_code = (session.collected_fields or {}).get("warehouse_code")
+            request_logger.mark_cancelled(db, session.request_log_id)
+            session_manager.close_session(db, session, status="cancelled")
+            send_message(context, _outbound_shortage_message(db, warehouse_code, shortages))
+            return
     if session.request_log_id and not targets_existing_request:
         request_logger.mark_processing(db, session.request_log_id)
 
     # The atomic transaction split applies only to explicitly named U-Choice
     # services. Every other
-    # service -- FedEx, UPS, OMS, upsert_address, anything else -- runs
+    # service -- FedEx, UPS, OMS, add_address, anything else -- runs
     # through the single-phase path. Use an explicit service-name allowlist,
     # not
     # step-type inference: the first version of this fix inferred
@@ -1310,6 +1358,11 @@ def _execute_workflow_and_finish(context: dict, session, db: DBSession) -> None:
             db.commit()
         except TargetOperationRejected as e:
             _close_as_target_rejected(context, session, db, e)
+        except AddressOperationRejected as e:
+            db.rollback()
+            request_logger.mark_failed(db, session.request_log_id, error_detail=e.user_message)
+            session_manager.close_session(db, session, status="cancelled")
+            send_message(context, e.user_message)
         except LabelCreationRejected as e:
             # Carrier rejected the shipment for a business reason (bad
             # phone, bad address, etc.) -- create_label is always this
@@ -1349,6 +1402,12 @@ def _execute_workflow_and_finish(context: dict, session, db: DBSession) -> None:
 
     except TargetOperationRejected as e:
         _close_as_target_rejected(context, session, db, e)
+        return
+    except AddressOperationRejected as e:
+        db.rollback()
+        request_logger.mark_failed(db, session.request_log_id, error_detail=e.user_message)
+        session_manager.close_session(db, session, status="cancelled")
+        send_message(context, e.user_message)
         return
     except Exception as e:
         import traceback

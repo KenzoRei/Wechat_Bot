@@ -294,11 +294,15 @@ class StockShortage:
     sku_label: str
     requested_boxes: int
     available_boxes: int
+    # Boxes physically in stock but held by other confirmed, uncompleted
+    # outbound requests; available_boxes is already net of them.
+    held_boxes: int = 0
 
     def __post_init__(self):
         _require(self.sku_label, "sku_label must be non-empty")
         _require(self.requested_boxes > 0, "requested_boxes must be positive")
         _require(self.available_boxes >= 0, "available_boxes must not be negative")
+        _require(self.held_boxes >= 0, "held_boxes must not be negative")
         _require(self.available_boxes < self.requested_boxes, "a shortage must actually be short")
 
 

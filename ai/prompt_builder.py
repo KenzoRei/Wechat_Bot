@@ -9,6 +9,33 @@ from ai.base import AddressMatch, AIResponse, SemanticIssue
 _WEEKDAY_CN = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
 
 
+def _address_book_instructions(is_kefu: bool = False) -> str:
+    """update_address: how to pick the address being edited from `address_book`."""
+    if is_kefu:
+        target_rule = (
+            "- address_book：地址簿（更新地址专用）。用户要修改已有地址时，把用户描述（公司名、地址片段、联系人等）与此列表语义匹配。"
+            "【重要】不要在 extracted_fields 里写 matched_address_id——改为在顶层字段 address_match 中返回结构化证据，状态之一：\n"
+            "  · 尚未说明要改哪个地址：{{\"status\": \"not_provided\", \"candidate_ids\": []}}\n"
+            "  · 明确匹配唯一一项：{{\"status\": \"matched\", \"candidate_ids\": [\"<该项真实的 address_id>\"]}}\n"
+            "  · 可能匹配多项（歧义）：{{\"status\": \"ambiguous\", \"candidate_ids\": [\"<候选1>\", \"<候选2>\", ...]}}（至少两项）\n"
+            "  · 此列表中没有任何一项匹配：{{\"status\": \"unmatched\", \"candidate_ids\": []}}（不要走新增流程）\n"
+            "  candidate_ids 只能填 address_book 中真实存在的 address_id，绝不能编造。reply 由系统生成，不要在其中罗列候选或下结论。\n"
+        )
+    else:
+        target_rule = (
+            "- address_book：地址簿（更新地址专用）。用户要修改已有地址时，把用户描述（公司名、地址片段、联系人等）与此列表语义匹配，"
+            "只在 extracted_fields 中填 matched_address_id（必须是此列表中真实存在的 address_id，绝不能编造或把公司名/地址原文当作ID）。\n"
+            "  · 匹配到多项或没有任何一项匹配时，不要猜测、不要设置 matched_address_id，在 reply 中列出候选（公司名+地址）请用户指明是哪一个。\n"
+        )
+    return (
+        target_rule +
+        "  · 其余字段只填用户明确要求修改的（company_name、addr、contact、phone、note）；没提到的字段不要填。"
+        "用户明确要求清空某个可选字段（company_name、contact、phone、note）时填空字符串 \"\"。地址 addr 不能清空。\n"
+        "  · charge_type（计费类型）和 warehouse_code（所属仓库）只有用户明确要求修改时才填；这两项仅管理员可改，不要主动建议修改。\n"
+        "  · 这是修改，不是新增：用户要加一条全新的地址时不属于此服务。\n"
+    )
+
+
 def _address_matching_instructions(is_kefu: bool) -> str:
     """
     Kefu uses a structured-only
@@ -35,7 +62,10 @@ def _address_matching_instructions(is_kefu: bool) -> str:
             "\"<候选2的address_id>\", ...]}}（至少两项）\n"
             "  · 客户已明确说出目的地，但列表中没有任何一项匹配：{{\"status\": \"unmatched\", \"new_address\": "
             "{{\"company_name\": \"<尽力提取，提取不到则省略此键>\", \"addr\": \"<地址，按下方地址整理规则处理，"
-            "要素不全就只填齐全的部分，不要瞎猜补全，提取不到则省略此键>\"}}}}\n"
+            "要素不全就只填齐全的部分，不要瞎猜补全，提取不到则省略此键>\", "
+            "\"contact\": \"<收货联系人姓名，仅当客户明确提供时填写，否则省略此键>\", "
+            "\"phone\": \"<收货联系电话，仅当客户明确提供时填写，否则省略此键>\"}}}}。"
+            "联系人姓名和电话不要混入 addr，应分别填入 contact 和 phone\n"
             "  【重要】candidate_ids 只能填此列表中真实存在的 address_id（UUID），绝不能编造，也不能把公司名/地址"
             "原文当作 ID 使用。\n"
             "  【重要】reply 字段不得对地址匹配结果、是否触发新增地址流程、原申请是否被取消等系统状态做任何论断——"
@@ -51,8 +81,11 @@ def _address_matching_instructions(is_kefu: bool) -> str:
         "destination_address_id 直接填入——如果此列表中没有任何一项能匹配客户描述的目的地（注意：客户压根还没提到目的地，属于正常的"
         "缺失字段等待，不算这种情况；这里特指客户已经明确说了一个目的地，但列表里找不到对应项），不要设置 all_fields_collected=true，"
         "也不要在 extracted_fields 里填 destination_address_id。此时改为在顶层字段 unmatched_new_address 中尽力提取一个"
-        "{{\"company_name\": \"<公司名，提取不到则省略此键>\", \"addr\": \"<地址，按上面 upsert_address 的地址整理规则处理，"
-        "要素不全就只填齐全的部分，不要瞎猜补全，提取不到则省略此键>\"}}，供系统据此转为新增地址流程使用。"
+        "{{\"company_name\": \"<公司名，提取不到则省略此键>\", \"addr\": \"<地址，按上面 add_address 的地址整理规则处理，"
+        "要素不全就只填齐全的部分，不要瞎猜补全，提取不到则省略此键>\", "
+        "\"contact\": \"<收货联系人姓名，仅当客户明确提供时填写，否则省略此键>\", "
+        "\"phone\": \"<收货联系电话，仅当客户明确提供时填写，否则省略此键>\"}}，供系统据此转为新增地址流程使用。"
+        "联系人姓名和电话不要混入 addr，应分别填入 contact 和 phone。"
         "同时 reply 中必须说明：这是一个新地址、尚未收录，系统已将其转为新增地址流程，原出库申请已自动取消，"
         "还需要补充计费类型（若已在 unmatched_new_address 中给出 estimated_drive_minutes 或 charge_type 则不要再问）"
         "以及所属仓库（如果无法判断）后才能完成新增，新增完成后请重新提交出库申请。\n"
@@ -110,17 +143,17 @@ def _drive_time_instructions(is_kefu: bool) -> str:
     )
     return (
         "- origin_warehouses：我们自己仓库（出发地）的地址，用于估算车程。\n"
-        "  · 新增地址时（upsert_address 会话，或出库目的地未收录、转为新增地址时），若收件地址要素齐全"
+        "  · 新增地址时（add_address 会话，或出库目的地未收录、转为新增地址时），若收件地址要素齐全"
         "（门牌号+街道、城市、州、邮编）且已知所属仓库，估算从该仓库到收件地址的驾车时间：取整数分钟，按普通白天路况，"
         "填入顶层字段 estimated_drive_minutes（出库转新增地址的那一轮，改为填入 "
         f"{handoff_key} 的 estimated_drive_minutes 键）。地址不全或无法判断时省略，不要瞎猜。\n"
         "  · 【重要】只给分钟数，绝不能自己给出或推断计费类型——计费类型由系统根据分钟数决定。"
         f"只有当用户自己明确说出计费类型（短途配送/配送/卡车转仓/自提）时，才填 charge_type（出库转新增地址的那一轮填入 {handoff_key} "
         "的 charge_type 键，取值 short_delivery / delivery / truck_transfer / self_pickup），不能根据车程自行填写。"
-        "upsert_address 会话中，用户在本条消息里明确说出计费类型时，除在 extracted_fields 填 charge_type 外，"
+        "add_address 会话中，用户在本条消息里明确说出计费类型时，除在 extracted_fields 填 charge_type 外，"
         "还必须把顶层字段 charge_type_stated 设为 true（即使与当前已收集的计费类型相同）；"
         "仅仅沿用已收集的计费类型时保持 false。\n"
-        "  · 【重要】只要本条消息给出或修改了收件地址（upsert_address 会话，或出库转新增地址的那一轮），"
+        "  · 【重要】只要本条消息给出或修改了收件地址（add_address 会话，或出库转新增地址的那一轮），"
         "就把你对该地址的理解拆成各部分，填入顶层字段 addr_parts（出库转新增地址的那一轮填入 "
         f"{handoff_key} 的 addr_parts 键）："
         "{\"street\": \"门牌号+街道，如 182-08 149th Avenue\", \"unit\": \"单元/套房，没有则省略\", "
@@ -218,12 +251,12 @@ def build_system_prompt(context: dict) -> str:
     )
 
     # Only relevant to callers who can actually reach a service involving
-    # charge_type (upsert_address sets it directly; outbound requests resolve
+    # charge_type (add_address sets it directly; outbound requests resolve
     # it via the matched destination address) — no point showing fee
     # explanations to a caller who can never encounter the concept.
     service_names = {s["name"] for s in context.get("allowed_services", [])}
     charge_type_block = ""
-    if service_names & {"upsert_address", "uchoice_outbound_request"}:
+    if service_names & {"add_address", "uchoice_outbound_request"}:
         from core.uchoice_rates import CHARGE_TYPE_DESCRIPTIONS
         charge_type_lines = "\n".join(f"- {desc}" for desc in CHARGE_TYPE_DESCRIPTIONS.values())
         charge_type_block = (
@@ -269,6 +302,7 @@ def build_system_prompt(context: dict) -> str:
         "这会导致用户被同一个澄清问题无限循环追问。\n"
         f"{_address_matching_instructions(is_kefu)}"
         f"{_pickup_instructions(service_names)}"
+        f"{_address_book_instructions(is_kefu) if uchoice_candidates.get('address_book') is not None else ''}"
         f"{_drive_time_instructions(is_kefu) if uchoice_candidates.get('origin_warehouses') else ''}"
         "- pending_inbound_requests / pending_outbound_requests：当前所有待处理的入库/出库申请候选列表。\n"
         "  · 0 条：告知用户当前没有待处理的申请，不要设置 all_fields_collected=true。\n"
@@ -458,7 +492,7 @@ def build_system_prompt(context: dict) -> str:
 - 【重要】check_services 仅适用于用户明确、泛泛地询问"有什么服务"、"能做什么"、"服务列表"等——不确定该选哪个服务时的兜底，不是默认选项。如果用户的消息（哪怕只是一个简短的关键词，如"库存"、"入库"、"查一下地址"）在语义上明显对应某一具体服务的 name 或 description，必须优先判定为 new_request 并将 service_type_name 设为该服务，而不是退回 check_services。只有在消息真的无法关联到任何具体服务时，才使用 check_services 或 unrecognized。
 - 【重要】用户经常用陈述事实的口吻而非明确指令来触发确认类服务（confirm_inbound_completion / confirm_outbound_completion），例如"货已经送到了""东西送过去了""收到货了""货到仓库了"——这些不是在闲聊，而是在报告一个已完成的物流动作，必须按语义匹配到对应服务的 new_request，不能因为没有"确认"这类明确指令词就归为 unrecognized 或 check_services。判断方向：陈述"送出去/送到目的地"→ confirm_outbound_completion；陈述"收到/到仓库了"→ confirm_inbound_completion。\n"
   示例：用户说"货已经送到了"（无关键词"确认"，纯陈述） → 正确输出：intent=new_request，service_type_name="confirm_outbound_completion"（陈述的是送达，即出库完成）。错误输出（禁止）：intent=unrecognized 或 check_services——这类陈述句和"确认出库"表达的是同一个意图，只是措辞更口语化。
-- 【重要】收集 upsert_address 的 addr 字段时，必须检查用户提供的内容是否至少包含一个真实地址应有的基本要素（门牌号+街道名、城市、州、邮编），并整理成规范格式（如"123 Main St, City, ST 12345"，逗号分隔、州用两位缩写、邮编独立成段）。如果用户原话缺少这些要素中的关键部分（如只给了街道没给城市/州/邮编），不要直接照抄或瞎猜补全，必须在 reply 中指出缺了什么并请用户补充；如果用户原话包含全部要素但格式凌乱（如缺逗号、大小写混乱、单位缩写不一致），可以直接整理规范后填入 extracted_fields，不需要用户重新提供。
+- 【重要】收集 add_address 的 addr 字段时，必须检查用户提供的内容是否至少包含一个真实地址应有的基本要素（门牌号+街道名、城市、州、邮编），并整理成规范格式（如"123 Main St, City, ST 12345"，逗号分隔、州用两位缩写、邮编独立成段）。如果用户原话缺少这些要素中的关键部分（如只给了街道没给城市/州/邮编），不要直接照抄或瞎猜补全，必须在 reply 中指出缺了什么并请用户补充；如果用户原话包含全部要素但格式凌乱（如缺逗号、大小写混乱、单位缩写不一致），可以直接整理规范后填入 extracted_fields，不需要用户重新提供。
   示例：用户说"201 Gabor drive Newark De19711" → 要素齐全（门牌+街道、城市、州、邮编），只是格式凌乱 → 正确输出：extracted_fields 中 addr 填"201 Gabor Dr, Newark, DE 19711"。
   示例：用户说"发到Newark那个仓库" → 缺门牌号和街道名，只有城市 → 正确输出：all_fields_collected 不设为 true（addr 未满足），reply 询问具体门牌号和街道名。
 - 【重要】每个服务的 keywords 只是辅助判断的参考信号，不是100%确定的匹配依据，实际判断仍要结合上下文语义。如果用户明确表示某个判断不对（如"不是这个""你搞错了""我不是要这个服务""我说的不是XX"），必须立即采纳用户的说法并重新判断当前到底是哪个服务或哪个意图，不能因为消息中命中了某个 keyword 就固执坚持最初的判断，也不能反复用同一个理由说服用户接受你先前的判断。
@@ -467,7 +501,7 @@ def build_system_prompt(context: dict) -> str:
 群组知识库中的 location_presets 包含预设地址。当用户提到别名（如”LAX”、”DE”）时：
 1. 判断该地点是发件地还是收件地（根据”从X寄到Y”等表达）
 2. 将预设字段映射到对应的 shipper_* 或 recipient_* 字段：
-   - corp_name → shipper_corp_name 或 recipient_corp_name
+   - corp_name → shipper_corp_name 或 recipient_corp_name（寄件公司为可选项：客户没提公司名时不要追问，也不要自行编造，留空即可，出单时系统会自动用寄件人姓名作为寄件公司）
    - name      → shipper_name      或 recipient_name
    - phone     → shipper_phone     或 recipient_phone
    - street    → shipper_street    或 recipient_street

@@ -26,13 +26,31 @@ def test_outbound_request_reply_includes_pdf_link_when_present():
     assert "下载送货单" in sections[0]["items"][0]
 
 
-def test_outbound_request_reply_has_no_sections_when_pdf_missing():
-    """pdf_status='pending'/'failed' (generate_pdf_stub's own best-effort
-    fallback) must not surface a broken/empty link -- same as before this
-    fix, just no longer silently correct by coincidence."""
+def test_outbound_request_reply_has_no_sections_when_pdf_not_attempted():
+    """No pdf_url and no failure recorded (e.g. 'pending'): nothing is shown, and
+    never a broken/empty link."""
     builder = RESULT_BUILDERS["uchoice_outbound_request"]
-    context = {"result": {"pdf_status": "failed", "pdf_url": None}}
 
-    assert builder(context, db=None) == []
+    assert builder({"result": {"pdf_status": "pending", "pdf_url": None}}, db=None) == []
     assert builder({"result": {}}, db=None) == []
     assert builder({}, db=None) == []
+
+
+def test_outbound_request_reply_says_so_when_the_pdf_failed():
+    """The request succeeded but its delivery order was skipped/failed: the reply
+    must say so (previously silent), without a link and without telling staff to
+    resubmit."""
+    from core.result_message import DELIVERY_ORDER_FAILED_NOTICE
+
+    builder = RESULT_BUILDERS["uchoice_outbound_request"]
+    sections = builder({"result": {"pdf_status": "failed", "pdf_url": None}}, db=None)
+
+    assert sections == [{"label": None, "type": "raw", "items": [DELIVERY_ORDER_FAILED_NOTICE]}]
+    assert "送货单未能生成" in DELIVERY_ORDER_FAILED_NOTICE and "勿重复提交" in DELIVERY_ORDER_FAILED_NOTICE
+    assert "http" not in DELIVERY_ORDER_FAILED_NOTICE
+
+
+def test_kefu_marks_the_pdf_failed_when_the_artifact_is_skipped():
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parents[2] / "core" / "kefu_turn_apply.py").read_text(encoding="utf-8")
+    assert 'context["result"]["pdf_status"] = "failed"' in src

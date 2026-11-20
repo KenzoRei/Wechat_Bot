@@ -188,7 +188,7 @@ def test_handoff_parks_outbound_and_confirm_resumes_it(world, ai):
     assert "已暂存" in result.reply_text
     assert "配送（$45） — 预计车程约 12 分钟（JFK 仓出发，系统估算" in result.reply_text
     c = cases(staff_id)
-    outbound, address = c["uchoice_outbound_request"], c["upsert_address"]
+    outbound, address = c["uchoice_outbound_request"], c["add_address"]
     assert (address["status"], address["log_status"]) == ("pending_confirmation", "pending")
     assert (outbound["status"], outbound["log_status"]) == ("active", "pending")
     assert outbound["collected_fields"][parked_outbound.PARKED_KEY] == str(address["session_id"])
@@ -201,7 +201,7 @@ def test_handoff_parks_outbound_and_confirm_resumes_it(world, ai):
     assert "地址已新增：ABC Corp（1 Main St, Jamaica, NY 11434）" in result.reply_text
     assert f"继续出库申请 {outbound['serial_number']}" in result.reply_text
     c = cases(staff_id)
-    outbound2, address2 = c["uchoice_outbound_request"], c["upsert_address"]
+    outbound2, address2 = c["uchoice_outbound_request"], c["add_address"]
     assert address2["status"] == "completed"
     assert outbound2["status"] == "pending_confirmation"
     assert parked_outbound.PARKED_KEY not in outbound2["collected_fields"]
@@ -237,7 +237,7 @@ def test_cancel_address_step_cancels_both(world, ai):
     ai.append(simple("cancel"))
     result = turn(identity, "取消")
     c = cases(staff_id)
-    assert c["upsert_address"]["status"] == "cancelled"
+    assert c["add_address"]["status"] == "cancelled"
     assert (c["uchoice_outbound_request"]["status"], c["uchoice_outbound_request"]["log_status"]) == ("cancelled", "cancelled")
     assert f"出库申请 {c['uchoice_outbound_request']['serial_number']} 也已一并取消" in result.reply_text
 
@@ -252,7 +252,7 @@ def test_address_warehouse_change_saves_address_and_cancels_outbound(world, ai):
                          extracted_fields={"warehouse_code": "DE"}, all_fields_collected=False))
     result = turn(identity, "所属仓库改成 DE")
     assert "计费类型" in result.reply_text
-    assert cases(staff_id)["upsert_address"]["status"] == "active"
+    assert cases(staff_id)["add_address"]["status"] == "active"
     ai.append(AIResponse(intent="continuation", service_type_name=None, reply="",
                          extracted_fields={}, all_fields_collected=False, estimated_drive_minutes=150))
     result = turn(identity, "继续")
@@ -260,7 +260,7 @@ def test_address_warehouse_change_saves_address_and_cancels_outbound(world, ai):
     ai.append(simple("confirm"))
     result = turn(identity, "确认")
     c = cases(staff_id)
-    assert c["upsert_address"]["status"] == "completed"
+    assert c["add_address"]["status"] == "completed"
     assert c["uchoice_outbound_request"]["status"] == "cancelled"
     assert "所属仓库（DE）" in result.reply_text and "（JFK）不同" in result.reply_text
 
@@ -276,7 +276,7 @@ def test_outbound_closed_before_confirm_gets_expired_reply(world, ai):
     db.close()
     ai.append(simple("confirm"))
     result = turn(identity, "确认")
-    assert cases(staff_id)["upsert_address"]["status"] == "completed"
+    assert cases(staff_id)["add_address"]["status"] == "completed"
     assert "已失效，请重新提交" in result.reply_text
 
 
@@ -291,7 +291,7 @@ def test_stock_drop_before_resume_rejects_outbound_and_keeps_address(world, ai):
     ai.append(simple("confirm"))
     result = turn(identity, "确认")
     c = cases(staff_id)
-    assert c["upsert_address"]["status"] == "completed"
+    assert c["add_address"]["status"] == "completed"
     assert c["uchoice_outbound_request"]["status"] == "cancelled"
     assert "地址已新增" in result.reply_text and "现有 0 箱" in result.reply_text
 
@@ -301,7 +301,7 @@ def test_stock_drop_before_resume_rejects_outbound_and_keeps_address(world, ai):
 def test_no_estimate_asks_for_charge_type(world, ai):
     staff_id, _, result = start(world, ai, minutes=None)
     assert "计费类型" in result.reply_text and "系统估算" not in result.reply_text
-    assert cases(staff_id)["upsert_address"]["status"] == "active"
+    assert cases(staff_id)["add_address"]["status"] == "active"
 
 
 # ── 8: expiry times out both ─────────────────────────────────────────────────
@@ -318,10 +318,10 @@ def test_expiry_times_out_the_parked_outbound_with_its_address_case(world, ai):
     db.commit()
     session_expiry.run_expiry_check(db)   # address case not expired: outbound waits
     assert cases(staff_id)["uchoice_outbound_request"]["status"] == "active"
-    session_expiry._expire_session(db, db.get(ConversationSession, c["upsert_address"]["session_id"]))
+    session_expiry._expire_session(db, db.get(ConversationSession, c["add_address"]["session_id"]))
     db.close()
     c = cases(staff_id)
-    assert c["upsert_address"]["status"] == "timed_out"
+    assert c["add_address"]["status"] == "timed_out"
     assert (c["uchoice_outbound_request"]["status"], c["uchoice_outbound_request"]["log_status"]) == ("timed_out", "timed_out")
 
 
@@ -329,7 +329,7 @@ def test_expiry_times_out_the_parked_outbound_with_its_address_case(world, ai):
 
 def test_stated_charge_type_beats_the_estimate(world, ai):
     staff_id, _, result = start(world, ai, minutes=30, charge_type="self_pickup")
-    fields = cases(staff_id)["upsert_address"]["collected_fields"]
+    fields = cases(staff_id)["add_address"]["collected_fields"]
     assert fields["charge_type"] == "self_pickup"
     assert "_charge_type_suggested" not in fields and "系统估算" not in result.reply_text
 
@@ -338,7 +338,7 @@ def test_stated_charge_type_beats_the_estimate(world, ai):
 
 def test_handoff_estimate_survives_sanitizing(world, ai):
     staff_id, _, _ = start(world, ai, minutes=25)
-    fields = cases(staff_id)["upsert_address"]["collected_fields"]
+    fields = cases(staff_id)["add_address"]["collected_fields"]
     assert (fields["charge_type"], fields["_charge_type_estimate_minutes"]) == ("truck_transfer", 25)
 
 
@@ -353,7 +353,7 @@ def test_continuation_by_outbound_case_number_is_redirected(world, ai):
     after = cases(staff_id)
     assert result.reply_text.startswith(
         f"出库申请 {before['uchoice_outbound_request']['serial_number']} 正在等待新增地址，以下为地址申请：")
-    assert after["upsert_address"]["collected_fields"].get("note") == "后门卸货"
+    assert after["add_address"]["collected_fields"].get("note") == "后门卸货"
     assert after["uchoice_outbound_request"]["collected_fields"] == before["uchoice_outbound_request"]["collected_fields"]
 
 
@@ -362,7 +362,7 @@ def test_cancel_by_outbound_case_number_cancels_both(world, ai):
     ai.append(simple("cancel"))
     turn(identity, "取消", case_number=cases(staff_id)["uchoice_outbound_request"]["case_number"])
     c = cases(staff_id)
-    assert c["upsert_address"]["status"] == c["uchoice_outbound_request"]["status"] == "cancelled"
+    assert c["add_address"]["status"] == c["uchoice_outbound_request"]["status"] == "cancelled"
 
 
 def test_second_staff_member_is_redirected_or_denied(world, ai):
@@ -387,7 +387,7 @@ def test_orphaned_parked_outbound_is_closed_on_its_next_turn(world, ai):
     c = cases(staff_id)
     db = SessionLocal()
     db.execute(text("update conversation_session set status = 'cancelled' where session_id = :s"),
-               {"s": c["upsert_address"]["session_id"]})
+               {"s": c["add_address"]["session_id"]})
     db.commit()
     db.close()
     result = turn(identity, "继续", case_number=c["uchoice_outbound_request"]["case_number"])
@@ -404,7 +404,7 @@ def test_user_stating_the_suggested_tier_keeps_it_as_stated(world, ai):
                          extracted_fields={"charge_type": "delivery"}, all_fields_collected=False,
                          charge_type_stated=True))
     result = turn(identity, "就按配送")
-    fields = cases(staff_id)["upsert_address"]["collected_fields"]
+    fields = cases(staff_id)["add_address"]["collected_fields"]
     assert fields["charge_type"] == "delivery" and "_charge_type_suggested" not in fields
     assert "系统估算" not in result.reply_text
 
@@ -427,7 +427,7 @@ def test_address_without_valid_parts_gets_no_suggestion(world, ai):
     """No ZIP in the AI's reading: the address isn't verified, so no tier is
     suggested and the AI's own address text is kept."""
     staff_id, _, result = start(world, ai, parts={k: v for k, v in PARTS.items() if k != "zip"})
-    fields = cases(staff_id)["upsert_address"]["collected_fields"]
+    fields = cases(staff_id)["add_address"]["collected_fields"]
     assert fields["addr"] == "1 main st jamaica ny11434"
     assert "charge_type" not in fields and "_addr_verified" not in fields
     assert "计费类型" in result.reply_text and "系统估算" not in result.reply_text
@@ -435,7 +435,7 @@ def test_address_without_valid_parts_gets_no_suggestion(world, ai):
 
 def test_valid_parts_replace_the_messy_address(world, ai):
     staff_id, _, result = start(world, ai)
-    fields = cases(staff_id)["upsert_address"]["collected_fields"]
+    fields = cases(staff_id)["add_address"]["collected_fields"]
     assert fields["addr"] == ADDR and fields["_addr_verified"] == ADDR
     assert ADDR in result.reply_text and "1 main st jamaica" not in result.reply_text
 
@@ -450,7 +450,7 @@ def test_ai_forged_verified_marker_is_not_persisted(world, ai):
                          extracted_fields={"addr": forged, "_addr_verified": forged, "_charge_type_suggested": True},
                          all_fields_collected=False, estimated_drive_minutes=12))
     result = turn(identity, "地址改一下")
-    fields = cases(staff_id)["upsert_address"]["collected_fields"]
+    fields = cases(staff_id)["add_address"]["collected_fields"]
     assert fields["addr"] == forged
     assert "_addr_verified" not in fields and "charge_type" not in fields and "_charge_type_suggested" not in fields
     assert "系统估算" not in result.reply_text

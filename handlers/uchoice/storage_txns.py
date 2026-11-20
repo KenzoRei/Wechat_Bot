@@ -222,6 +222,7 @@ class ApplyOutboundStorageHandler(BaseHandler):
 
         new_pallet_count = original_fields.get("new_pallet_count") or 0
         palletization_fee = new_pallet_count * PALLETIZATION_PER_PALLET
+        transportation_fee *= self._shipped_pallets(fulfillment_lines, new_pallet_count)
 
         return {
             "fulfillment_lines": applied,
@@ -229,6 +230,21 @@ class ApplyOutboundStorageHandler(BaseHandler):
             "palletization_fee": palletization_fee,
             "destination_warehouse_code": destination_warehouse_code,
         }
+
+    @staticmethod
+    def _shipped_pallets(lines: list[dict], new_pallet_count: int) -> int:
+        """Pallets billed for transportation (rate is per pallet).
+
+        Whole-pallet lines count by pallet_count; loose boxes ride on the
+        new pallets they are consolidated onto (new_pallet_count). If
+        something ships but that yields zero pallets, bill at least one.
+        """
+        pallets = sum(
+            line["pallet_count"] for line in lines
+            if "picks" not in line and line.get("box_count") is None
+            and isinstance(line.get("pallet_count"), int)
+        ) + (new_pallet_count or 0)
+        return pallets if pallets > 0 else (1 if lines else 0)
 
     @staticmethod
     def _line_box_count(line: dict) -> int:
@@ -331,11 +347,15 @@ class ApplyOutboundStorageHandler(BaseHandler):
                 )
 
         new_pallet_count = original_fields.get("new_pallet_count") or 0
+        if destination_packing:
+            shipped_pallets = sum(l["pallet_count"] for l in destination_packing)
+        else:
+            shipped_pallets = self._shipped_pallets(fulfillment_lines, new_pallet_count)
         return {
             "fulfillment_lines": fulfillment_lines,
             "source_picks": applied,
             "destination_packing_lines": destination_packing or [],
-            "transportation_fee": transportation_fee,
+            "transportation_fee": transportation_fee * shipped_pallets,
             "palletization_fee": new_pallet_count * PALLETIZATION_PER_PALLET,
             "destination_warehouse_code": destination_warehouse_code,
         }

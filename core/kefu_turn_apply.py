@@ -27,7 +27,7 @@ from core.uchoice_field_sanitization import sanitize_extracted_fields_before_per
 # distance/price definitions shown when asking for charge_type can never
 # drift out of sync with the single source of truth used everywhere else
 # (explain_service, the AI's charge-type explanation block, the
-# upsert_address confirmation summary).
+# add_address confirmation summary).
 _CHARGE_TYPE_QUESTION = "请选择计费类型：\n" + "\n".join(
     f"- {desc}" for desc in CHARGE_TYPE_DESCRIPTIONS.values()
 )
@@ -39,6 +39,7 @@ _WAREHOUSE_CODE_LIST = "、".join(sorted(VALID_WAREHOUSE_CODES))
 _FIELD_PROMPTS = {
     "sku_lines": ("商品及数量", "请提供商品、托盘/箱数及每托箱数。"),
     "destination_address_id": ("送货地址", "请提供或确认送货目的地。"),
+    "matched_address_id": ("要更新的地址", "请告知要更新哪一个地址（可提供公司名或地址的一部分）。"),
     "charge_type": ("计费类型", _CHARGE_TYPE_QUESTION),
     "warehouse_code": ("所属仓库", f"请选择所属仓库：{_WAREHOUSE_CODE_LIST}。"),
     "warehouse_codes": ("负责仓库", f"请选择负责的仓库（可多个，用顿号或逗号分隔）：{_WAREHOUSE_CODE_LIST}。"),
@@ -57,7 +58,8 @@ _FIELD_PROMPTS = {
 _SERVICE_LABELS = {
     "uchoice_outbound_request": "出库申请",
     "uchoice_inbound_request": "入库申请",
-    "upsert_address": "地址维护",
+    "add_address": "新增地址",
+    "update_address": "更新地址",
     "confirm_outbound_completion": "出库完成确认",
     "confirm_inbound_completion": "入库完成确认",
     "cancel_inbound_request": "取消入库申请",
@@ -238,9 +240,9 @@ def _resolve_reference_serial(context: dict, session, service: dict) -> tuple[st
     )), True
 
 
-def _address_decision(db: DBSession, context: dict, ai_response):
+def _address_decision(db: DBSession, context: dict, ai_response, candidates_key: str = "addresses"):
     from core.kefu_response_renderer import validate_address_match
-    candidates = (context.get("uchoice_candidates") or {}).get("addresses") or []
+    candidates = (context.get("uchoice_candidates") or {}).get(candidates_key) or []
     return validate_address_match(ai_response, candidates), candidates
 
 
@@ -291,7 +293,7 @@ def _pivot_to_address(db: DBSession, context: dict, old_session, old_log, guess:
     from core.kefu_outcomes import AddressPivotStartedOutcome
     from core.kefu_response_renderer import render_kefu_outcome
 
-    address_service = next((s for s in services if s["name"] == "upsert_address"), None)
+    address_service = next((s for s in services if s["name"] == "add_address"), None)
     if address_service is None:
         return None
 
@@ -355,7 +357,7 @@ def _pivot_to_address(db: DBSession, context: dict, old_session, old_log, guess:
         next_step_text=next_step,
     ))
     _replace_last_assistant(new_session, reply)
-    context["_effective_service_name"] = "upsert_address"
+    context["_effective_service_name"] = "add_address"
     context["_reply"] = reply
     return reply
 
@@ -579,40 +581,28 @@ def _resolve_outbound_completion_loose_picks(db: DBSession, session, context: di
 
 
 def _outbound_stock_error(db: DBSession, fields: dict) -> str | None:
-    from core.uchoice_context import sku_label_map
-    from core.uchoice_storage import available_box_count
+    from core.outbound_reservation import stock_shortages
 
-    warehouse = fields.get("warehouse_code")
-    required_by_sku: dict[str, int] = {}
-    for line in fields.get("sku_lines") or []:
-        if not isinstance(line, dict) or not line.get("sku_code"):
-            continue
-        if line.get("box_count") is not None:
-            boxes = line.get("box_count")
-        else:
-            bpp, pallets = line.get("boxes_per_pallet"), line.get("pallet_count")
-            if bpp is None or pallets is None:
-                continue
-            boxes = bpp * pallets
-        required_by_sku[line["sku_code"]] = required_by_sku.get(line["sku_code"], 0) + boxes
+    return _insufficient_stock_reply(db, fields.get("warehouse_code"), stock_shortages(db, fields))
 
-    problems = []
-    for sku, requested_boxes in sorted(required_by_sku.items()):
-        available_boxes = available_box_count(db, warehouse, sku)
-        if available_boxes < requested_boxes:
-            problems.append((sku, available_boxes, requested_boxes))
-    if not problems:
+
+def _insufficient_stock_reply(db: DBSession, warehouse: str, shortages: list) -> str | None:
+    """The shared rejection text for outbound shortages (request time and confirm time)."""
+    if not shortages:
         return None
-    labels = sku_label_map(db)
+    from core.uchoice_context import sku_label_map
     from core.kefu_outcomes import InsufficientStockOutcome, StockShortage
     from core.kefu_response_renderer import render_kefu_outcome
+
+    labels = sku_label_map(db)
     return render_kefu_outcome(InsufficientStockOutcome(
         warehouse_label=warehouse,
         shortages=tuple(StockShortage(
-            sku_label=labels.get(sku, sku),
-            requested_boxes=requested,
-            available_boxes=available,
-        ) for sku, available, requested in problems),
+            sku_label=labels.get(s.sku_code, s.sku_code),
+            requested_boxes=s.requested_boxes,
+            available_boxes=s.available_boxes,
+            held_boxes=min(s.scheduled_boxes, s.physical_boxes),
+        ) for s in shortages),
     ))
 
 
@@ -651,6 +641,9 @@ def _workflow_steps(db: DBSession, context: dict, service: dict, session) -> Non
                 if artifact is not None:
                     context["_kefu_artifacts"].append({"doc_type": doc_type, "artifact": artifact})
                     context["result"].update({"pdf_status": "ready", "pdf_artifact_key": artifact["artifact_key"]})
+                else:
+                    # Surfaced in the staff reply by result_message's outbound builder.
+                    context["result"]["pdf_status"] = "failed"
             continue
         if step.step_type == "compute_invoice_handler":
             # Kefu-native path: send the workbook itself as a chat file
@@ -677,7 +670,7 @@ def _workflow_steps(db: DBSession, context: dict, service: dict, session) -> Non
         handler_class = HANDLER_REGISTRY.get(step.step_type)
         if handler_class is None:
             raise RuntimeError(f"No handler registered for step_type: {step.step_type!r}")
-        if step.step_type == "upsert_address":
+        if step.step_type in ("add_address", "update_address"):
             merged["_defer_commit"] = True
         result = handler_class().handle(context, merged, db)
         context["result"].update(result or {})
@@ -773,7 +766,7 @@ def _finish_execution(db: DBSession, context: dict, service: dict, session, log)
 
 def confirm_kefu_turn(db: DBSession, context: dict, service: dict, session) -> str:
     """Apply one confirmed mutation; caller owns the guarded execution claim."""
-    from core.workflow_errors import TargetOperationRejected, LabelCreationRejected
+    from core.workflow_errors import TargetOperationRejected, LabelCreationRejected, AddressOperationRejected
 
     log = _load_log(db, session)
     _set_context_for_session(context, session, log)
@@ -791,6 +784,35 @@ def confirm_kefu_turn(db: DBSession, context: dict, service: dict, session) -> s
             context["_reply"] = pickup_error
             _append(session, "assistant", pickup_error)
             return pickup_error
+    if service["name"] == "confirm_outbound_completion":
+        # A case that reached pending_confirmation before a validator existed
+        # (or whose inputs changed since) must not crash the worker on 确认:
+        # send it back to collection with the validator's question instead.
+        validation_error = pre_confirm_validators.run(
+            service["name"], context, session.collected_fields or {}, db)
+        if validation_error:
+            session.status = "active"
+            context["_reply"] = validation_error
+            _append(session, "assistant", validation_error)
+            return validation_error
+    if service["name"] == "uchoice_outbound_request":
+        # Reservations only count once a log is 'processing', and stock was
+        # last checked while collecting fields: re-check under the storage
+        # lock, in the transaction that makes this request 'processing'.
+        from core.outbound_reservation import locked_stock_shortages
+
+        fields = session.collected_fields or {}
+        stock_error = _insufficient_stock_reply(
+            db, fields.get("warehouse_code"),
+            locked_stock_shortages(db, fields, log.log_id if log is not None else None),
+        )
+        if stock_error:
+            if log is not None:
+                log.status = "cancelled"
+            session.status = "cancelled"
+            context["_reply"] = stock_error
+            _append(session, "assistant", stock_error)
+            return stock_error
     # RequestLog supports ``processing``; ConversationSession deliberately
     # does not.  The surrounding CaseExecution claim/advisory lock owns this
     # confirmation attempt until the transaction reaches its terminal state.
@@ -809,7 +831,7 @@ def confirm_kefu_turn(db: DBSession, context: dict, service: dict, session) -> s
         log.status = "processing"
     try:
         reply = _finish_execution(db, context, service, session, log)
-        if service["name"] == "upsert_address" and session.status == "completed":
+        if service["name"] == "add_address" and session.status == "completed":
             from core import parked_outbound
             if parked_outbound.resumes(session):
                 reply = _resume_parked_outbound(db, context, session, reply)
@@ -833,6 +855,20 @@ def confirm_kefu_turn(db: DBSession, context: dict, service: dict, session) -> s
         # caller exactly as if this were any other outcome; the
         # surrounding turn (case_turn/execution-ledger state) finalizes
         # normally in the same transaction.
+        session.status = "cancelled"
+        reply = e.user_message
+        _append(session, "assistant", reply)
+        return reply
+    except AddressOperationRejected as e:
+        # Expected business rejection (stale confirmation, duplicate, edit
+        # draft from before the split, admin-only field...). Nothing was
+        # written (every check runs before the first write), so no explicit
+        # rollback: this transaction still holds the CaseExecution claim and
+        # replay bookkeeping, finalised by the caller's single outer commit.
+        if log is not None:
+            log.status = "failed"
+            log.error_detail = e.user_message
+            log.completed_at = datetime.now(timezone.utc)
         session.status = "cancelled"
         reply = e.user_message
         _append(session, "assistant", reply)
@@ -1458,6 +1494,10 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
     previous_fields = dict(session.collected_fields or {})
     extracted_fields = dict(ai_response.extracted_fields or {})
     selection = extracted_fields.pop("selection", None)
+    if service["name"] == "update_address":
+        # Kefu: the edit target is set ONLY from the structured, candidate-
+        # validated address_match below, never from a model-written id.
+        extracted_fields.pop("matched_address_id", None)
     extracted = {}
     if extracted_fields:
         extracted = sanitize_extracted_fields_before_persistence(
@@ -1485,7 +1525,7 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
             context["_reply"] = pickup_ask
             _append(session, "assistant", pickup_ask)
             return pickup_ask
-    if service["name"] == "upsert_address":
+    if service["name"] == "add_address":
         # Suggested charge type from the AI's drive-time estimate; a stated
         # charge type always wins (core/address_suggestion.py).
         from core.address_suggestion import apply_address_turn
@@ -1556,6 +1596,38 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
                 context["_reply"] = reply
                 _append(session, "assistant", reply)
                 return reply
+
+    if service["name"] == "update_address":
+        # Evaluated on EVERY update turn, so naming a different address later
+        # corrects the target instead of being ignored.
+        decision, address_candidates = _address_decision(db, context, ai_response, "address_book")
+        current_target = (session.collected_fields or {}).get("matched_address_id")
+        if decision.status == "matched" and decision.matched_address_id != current_target:
+            from core.address_update import retarget_fields
+            # A new target starts clean: edits collected for the previous
+            # address must not carry over to this one, only what was said
+            # this turn. The baseline is dropped here (baseline_patch also
+            # re-freezes it because the id changed) and an already-shown
+            # confirmation goes back to collecting, so the user must
+            # confirm the new target's card.
+            session.collected_fields = retarget_fields(extracted, decision.matched_address_id)
+            context["collected_fields"] = session.collected_fields
+            if session.status == "pending_confirmation":
+                session.status = "active"
+        elif decision.status == "matched":
+            pass  # same target as before
+        elif decision.status == "ambiguous":
+            reply = _render_address_ambiguity(decision, address_candidates)
+            context["_reply"] = reply
+            _append(session, "assistant", reply)
+            return reply
+        elif decision.status == "unmatched":
+            # Edit never pivots to add (and never keeps editing the previous
+            # target when the user named an address that doesn't exist).
+            reply = "地址簿中没有找到您说的地址，请核对公司名或地址后重新告知；如果是新地址，请说「新增地址」。"
+            context["_reply"] = reply
+            _append(session, "assistant", reply)
+            return reply
 
     if service["name"] in ("fedex_label", "ups_label"):
         # context["requester_billing_customer_id"] comes from KefuStaff.
@@ -1678,6 +1750,13 @@ def apply_kefu_turn(db: DBSession, context: dict, ai_response, service: dict, se
             return denial
         session.collected_fields = resolved
         context["collected_fields"] = session.collected_fields
+    if service["name"] == "update_address":
+        # Freeze the values the user will be shown (see core/address_update.py).
+        from core import address_update
+        patch = address_update.baseline_patch(db, session.collected_fields or {})
+        if patch:
+            session.collected_fields = {**(session.collected_fields or {}), **patch}
+            context["collected_fields"] = session.collected_fields
     validation_error = pre_confirm_validators.run(service["name"], context, session.collected_fields or {}, db)
     if validation_error:
         # Same rule as missing fields above: a case that no longer passes

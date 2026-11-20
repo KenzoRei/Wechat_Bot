@@ -240,7 +240,7 @@ def test_an_unresolved_question_does_not_pivot_either(monkeypatch, db):
 def test_a_plain_delivery_to_an_unknown_address_still_pivots_as_before(monkeypatch, db):
     ai = _ai({}, unmatched=UNMATCHED)
     _, reached = _pivot(monkeypatch, db, session=None, ai=ai, content="发货到 Some New Co")
-    assert reached == ["upsert_address"]
+    assert reached == ["add_address"]
 
 
 def test_documented_exception_a_delivery_revision_to_an_unknown_address_pivots(monkeypatch, db):
@@ -249,7 +249,7 @@ def test_documented_exception_a_delivery_revision_to_an_unknown_address_pivots(m
     session = _FakeSession({pickup.MARKER_KEY: 1, "pickup_type": "customer", "destination_address_id": str(GENERAL)})
     ai = _ai({"pickup_type": "none"}, unmatched=UNMATCHED, content_type="continuation")
     _, reached = _pivot(monkeypatch, db, session=session, ai=ai, content="不是自提，送到 Some New Co")
-    assert reached == ["upsert_address"]
+    assert reached == ["add_address"]
 
 
 # ── the final check right before execution ────────────────────────────────────
@@ -280,6 +280,6 @@ def test_a_consistent_pickup_executes(monkeypatch, db, sent):
 
 
 def test_a_grandfathered_request_pointing_at_a_retention_row_still_executes(monkeypatch, db, sent):
-    collected = {"warehouse_code": "JFK", "destination_address_id": str(JFK_RET)}    # no marker: predates V42
+    collected = {"warehouse_code": "JFK", "destination_address_id": str(JFK_RET)}    # no marker: predates V46
     _, executed = _confirm(monkeypatch, db, collected)
     assert executed == [1] and sent == []

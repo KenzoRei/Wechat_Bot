@@ -7,13 +7,22 @@ Versioning started with `v1.0.0` (tagged retroactively at the pre-existing
 baseline); prior history predates tagging and isn't broken out by version
 here.
 
-## [1.11.0] - 2026-11-20
+## [Unreleased]
 
-**Migration V42 -- apply it to production BEFORE the deploy.** It adds a
+### Fixed
+- **A skipped or failed delivery order PDF is no longer silent.** When the PDF
+  step skips or fails (for example the origin warehouse has no usable
+  `company_warehouse` row), the outbound request reply now says the delivery
+  order could not be generated, that the request itself was submitted, and not
+  to resubmit. Smart Robot and Kefu. A delivery that fails after it was
+  queued (a send error) is still only visible in the delivery record.
+
+## [1.13.0] - 2026-11-20
+
+**Migration V46 -- apply it to production BEFORE the deploy.** It adds a
 nullable column and one seeded row, so the previous code keeps working
 against the migrated database. It fails closed (raises) if any of the four
-known self-pickup rows is missing. (Numbered 1.11.0 because 1.10.0 is taken by
-the scheduled-outbound-reservation branch, which has not merged yet.)
+known self-pickup rows is missing.
 
 ### Added
 - **Customer pickup (客户自提).** An outbound can now be a pickup by a named
@@ -41,7 +50,7 @@ the scheduled-outbound-reservation branch, which has not merged yet.)
 - `uchoice_address.pickup_kind` (`customer` / `retention` / `legacy`) tells
   the self-pickup rows apart by code. `散客` is retired but kept (`legacy`) so
   past requests still render. The self-pickup rows are system-managed:
-  `upsert_address` can no longer update them.
+  `update_address` can no longer edit them.
 - The outbound address candidate list no longer includes the self-pickup rows.
 - Smart Robot's address pivot no longer cancels an outbound that is a pickup.
   Documented exception: a pickup revised to a delivery at an address that is
@@ -50,11 +59,186 @@ the scheduled-outbound-reservation branch, which has not merged yet.)
 - Requests created before this release are grandfathered (no pickup
   checks, identical PDF); every new outbound is stamped at creation.
 
+## [1.12.1] - 2026-11-05
+
+**Deploy gate:** run `python scripts/check_delivery_order_cutover.py` in the
+Render shell and deploy immediately after it reports 0 pending delivery orders
+queued without stored bytes (they send when the customer's 48h window
+reopens); do it in a quiet period. No migration. The check is a point-in-time
+observation, not a lock, and there is no maintenance mode: a delivery order the
+OLD version queues between the check and the switchover has no stored bytes and
+can still fail with `artifact_hash_mismatch`. The script's Q2 lists any such
+failure afterwards; that outbound order exists but its PDF was not delivered,
+so re-issue the PDF by hand (do not re-request the order, which would create a
+duplicate).
+
 ### Fixed
-- The delivery-order PDF consignee block drew in Helvetica, so a Chinese
-  consignee such as `仓库自提留存` printed as black boxes. New pickup orders
-  draw it correctly; other requests are left byte-identical on purpose
-  (Kefu compares regenerated PDF bytes against the enqueued hash).
+- **Delivery order PDF printed the JFK site as sender for every warehouse.**
+  The header address, the FROM block and the signature name now come from the
+  `company_warehouse` row of the request's origin `warehouse_code`; the title
+  stays "TRANS WORLD FREIGHT SYSTEM CORP." and the header shows `TEL:` from the
+  row (the fax line is gone). A request whose origin warehouse is missing or
+  not in `company_warehouse` gets no PDF (logged) instead of the JFK address.
+  Chinese sender text uses the CJK font; long addresses are shrunk and wrapped
+  inside the page, and a value too long to print at all fails closed.
+- **Delivery orders queued by this version can no longer fail on
+  `artifact_hash_mismatch`.** The PDF depends on an editable warehouse row (and
+  on the template), so its exact bytes are stored when queued and read back for
+  every retry, like the invoice and storage-history workbooks.
+
+## [1.12.0] - 2026-11-05
+
+**Migrations V43, V44 and V45 must be applied in a paused cutover together
+with this release. Do not deploy any intermediate commit of this release on
+its own.** Old code looks the service up as `upsert_address`, new code as
+`add_address`; mixing them breaks address handling in both directions.
+
+### Cutover (suspend → migrate → deploy → verify → resume)
+1. Suspend the Render service (stops Smart Robot/Kefu intake and the
+   scheduler). Wait for in-flight requests to finish.
+2. Read-only check (Render shell): `python scripts/check_address_cutover.py`
+   — lists open old address-edit drafts; they expire on their own and, if
+   confirmed after the upgrade, fail with a "start over" message instead of
+   creating a duplicate.
+3. Apply V43, V44, V45 in one transaction, in that order. Each is idempotent
+   and aborts on an inconsistent catalog.
+4. Deploy this release's code (Kefu messages queued meanwhile are processed
+   afterwards).
+5. Verify: `add_address` and `update_address` exist in `service_type`, no
+   `upsert_address` row remains, existing `add_address` grants are intact,
+   `update_address` has **no** role grants yet.
+6. Resume the service.
+
+**Rollback:** reverse the rename (`add_address` → `upsert_address` in
+`service_type`, `workflow`, `workflow_step`), remove or ignore
+`update_address`, and redeploy the previous revision together. Rolling back
+code alone is unsafe.
+
+### Changed
+- **`upsert_address` is now `add_address` and only creates.** It no longer
+  edits an existing address; a leftover edit draft is refused with a clear
+  message. An identical address (same customer, address text, warehouse and
+  charge type) is blocked before confirmation and again at execution under a
+  per-key lock. Unit numbers stay distinct (`1-2` ≠ `12`); abbreviations are
+  not folded.
+
+### Added
+- **New service `update_address`** to edit one existing address (company,
+  address, contact, phone, note). The AI picks the target from a separate
+  `address_book` list; the confirmation card shows the address and
+  old → new per changed field. An explicit empty value clears an optional
+  field; the address itself cannot be cleared.
+  - Changing `charge_type` or `warehouse_code` is admin only, and only when
+    the value actually changes.
+  - Warehouse-scoped roles stay limited to their assigned warehouses
+    (existing and requested).
+  - If the address changed between the card and 确认, the update is refused
+    and the user starts again, so an approval can't overwrite someone
+    else's edit.
+  - **Nobody can use it until you grant it:** V45 creates the service,
+    enables it for every group that has `add_address`, and creates **no role
+    grants**. Assign `update_address` to the roles you want.
+
+### Notes
+- Address ownership by customer is intentionally not enforced: the address
+  book is shared and `uchoice_address.customer_id` is tenant provenance, not
+  a caller identity.
+- Edits are recorded in the request result (old → new) and the request log;
+  there is no `updated_by` column on addresses.
+
+## [1.11.0] - 2026-11-05
+
+**Apply migration V42 immediately before this deploy, in the same window.**
+(The new code reads `uchoice_address.contact` / `phone`; with the old
+schema every address lookup would fail.) V42 is additive: two nullable
+columns plus an `upsert_address` schema update. Nothing is backfilled.
+
+### Added
+- **Receiver contact person and phone on addresses.** `uchoice_address` gains
+  optional `contact` (max 100 characters) and `phone` (max 50).
+  - Both are collected by `upsert_address`, including when a new address is
+    created from an outbound request to an unknown destination, and shown in
+    the address confirmation and the AI's address list.
+  - Over-long values are rejected before confirmation with a request to
+    shorten; both are trimmed before storing.
+  - Printed on the delivery order "to" card as `Contact: … Tel: …` (either
+    part optional; nothing extra when both are empty).
+- The card now uses the Chinese-capable font when the company, address or
+  contact needs it, shrinks the text (down to a floor) before cutting
+  anything, and if it still overflows the company/address is ellipsized so
+  the contact/phone line is never lost.
+
+### Notes
+- Existing addresses that carry a contact/phone inside `addr` or `note` are
+  not migrated automatically; move them by hand after review.
+
+## [1.10.3] - 2026-11-05
+
+No migration.
+
+### Fixed
+- **U-Choice outbound transportation fee is now per pallet.** The rates
+  ($30 / $45 / $85) are documented as per-pallet, but the fee was charged as
+  a single flat amount per request. It is now rate × pallets shipped
+  (`ApplyOutboundStorageHandler`, regular and Kefu box-level paths). Whole-
+  pallet lines count by `pallet_count`; loose boxes count through
+  `new_pallet_count`; Kefu inter-warehouse transfers use the destination
+  packing lines. If goods ship but that yields zero pallets, 1 pallet is
+  billed. Previously logged outbound fees are not recalculated.
+
+## [1.10.2] - 2026-11-03
+
+No migration.
+
+### Fixed
+- **Recipient company now reaches YiDiDa.** The label request sent it as
+  `shouJianRenGongSiMingCheng`, a key that does not exist on `YunDanModel`
+  (checked against the `/yundans` Swagger schema), so YiDiDa silently
+  dropped it and no label ever carried a recipient company. The correct key
+  is `shouJianRenGongSi` (收件公司); `clients/yidida_client.py` and
+  `scripts/manual_ydd_smoke.py` now use it. The shipper-side key
+  `jiJianGongSiMingCheng` was already correct.
+
+## [1.10.1] - 2026-11-03
+
+No migration.
+
+### Changed
+- **Shipper company falls back to the shipper name.** `shipper_corp_name`
+  stays optional on `fedex_label` / `ups_label`; when the customer gave no
+  company (missing, empty or whitespace-only), YiDiDa's
+  `jiJianGongSiMingCheng` is now filled with `shipper_name` instead of being
+  sent empty (`clients/yidida_client.py`). A stated company or a warehouse
+  preset's `company_name` still wins. The prompt tells the AI not to ask for
+  or invent a shipper company. The confirmation summary is unchanged: it
+  shows only what the customer provided.
+
+## [1.10.0] - 2026-10-30
+
+No migration.
+
+### Changed
+- **Scheduled outbounds now hold stock.** A confirmed outbound (status
+  `processing`) used to leave storage untouched until delivery, and nothing
+  counted it, so any number of outbounds could be scheduled against the same
+  stock and the conflict only surfaced at completion. Available stock is now
+  physical minus the boxes in confirmed, uncompleted outbounds, derived per
+  warehouse and SKU (`core/outbound_reservation.py`); nothing is stored, so
+  cancelling or completing a request releases it. Storage itself is still
+  deducted only at completion, and completion still checks physical stock.
+  Drafts and outbounds parked for a new address hold nothing.
+- **Both channels check available stock, loose and palletized.** Smart Robot
+  previously skipped `box_count` lines entirely at request time. A final
+  check now also runs under the storage lock in the transaction that makes
+  the request `processing`, so two drafts that each fit can't both confirm.
+- **Storage replies show what is scheduled.** A SKU with scheduled outbound
+  gets one extra line, e.g. `待出库 3 托 + 5 箱（散），出库后剩 7 托（247 箱）` (the
+  pallet figure is an estimate from the default pick order); SKUs with
+  nothing scheduled are unchanged. Warehouse staff and admins also get a
+  pointer to 出库确认 in `view_storage`. If a correction drops physical stock
+  below what is scheduled, the line flags the shortfall instead of blocking.
+  The insufficient-stock rejection names stock held by other outbounds, and
+  the SKU `in_stock` hint used for disambiguation counts available stock.
 
 ## [1.9.0] - 2026-10-15
 

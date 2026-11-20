@@ -47,7 +47,17 @@ def sku_catalog(db: DBSession, warehouse_code: str | None = None) -> list[dict]:
         return [{"sku_code": s.sku_code, "description": s.description} for s in rows]
 
     buckets = db.query(UchoiceStorage).filter_by(warehouse_code=warehouse_code).all()
-    stocked_skus = {b.sku_code for b in buckets if b.pallet_count > 0}
+    physical: dict[str, int] = {}
+    for b in buckets:
+        physical[b.sku_code] = physical.get(b.sku_code, 0) + max(0, b.pallet_count) * b.boxes_per_pallet
+    # in_stock means available to schedule: stock fully held by confirmed,
+    # uncompleted outbounds is not a usable disambiguating signal.
+    try:
+        from core.outbound_reservation import scheduled_boxes
+        held = scheduled_boxes(db, warehouse_code)
+    except Exception:
+        held = {}
+    stocked_skus = {sku for sku, boxes in physical.items() if boxes - held.get(sku, 0) > 0}
     return [
         {"sku_code": s.sku_code, "description": s.description, "in_stock": s.sku_code in stocked_skus}
         for s in rows
@@ -97,7 +107,7 @@ def address_candidates(
     closely. core/pre_confirm_validators.py's _valid_destination_address_
     required is the actual correctness backstop for this; this filter only
     reduces how often the AI has to be corrected by it. Only meaningful for
-    uchoice_outbound_request's own candidate injection -- upsert_address
+    uchoice_outbound_request's own candidate injection -- add_address
     needs the FULL, unfiltered list to resolve create-vs-update, so its
     caller must never pass this.
 
@@ -116,8 +126,9 @@ def address_candidates(
         # Customer pickup (core/pickup.py): the self-pickup rows (客户自提,
         # 仓库自提留存, retired 散客) are never offered to the AI for semantic
         # matching -- the AI reports pickup INTENT and code resolves the row.
-        # Only the outbound candidate injection asks for this; upsert_address
-        # keeps the full, unfiltered book (see the note above).
+        # The outbound candidate injection and update_address's address_book ask
+        # for this; add_address keeps the full, unfiltered book (it must see
+        # every row to detect a duplicate; see the note above).
         query = query.filter(UchoiceAddress.pickup_kind.is_(None))
     if source_warehouse_code is not None:
         query = query.filter(
@@ -136,6 +147,8 @@ def address_candidates(
             "addr":           a.addr,
             "warehouse_code": a.warehouse_code,
             "note":           a.note,
+            "contact":        a.contact,
+            "phone":          a.phone,
         }
         for a in rows
     ]

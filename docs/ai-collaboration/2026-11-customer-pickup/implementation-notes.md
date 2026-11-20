@@ -38,3 +38,13 @@ Branch `feature/customer-pickup`. Version 1.11.0 (1.10.0 is taken by the unmerge
 
 ## Offline test inventory (new)
 `tests/core/test_pickup.py` (67), `test_pickup_prompt.py` (10), `test_pickup_display.py` (15), `tests/uchoice_lifecycle/test_pickup_smart_robot.py` (16), `tests/kefu/test_pickup_kefu.py` (14), `tests/uchoice_outbound_pdf/test_pdf_pickup_mark.py` (9).
+
+## Integration with `main` (merge, 2026-11-20)
+`main` had moved 26 commits (v1.10.x - v1.12.1) while this branch was in review, so a plain merge was not possible. What changed because of it:
+1. **Migration renumbered V42 -> V46.** Main already uses V42 (receiver contact/phone), V43 (rename upsert_address -> add_address), V44, V45 (update_address). `V46__customer_pickup.sql` now starts with `\encoding UTF8` like the others. Main's dedupe guard is application-level (no DB unique constraint), so the seeded `客户自提` row (same empty address/warehouse as `散客`) does not collide with it.
+2. **Version 1.13.0** (main's changelog already holds 1.11.0 - 1.12.1 and an `[Unreleased]` block, which stays above my entry).
+3. **System-managed rows moved to `update_address`.** `upsert_address` no longer exists. The guard is now `_valid_update_address_not_pickup_row` (first in the `update_address` chain; loads the target through `address_update.load_target` like main's own validator), a refusal in `UpdateAddressHandler`, and `exclude_pickup=True` on `update_address`'s `address_book` candidates. `add_address` is create-only, so it cannot overwrite a row (asserted by a test).
+4. **PDF.** Main had already fixed the Helvetica consignee problem (`_draw_wrapped_top` falls back to the CJK font and wraps per character), so my own CJK consignee code was removed; a customer pickup now just appends `客户自提：<name>` to main's consignee text. The REMARK bar is unchanged. The golden files were regenerated from main's builder (with sender and receiver contact/phone) and the merged builder was checked to be byte-identical to main's for non-pickup requests. My changelog "Fixed" entry was dropped as obsolete.
+5. Merge conflicts were in: CHANGELOG, main.py, ai/prompt_builder.py, core/kefu_turn_apply.py (kept my pre-execution check AND main's two new confirm blocks), core/pre_confirm_validators.py, core/session_manager.py, core/uchoice_delivery_order.py, core/workflow_engine.py, handlers/uchoice/address.py, handlers/uchoice/pdf_stub.py.
+6. A main test (`tests/core/test_add_address_rename.py`) forbids the old service name in live source; one of my comments tripped it and was reworded.
+Offline suite on the merged tree: 1348 passed, 3 skipped (391 PostgreSQL tests not run; V46 still not run against a database).

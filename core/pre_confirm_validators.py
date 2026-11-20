@@ -497,6 +497,44 @@ def _loose_outbound_pick_required(context: dict, collected_fields: dict, db: DBS
     return "请核实以下商品库存：" + "；".join(messages) + "。或手动说明从哪些托盘规格各取多少箱。"
 
 
+def _internal_transfer_packing_required(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """
+    confirm_outbound_completion: ApplyOutboundStorageHandler refuses (at
+    execution time, after the user already said 确认) an internal transfer
+    whose lines are loose boxes or picks unless destination_packing_lines
+    says how the boxes are palletized at the destination. Ask for it here,
+    before the confirmation prompt, instead of letting the worker fail.
+    """
+    reference_serial = collected_fields.get("reference_serial")
+    if not reference_serial or collected_fields.get("destination_packing_lines") is not None:
+        return None
+
+    from models.uchoice import UchoiceAddress
+    from core.uchoice_context import resolve_completion_target, sku_label_map
+
+    target, original_fields = resolve_completion_target(db, reference_serial)
+    if target is None:
+        return None
+    address_id = original_fields.get("destination_address_id")
+    if not address_id:
+        return None
+    addr = db.query(UchoiceAddress).filter_by(address_id=address_id).first()
+    if addr is None or not addr.destination_warehouse_code:
+        return None
+
+    lines = collected_fields.get("fulfillment_lines") or original_fields.get("sku_lines") or []
+    loose = [l for l in lines if l.get("box_count") is not None or l.get("picks")]
+    if not loose:
+        return None
+    labels = sku_label_map(db)
+    names = "、".join(sorted({labels.get(l.get("sku_code"), l.get("sku_code")) for l in loose}))
+    return (
+        f"这是内部调仓（→ {addr.destination_warehouse_code} 仓），含散箱/取货明细（{names}）。"
+        "请说明货物到达目的仓后的装托方式（每托箱数 × 托盘数，各商品箱数合计须与出库箱数一致），"
+        "例如：50箱 = 50箱/托 × 1托。"
+    )
+
+
 def _loose_inbound_restatement_required(context: dict, collected_fields: dict, db: DBSession) -> str | None:
     """
     confirm_inbound_completion: a loose (box_count) original line has no
@@ -665,7 +703,7 @@ def _valid_destination_address_required(context: dict, collected_fields: dict, d
 def _valid_pickup_combination(context: dict, collected_fields: dict, db: DBSession) -> str | None:
     """Customer pickup (core/pickup.py): (pickup_type, destination row kind,
     warehouse, pickup name) must be consistent. Fails closed for requests
-    created after V42; a request without the internal marker predates the
+    created after V46; a request without the internal marker predates the
     feature and is grandfathered (judged by the old rules)."""
     del context
     from core import pickup
@@ -717,17 +755,17 @@ def _valid_invoice_warehouses(context: dict, collected_fields: dict, db: DBSessi
     return None
 
 
-def _valid_upsert_address_warehouse_scope(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+def _valid_add_address_warehouse_scope(context: dict, collected_fields: dict, db: DBSession) -> str | None:
     """
-    upsert_address's own warehouse-scope check -- _valid_caller_warehouse_scope
+    add_address's own warehouse-scope check -- _valid_caller_warehouse_scope
     above is not enough here, because that function only ever compares the
     REQUESTED warehouse_code (the value being submitted) against the
     caller's assignment. For an UPDATE (matched_address_id set), the
     request submits whichever warehouse the caller intends the address to
     end up at -- always one they're authorized for, since a warehouseman
     would obviously only submit a code they themselves can use. The
-    address candidate list for upsert_address is intentionally the FULL,
-    unfiltered book (see core/session_manager.py's active_is_upsert_address
+    address candidate list for add_address is intentionally the FULL,
+    unfiltered book (see core/session_manager.py's active_is_add_address
     branch), so a JFK-only warehouseman could still have the AI match
     matched_address_id to an existing DE-owned address purely by its text
     description, then submit warehouse_code="JFK" -- passing the generic
@@ -761,19 +799,90 @@ PICKUP_ROW_NOT_EDITABLE_MESSAGE = (
 )
 
 
-def _valid_upsert_address_not_pickup_row(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+def _valid_update_address_not_pickup_row(context: dict, collected_fields: dict, db: DBSession) -> str | None:
     """
     Customer pickup (core/pickup.py): the self-pickup rows are system-managed.
-    upsert_address's candidate list is the FULL, unfiltered book, so the AI can
-    match matched_address_id to one of them -- an update must be refused here
-    (and again in the handler at execution time).
+    The update_address candidate list never offers them, but the AI could still
+    name one by id -- an update must be refused here (and again in
+    UpdateAddressHandler at execution time).
     """
     del context
-    matched_id = collected_fields.get("matched_address_id")
-    if not matched_id:
+    if db is None:
         return None
-    from core import pickup
-    return PICKUP_ROW_NOT_EDITABLE_MESSAGE if pickup.kind_of(db, matched_id) is not None else None
+    # The target is loaded the same way _valid_update_address_target_and_changes
+    # does (core/address_update.load_target), so both validators see one row.
+    from core import address_update
+    row = address_update.load_target(db, collected_fields)
+    if row is not None and getattr(row, "pickup_kind", None) is not None:
+        return PICKUP_ROW_NOT_EDITABLE_MESSAGE
+    return None
+
+
+# uchoice_address column limits (models.uchoice.UchoiceAddress): checked before
+# confirmation so an over-long value gets a correction request instead of a
+# database error at execution time.
+_ADDRESS_FIELD_LIMITS = {"contact": ("联系人", 100), "phone": ("电话", 50)}
+
+
+def _valid_add_address_field_lengths(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    for key, (label, limit) in _ADDRESS_FIELD_LIMITS.items():
+        value = collected_fields.get(key)
+        if isinstance(value, str) and len(value.strip()) > limit:
+            return f"{label}过长（最多 {limit} 个字符），请缩短后重新提供。"
+    return None
+
+
+def _valid_add_address_create_only_and_unique(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """add_address creates only: reject an edit signal and an exact duplicate entry.
+
+    Duplicate key = (customer_id, normalised addr, warehouse_code,
+    charge_type), NULL-safe -- see core/address_dedupe.py. The handler
+    repeats this check under an advisory lock (the authoritative one).
+    """
+    from core import address_dedupe
+
+    if collected_fields.get("matched_address_id"):
+        return "新增地址不支持修改已有地址。请重新发起：新增请直接提供新地址；修改已有地址请使用「更新地址」。"
+    addr = collected_fields.get("addr")
+    charge_type = collected_fields.get("charge_type")
+    if db is None or not (isinstance(addr, str) and addr.strip() and charge_type):
+        return None  # incomplete draft (required-field handling asks for the rest)
+    existing = address_dedupe.find_duplicate(
+        db, context.get("customer_id"), addr, collected_fields.get("warehouse_code"), charge_type
+    )
+    return address_dedupe.duplicate_message(existing) if existing is not None else None
+
+
+def _valid_update_address_target_and_changes(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """update_address: the target exists, something really changes, and the
+    change is allowed for this caller. Warehouse scope (existing AND
+    requested) and contact/phone lengths are composed separately."""
+    from core import address_dedupe, address_update
+
+    if db is None:
+        return None
+    if "customer_id" in collected_fields:
+        return "地址所属客户不可修改。"
+    row = address_update.load_target(db, collected_fields)
+    if row is None:
+        return "未找到要更新的地址，请说明要更新哪一个地址（可提供公司名或地址）。"
+    blank = address_update.blank_required_field(collected_fields) or address_update.validate_values(collected_fields)
+    if blank:
+        return blank
+    if address_update.stale_against_baseline(row, collected_fields):
+        return address_update.STALE_MESSAGE
+    changes = address_update.effective_changes(address_update.snapshot(row), collected_fields)
+    if not changes:
+        return "没有检测到任何需要修改的内容，请告知要修改哪些信息。"
+    if set(changes) & set(address_update.ADMIN_ONLY_FIELDS) and context.get("role") != "admin":
+        return "只有管理员可以修改计费类型或所属仓库。"
+    after = address_update.post_update_values(row, changes)
+    duplicate = address_dedupe.find_duplicate(
+        db, row.customer_id, after["addr"], after["warehouse_code"], after["charge_type"], exclude_id=row.address_id
+    )
+    if duplicate is not None:
+        return address_dedupe.duplicate_message(duplicate)
+    return None
 
 
 _CANCEL_DIRECTION_SERVICE_NAMES = {
@@ -942,15 +1051,23 @@ PRE_CONFIRM_VALIDATORS = {
     "view_storage": _valid_caller_warehouse_scope,
     "view_storage_history": _valid_caller_warehouse_scope,
     "view_invoice": _valid_invoice_warehouses,
-    "upsert_address": _compose(
-        _valid_upsert_address_not_pickup_row,
-        _valid_upsert_address_warehouse_scope,
+    "update_address": _compose(
+        _valid_update_address_not_pickup_row,
+        _valid_update_address_target_and_changes,
+        _valid_add_address_field_lengths,
+        _valid_add_address_warehouse_scope,
+    ),
+    "add_address": _compose(
+        _valid_add_address_create_only_and_unique,
+        _valid_add_address_field_lengths,
+        _valid_add_address_warehouse_scope,
     ),
     "fedex_label": _valid_label,
     "ups_label": _valid_label,
     "confirm_outbound_completion": _compose(
         _valid_outbound_completion_skus,
         _loose_outbound_pick_required,
+        _internal_transfer_packing_required,
     ),
     "confirm_inbound_completion": _compose(
         _valid_inbound_completion_skus,

@@ -139,7 +139,10 @@ def _build_shipment_body(fields: dict, shou_huo_qu_dao: str) -> dict:
 
         # ── Shipper info ────────────────────────────────────────────────────
         "jiJianRenMingCheng":    fields.get("shipper_name", ""),
-        "jiJianGongSiMingCheng": fields.get("shipper_corp_name", ""),
+        # shipper_corp_name is optional; when no company was given, the
+        # shipper's name doubles as the company name.
+        "jiJianGongSiMingCheng": (fields.get("shipper_corp_name") or "").strip()
+                                 or fields.get("shipper_name", ""),
         "jiJianRenDianHua":      fields.get("shipper_phone", ""),
         "jiJianRenDiZhi1":       fields.get("shipper_street", ""),
         "jiJianRenChengShi":     fields.get("shipper_city", ""),
@@ -175,7 +178,7 @@ def _build_shipment_body(fields: dict, shou_huo_qu_dao: str) -> dict:
 
     # Optional: recipient company name
     if fields.get("recipient_corp_name"):
-        body["shouJianRenGongSiMingCheng"] = fields["recipient_corp_name"]
+        body["shouJianRenGongSi"] = fields["recipient_corp_name"]
 
     # Optional: dimensions. Verified against the real /yundans Swagger
     # schema (twc.itdida.com/itdida-api/swagger-ui.html#/.../importYundanUsingPOST):

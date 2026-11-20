@@ -314,6 +314,43 @@ def lease_heartbeat(
         thread.join(timeout=min(5.0, interval + 0.5))
 
 
+TURN_FAILED_REPLY = (
+    "抱歉，处理您的消息时出错了，本次操作未生效。请核对信息后重新发送，"
+    "或回复「取消」放弃当前申请；若反复出现请联系管理员。"
+)
+
+
+def notify_turn_failed(db_factory: Callable[[], Session], turn) -> bool:
+    """Best-effort reply after a turn failed, so the sender isn't left in
+    silence (the row is already 'failed', so it is never retried). Authorized
+    staff only; any problem here is logged and swallowed."""
+    db = db_factory()
+    try:
+        from core import access_control
+        from core.kefu_delivery import enqueue_text
+
+        access = access_control.check_kefu_access(
+            db, turn.identity.open_kfid, turn.identity.external_userid,
+        )
+        if isinstance(access, access_control.AccessDenied):
+            return False
+        enqueue_text(
+            db,
+            recipient_staff_id=access.staff_id,
+            idempotency_key=f"kefu-turn-failed:{turn.msgid}",
+            text_content=TURN_FAILED_REPLY,
+            inbound_message_msgid=turn.msgid,
+        )
+        db.commit()
+        return True
+    except Exception as exc:
+        db.rollback()
+        print(f"[kefu_sync] failure notice not sent msgid={turn.msgid}: {exc}", flush=True)
+        return False
+    finally:
+        db.close()
+
+
 def run_worker_once(
     db_factory: Callable[[], Session],
     processor: CaseTurnProcessor,
@@ -391,6 +428,7 @@ def run_worker_once(
                 mark_failed(result_db, turn.msgid, str(exc))
             finally:
                 result_db.close()
+            notify_turn_failed(db_factory, turn)
             continue
         result_db = db_factory()
         try:

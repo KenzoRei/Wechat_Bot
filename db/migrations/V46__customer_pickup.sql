@@ -1,4 +1,5 @@
--- V42: customer pickup (客户自提) -- docs/ai-collaboration/2026-11-customer-pickup/plan.md
+\encoding UTF8
+-- V46: customer pickup (客户自提) -- docs/ai-collaboration/2026-11-customer-pickup/plan.md
 --
 -- Adds uchoice_address.pickup_kind so code (never label text) can tell the
 -- self-pickup rows apart:
@@ -42,7 +43,7 @@ BEGIN
         '5a1cd32c-f2a3-492d-b2c3-360acfff7514'    -- 散客
     );
     IF found <> 4 THEN
-        RAISE EXCEPTION 'V42: expected the 4 known self-pickup seed rows, found % -- refusing to guess', found;
+        RAISE EXCEPTION 'V46: expected the 4 known self-pickup seed rows, found % -- refusing to guess', found;
     END IF;
 END $$;
 

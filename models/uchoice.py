@@ -54,6 +54,9 @@ class UchoiceAddress(Base):
     addr:           Mapped[str]            = mapped_column(Text, nullable=False)
     warehouse_code: Mapped[str | None]     = mapped_column(String(20))
     note:           Mapped[str | None]     = mapped_column(Text)
+    # Optional receiver contact person / phone (V42); printed on the delivery order "to" card.
+    contact:        Mapped[str | None]     = mapped_column(String(100))
+    phone:          Mapped[str | None]     = mapped_column(String(50))
     created_by:     Mapped[str]            = mapped_column(String(128), nullable=False)
     created_at:     Mapped[datetime]       = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     # Set only on the two seeded inter-warehouse addresses — marks this
@@ -61,7 +64,7 @@ class UchoiceAddress(Base):
     # outbound to it triggers a storage increase there too, not just a
     # decrease at the origin.
     destination_warehouse_code: Mapped[str | None] = mapped_column(String(20))
-    # V42: tells the self-pickup rows apart by code, never by label text.
+    # V46: tells the self-pickup rows apart by code, never by label text.
     # 'retention' (仓库自提留存, one per warehouse), 'customer' (客户自提, the
     # one general row), 'legacy' (散客, retired -- kept for history). NULL on
     # every ordinary address. See core/pickup.py.
