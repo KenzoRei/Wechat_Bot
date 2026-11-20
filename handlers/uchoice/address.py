@@ -32,6 +32,12 @@ class UpsertAddressHandler(BaseHandler):
             addr = db.query(UchoiceAddress).filter_by(address_id=matched_id).first()
             if addr is None:
                 raise RuntimeError("待更新的地址不存在。")
+            # Customer pickup (core/pickup.py): the self-pickup rows are
+            # system-managed -- execution-time backstop to the pre-confirm
+            # validator (the candidate list for this service is the full book).
+            if getattr(addr, "pickup_kind", None) is not None:
+                from core.pre_confirm_validators import PICKUP_ROW_NOT_EDITABLE_MESSAGE
+                raise RuntimeError(PICKUP_ROW_NOT_EDITABLE_MESSAGE)
             # Execution-time backstop matching
             # core.pre_confirm_validators._valid_upsert_address_warehouse_scope
             # -- checks the EXISTING address's own warehouse, not just the

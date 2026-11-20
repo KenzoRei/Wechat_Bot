@@ -59,6 +59,42 @@ def _address_matching_instructions(is_kefu: bool) -> str:
     )
 
 
+def _pickup_instructions(service_names: set) -> str:
+    """
+    Customer pickup (core/pickup.py, docs/ai-collaboration/2026-11-customer-
+    pickup/plan.md). The AI reports pickup INTENT through two fields inside
+    extracted_fields -- pickup_type and pickup_customer_name -- and never
+    chooses the pickup address row: the self-pickup rows are not in the
+    address list, and code resolves the destination from the type. Same text
+    for both channels (no braces: this is spliced into a larger template).
+    Shown only to callers who can submit outbound requests.
+    """
+    if "uchoice_outbound_request" not in service_names:
+        return ""
+    return (
+        "- 自提（仅 uchoice_outbound_request）：先判断这笔出库是不是自提。按【意图】判断，不要只看有没有\"自提\"二字——"
+        "自提、自取、来提货、来取货、到仓提货、客户自己来拿、pickup、will call 都是自提的说法。\n"
+        "  · 没有自提意图 = 普通送货，按上面的 addresses 规则匹配送货地址，extracted_fields 里不要填 pickup_type。"
+        "只有用户明确要把已有的自提改成送货时，才填 pickup_type 为 \"none\"（并按 addresses 规则匹配新的送货地址）。\n"
+        "  · 有自提意图时分两种，把结果填入 extracted_fields 的 pickup_type：\n"
+        "    - \"customer\"（客户自提）：有一位具体的外部客户或人要亲自到仓库取货。必须同时问清并填入 pickup_customer_name"
+        "（取货人姓名，用户怎么说就怎么填，不用和任何列表匹配；散客就填\"散客\"）。取货人姓名没给之前，不要认为信息已收集齐。\n"
+        "    - \"retention\"（仓库自提留存）：收货方就是我们公司自己（Trans World），货本来就在我们仓库里，所以不需要移动"
+        "（说法如：留存、自留、留在我们仓库、给公司自己）。没有取货人，不要填 pickup_customer_name；库存仍照常扣减。\n"
+        "  · 【重要】用户只说了\"自提\"，既没说是谁来取，也没说是留存给公司自己 → 不要自己选，也不要填 pickup_type，"
+        "向用户问清：是客户自提（请告知取货人姓名），还是仓库自提留存（货物留给公司自己）。\n"
+        "  · 【重要】自提不需要送货地址：即使用户同时提到了某个地址（例如取货人所在的公司），也以自提为准——"
+        "不要为它填 destination_address_id，也不要把它当作未收录的新地址（不要设置 unmatched_new_address，"
+        "address_match 也不要判为 unmatched）。\n"
+        "  · 【重要】绝不能自己填 destination_address_id 来表示自提：自提的目的地由系统根据 pickup_type 自动确定，"
+        "上面的 addresses 列表里没有自提项。\n"
+        "  · 已经是自提的申请里，用户接着只补充取货人姓名等信息时，只填 pickup_customer_name，不要重复填 pickup_type。"
+        "如果用户更正自提相关内容（改类型、改取货人、或说要改送货），必须在本轮重新填 pickup_type。"
+        "例如\"这不是送货，是客户自己来提货，王小明\" → pickup_type 为 \"customer\"，pickup_customer_name 为\"王小明\"；"
+        "\"不是自提，送到 X\" → pickup_type 为 \"none\"，并按 addresses 规则匹配 X。\n"
+    )
+
+
 def _drive_time_instructions(is_kefu: bool) -> str:
     """
     Suggested charge type (address-pivot plan rev 3, item 2): the AI gives
@@ -232,6 +268,7 @@ def build_system_prompt(context: dict) -> str:
         "（假设其余必填字段已齐全）。错误输出（禁止）：extracted_fields 为空、或只给 t2 一行导致 t1 丢失、或反复不提取直接让系统重复问同一个问题——"
         "这会导致用户被同一个澄清问题无限循环追问。\n"
         f"{_address_matching_instructions(is_kefu)}"
+        f"{_pickup_instructions(service_names)}"
         f"{_drive_time_instructions(is_kefu) if uchoice_candidates.get('origin_warehouses') else ''}"
         "- pending_inbound_requests / pending_outbound_requests：当前所有待处理的入库/出库申请候选列表。\n"
         "  · 0 条：告知用户当前没有待处理的申请，不要设置 all_fields_collected=true。\n"

@@ -756,6 +756,26 @@ def _valid_upsert_address_warehouse_scope(context: dict, collected_fields: dict,
     return None
 
 
+PICKUP_ROW_NOT_EDITABLE_MESSAGE = (
+    "这是系统自提地址（客户自提／仓库自提留存），不能修改。如需调整请联系管理员。"
+)
+
+
+def _valid_upsert_address_not_pickup_row(context: dict, collected_fields: dict, db: DBSession) -> str | None:
+    """
+    Customer pickup (core/pickup.py): the self-pickup rows are system-managed.
+    upsert_address's candidate list is the FULL, unfiltered book, so the AI can
+    match matched_address_id to one of them -- an update must be refused here
+    (and again in the handler at execution time).
+    """
+    del context
+    matched_id = collected_fields.get("matched_address_id")
+    if not matched_id:
+        return None
+    from core import pickup
+    return PICKUP_ROW_NOT_EDITABLE_MESSAGE if pickup.kind_of(db, matched_id) is not None else None
+
+
 _CANCEL_DIRECTION_SERVICE_NAMES = {
     "inbound":  "uchoice_inbound_request",
     "outbound": "uchoice_outbound_request",
@@ -922,7 +942,10 @@ PRE_CONFIRM_VALIDATORS = {
     "view_storage": _valid_caller_warehouse_scope,
     "view_storage_history": _valid_caller_warehouse_scope,
     "view_invoice": _valid_invoice_warehouses,
-    "upsert_address": _valid_upsert_address_warehouse_scope,
+    "upsert_address": _compose(
+        _valid_upsert_address_not_pickup_row,
+        _valid_upsert_address_warehouse_scope,
+    ),
     "fedex_label": _valid_label,
     "ups_label": _valid_label,
     "confirm_outbound_completion": _compose(

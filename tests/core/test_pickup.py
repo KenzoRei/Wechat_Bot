@@ -343,6 +343,37 @@ def test_the_combination_check_is_part_of_the_outbound_validator_chain():
     assert "_valid_pickup_combination" in chain
 
 
+# ── the pickup rows are system-managed (upsert_address) ───────────────────────
+
+@pytest.mark.parametrize("row", [GENERAL, JFK_RET, LEGACY])
+def test_upsert_address_cannot_update_a_pickup_row(db, row):
+    from core import pre_confirm_validators as pcv
+    error = pcv._valid_upsert_address_not_pickup_row({}, {"matched_address_id": str(row)}, db)
+    assert error == pcv.PICKUP_ROW_NOT_EDITABLE_MESSAGE
+
+
+def test_upsert_address_can_still_update_an_ordinary_address_and_create_new_ones(db):
+    from core import pre_confirm_validators as pcv
+    assert pcv._valid_upsert_address_not_pickup_row({}, {"matched_address_id": str(PLAIN)}, db) is None
+    assert pcv._valid_upsert_address_not_pickup_row({}, {"company_name": "New Co"}, db) is None
+
+
+def test_the_upsert_address_chain_includes_the_pickup_guard():
+    import inspect
+    from core import pre_confirm_validators as pcv
+    chain = inspect.getsource(pcv).split('"upsert_address": _compose(', 1)[1].split("),", 1)[0]
+    assert "_valid_upsert_address_not_pickup_row" in chain
+
+
+def test_the_upsert_handler_refuses_a_pickup_row_at_execution_time(db):
+    from handlers.uchoice.address import UpsertAddressHandler
+    # (a UUID object, not a string: SQLite's UUID type needs one; PostgreSQL accepts either)
+    context = {"collected_fields": {"matched_address_id": GENERAL, "company_name": "Hijacked"}, "role": "admin"}
+    with pytest.raises(RuntimeError, match="系统自提地址"):
+        UpsertAddressHandler().handle(context, {}, db)
+    assert db.query(UchoiceAddress).filter(UchoiceAddress.address_id == GENERAL).one().company_name == "客户自提"
+
+
 # ── candidate list ────────────────────────────────────────────────────────────
 
 def test_outbound_candidates_exclude_every_pickup_row(db):
